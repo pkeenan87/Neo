@@ -1,0 +1,304 @@
+// ─────────────────────────────────────────────────────────────
+//  Entra ID Authentication — Authorization Code + PKCE
+//
+//  No third-party auth library.  Uses Node.js built-in crypto,
+//  http, and fetch against the Microsoft identity platform.
+//  Works the same way as `az login`.
+// ─────────────────────────────────────────────────────────────
+
+import http from "http";
+import { randomBytes, createHash } from "crypto";
+import { readConfig, writeConfig } from "./config-store.js";
+
+const REDIRECT_PORT = 4000;
+const REDIRECT_URI = `http://localhost:${REDIRECT_PORT}/callback`;
+const LOGIN_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
+const TOKEN_EXPIRY_BUFFER_MS = 5 * 60 * 1000; // refresh 5 min before actual expiry
+
+// ── PKCE helpers ──────────────────────────────────────────────
+
+function base64url(buffer) {
+  return buffer.toString("base64").replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+
+function generateCodeVerifier() {
+  return base64url(randomBytes(32));
+}
+
+function generateCodeChallenge(verifier) {
+  return base64url(createHash("sha256").update(verifier).digest());
+}
+
+// ── Resolve tenantId/clientId from config or env ──────────────
+
+function resolveEntraConfig() {
+  const config = readConfig();
+  const tenantId = process.env.NEO_TENANT_ID || config.entraId?.tenantId;
+  const clientId = process.env.NEO_CLIENT_ID || config.entraId?.clientId;
+
+  if (!tenantId || !clientId) {
+    throw new Error(
+      "Entra ID not configured.\n" +
+      "Set NEO_TENANT_ID and NEO_CLIENT_ID environment variables, or run:\n" +
+      "  node src/index.js auth login --tenant-id <id> --client-id <id>"
+    );
+  }
+
+  return { tenantId, clientId };
+}
+
+function authorizeUrl(tenantId) {
+  return `https://login.microsoftonline.com/${tenantId}/oauth2/v2.0/authorize`;
+}
+
+function tokenUrl(tenantId) {
+  return `https://login.microsoftonline.com/${tenantId}/oauth2/v2.0/token`;
+}
+
+// ── Interactive login ─────────────────────────────────────────
+
+export async function login(options = {}) {
+  const config = readConfig();
+
+  // Allow --tenant-id / --client-id to be passed at login time and persisted
+  const tenantId = options.tenantId || process.env.NEO_TENANT_ID || config.entraId?.tenantId;
+  const clientId = options.clientId || process.env.NEO_CLIENT_ID || config.entraId?.clientId;
+
+  if (!tenantId || !clientId) {
+    throw new Error(
+      "Entra ID tenantId and clientId are required.\n" +
+      "Pass --tenant-id and --client-id, or set NEO_TENANT_ID / NEO_CLIENT_ID env vars."
+    );
+  }
+
+  const codeVerifier = generateCodeVerifier();
+  const codeChallenge = generateCodeChallenge(codeVerifier);
+  const state = base64url(randomBytes(16));
+
+  // Start a one-shot local HTTP server for the redirect callback
+  let timeoutHandle;
+  const { code } = await new Promise((resolve, reject) => {
+    const srv = http.createServer((req, res) => {
+      const url = new URL(req.url, `http://localhost:${REDIRECT_PORT}`);
+
+      if (url.pathname !== "/callback") {
+        res.writeHead(404, { "Content-Type": "text/plain" });
+        res.end("Not found");
+        return;
+      }
+
+      const error = url.searchParams.get("error");
+      if (error) {
+        const errorCode = url.searchParams.get("error") || "unknown_error";
+        const desc = url.searchParams.get("error_description") || error;
+        if (process.env.DEBUG) process.stderr.write(`[debug] Entra error: ${desc}\n`);
+        res.writeHead(400, { "Content-Type": "text/plain" });
+        res.end("Login failed. You can close this tab.");
+        clearTimeout(timeoutHandle);
+        srv.close();
+        reject(new Error(`Entra ID login failed: ${errorCode}`));
+        return;
+      }
+
+      const returnedState = url.searchParams.get("state");
+      if (returnedState !== state) {
+        res.writeHead(400, { "Content-Type": "text/plain" });
+        res.end("State mismatch — possible CSRF. Please try again.");
+        clearTimeout(timeoutHandle);
+        srv.close();
+        reject(new Error("OAuth state mismatch"));
+        return;
+      }
+
+      const authCode = url.searchParams.get("code");
+      res.writeHead(200, { "Content-Type": "text/html" });
+      res.end(
+        "<html><body><h2>Login successful — you can close this tab.</h2></body></html>",
+        () => srv.close()
+      );
+      clearTimeout(timeoutHandle);
+      resolve({ code: authCode });
+    });
+
+    srv.on("error", (err) => {
+      clearTimeout(timeoutHandle);
+      if (err.code === "EADDRINUSE") {
+        reject(new Error(`Port ${REDIRECT_PORT} is already in use. Close any other processes using that port and try again.`));
+      } else {
+        reject(err);
+      }
+    });
+
+    srv.listen(REDIRECT_PORT, "127.0.0.1", () => {
+      // Build the authorization URL
+      const params = new URLSearchParams({
+        client_id: clientId,
+        response_type: "code",
+        redirect_uri: REDIRECT_URI,
+        scope: "openid profile offline_access",
+        code_challenge: codeChallenge,
+        code_challenge_method: "S256",
+        state,
+      });
+
+      const authUrl = `${authorizeUrl(tenantId)}?${params}`;
+
+      process.stderr.write("\nOpening browser for Entra ID login...\n");
+      process.stderr.write(`If the browser doesn't open, visit:\n  ${authUrl}\n\n`);
+
+      // Dynamic import so 'open' is only loaded when needed
+      import("open").then((mod) => mod.default(authUrl)).catch(() => {
+        // Browser open failed — the URL is already printed above
+      });
+    });
+
+    // Timeout guard
+    timeoutHandle = setTimeout(() => {
+      srv.close();
+      reject(new Error("Login timed out after 5 minutes. Please try again."));
+    }, LOGIN_TIMEOUT_MS);
+  });
+
+  // Exchange the authorization code for tokens
+  const body = new URLSearchParams({
+    client_id: clientId,
+    grant_type: "authorization_code",
+    code,
+    redirect_uri: REDIRECT_URI,
+    code_verifier: codeVerifier,
+  });
+
+  const res = await fetch(tokenUrl(tenantId), {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body,
+  });
+
+  if (!res.ok) {
+    const errText = await res.text();
+    if (process.env.DEBUG) process.stderr.write(`[debug] Token exchange error: ${errText}\n`);
+    throw new Error(`Token exchange failed (HTTP ${res.status}). Run with DEBUG=1 for details.`);
+  }
+
+  const tokens = await res.json();
+
+  // Decode the ID token to extract display name. No signature verification needed
+  // because this is used for display only — NEVER for authorization decisions.
+  let displayName = "Unknown";
+  try {
+    const payload = JSON.parse(
+      Buffer.from(tokens.id_token.split(".")[1], "base64url").toString("utf8")
+    );
+    displayName = payload.preferred_username || payload.name || "Unknown";
+  } catch {
+    // ID token decode is best-effort for display only
+  }
+
+  // Persist tokens and config
+  writeConfig({
+    ...config,
+    authMethod: "entra-id",
+    entraId: {
+      tenantId,
+      clientId,
+      accessToken: tokens.access_token,
+      refreshToken: tokens.refresh_token || null,
+      expiresAt: Date.now() + tokens.expires_in * 1000,
+      displayName,
+    },
+  });
+
+  return { displayName };
+}
+
+// ── Silent token refresh / cached return ──────────────────────
+
+export async function getAccessToken() {
+  const config = readConfig();
+  const entra = config.entraId;
+
+  if (!entra?.accessToken) {
+    throw new Error("Not logged in. Run: node src/index.js auth login");
+  }
+
+  // Return cached token if still fresh
+  if (entra.expiresAt && entra.expiresAt - TOKEN_EXPIRY_BUFFER_MS > Date.now()) {
+    return entra.accessToken;
+  }
+
+  // Attempt silent refresh
+  if (!entra.refreshToken) {
+    throw new Error("Session expired and no refresh token available. Run: node src/index.js auth login");
+  }
+
+  const { tenantId, clientId } = resolveEntraConfig();
+
+  const body = new URLSearchParams({
+    client_id: clientId,
+    grant_type: "refresh_token",
+    refresh_token: entra.refreshToken,
+    scope: "openid profile offline_access",
+  });
+
+  const res = await fetch(tokenUrl(tenantId), {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body,
+  });
+
+  if (!res.ok) {
+    // Clear stale tokens
+    writeConfig({
+      ...config,
+      entraId: {
+        ...entra,
+        accessToken: null,
+        refreshToken: null,
+        expiresAt: null,
+      },
+    });
+    throw new Error("Session expired. Run: node src/index.js auth login");
+  }
+
+  const tokens = await res.json();
+
+  writeConfig({
+    ...config,
+    entraId: {
+      ...entra,
+      accessToken: tokens.access_token,
+      refreshToken: tokens.refresh_token || entra.refreshToken,
+      expiresAt: Date.now() + tokens.expires_in * 1000,
+    },
+  });
+
+  return tokens.access_token;
+}
+
+// ── Logout ────────────────────────────────────────────────────
+
+export function logout() {
+  const config = readConfig();
+  delete config.entraId;
+  if (config.authMethod === "entra-id") {
+    config.authMethod = null;
+  }
+  writeConfig(config);
+}
+
+// ── Status ────────────────────────────────────────────────────
+
+export function status() {
+  const config = readConfig();
+  const entra = config.entraId;
+
+  if (!entra?.accessToken) {
+    return { loggedIn: false, expiresAt: null, username: null };
+  }
+
+  return {
+    loggedIn: true,
+    expiresAt: entra.expiresAt ? new Date(entra.expiresAt) : null,
+    username: entra.displayName || null,
+  };
+}

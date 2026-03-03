@@ -1,78 +1,116 @@
-import dotenv from "dotenv";
-import { fileURLToPath } from "url";
-import { dirname, resolve } from "path";
+// ─────────────────────────────────────────────────────────────
+//  CLI Configuration
+//
+//  Resolves server URL and auth header from (in priority order):
+//    1. CLI flags (--server, --api-key)
+//    2. Environment variables (NEO_SERVER, NEO_API_KEY)
+//    3. Config store (~/.neo/config.json)
+// ─────────────────────────────────────────────────────────────
 
-const __dirname = dirname(fileURLToPath(import.meta.url));
-dotenv.config({ path: resolve(__dirname, "../../.env") });
+import { readConfig } from "./config-store.js";
+import { getAccessToken } from "./auth-entra.js";
 
-export const env = {
-  ANTHROPIC_API_KEY:       process.env.ANTHROPIC_API_KEY,
-  AZURE_TENANT_ID:         process.env.AZURE_TENANT_ID,
-  AZURE_CLIENT_ID:         process.env.AZURE_CLIENT_ID,
-  AZURE_CLIENT_SECRET:     process.env.AZURE_CLIENT_SECRET,
-  AZURE_SUBSCRIPTION_ID:   process.env.AZURE_SUBSCRIPTION_ID,
-  SENTINEL_WORKSPACE_ID:   process.env.SENTINEL_WORKSPACE_ID,
-  SENTINEL_WORKSPACE_NAME: process.env.SENTINEL_WORKSPACE_NAME,
-  SENTINEL_RG:             process.env.SENTINEL_RESOURCE_GROUP,
-  MOCK_MODE:               process.env.MOCK_MODE !== "false"  // default true until real creds added
-};
+/**
+ * Parse a named flag from process.argv.
+ * e.g. parseFlag("--server") returns the value after --server, or undefined.
+ */
+export function parseFlag(name) {
+  const idx = process.argv.indexOf(name);
+  if (idx === -1 || idx + 1 >= process.argv.length) return undefined;
+  return process.argv[idx + 1];
+}
 
-export function validateConfig() {
-  if (!env.ANTHROPIC_API_KEY) {
-    console.error("❌ Missing ANTHROPIC_API_KEY in .env");
+/**
+ * Validate and normalize a server URL.
+ * Rejects non-http(s) schemes and requires HTTPS for non-localhost hosts.
+ */
+function validateServerUrl(raw) {
+  let parsed;
+  try {
+    parsed = new URL(raw);
+  } catch {
+    console.error(`\n  Invalid server URL: ${raw}\n`);
     process.exit(1);
   }
 
-  if (env.MOCK_MODE) {
-    console.error("⚠️  Running in MOCK MODE — tool calls return simulated data.");
-    console.error("   Set MOCK_MODE=false in .env and add Azure credentials to use real APIs.\n");
+  if (!["http:", "https:"].includes(parsed.protocol)) {
+    console.error(`\n  Server URL must use http or https (got ${parsed.protocol})\n`);
+    process.exit(1);
   }
+
+  const isLocal = parsed.hostname === "localhost" || parsed.hostname === "127.0.0.1";
+  if (!isLocal && parsed.protocol !== "https:") {
+    console.error(`\n  Server URL must use HTTPS for non-localhost hosts: ${raw}\n`);
+    process.exit(1);
+  }
+
+  return parsed.href.replace(/\/$/, ""); // normalized, trailing slash removed
 }
 
-export const SYSTEM_PROMPT = `You are an expert AI security operations analyst assistant for Goodwin Procter LLP's security team.
-You have direct access to Microsoft Sentinel, Defender XDR, and Entra ID management tools.
+/**
+ * Resolve the server URL and auth header for the current run.
+ *
+ * Returns { serverUrl: string, authHeader: string }
+ * Exits the process if auth is not configured.
+ */
+export async function resolveServerConfig() {
+  const config = readConfig();
 
-## YOUR ROLE
-You think like a seasoned SOC analyst: methodical, evidence-based, and threat-focused.
-When investigating, you:
-1. Gather evidence first (read-only operations are safe to run autonomously)
-2. Correlate data across sources (Sentinel logs + XDR alerts + identity)
-3. Assess severity and blast radius
-4. Recommend and (with confirmation) execute containment actions
+  // ── Server URL ────────────────────────────────────────────
+  const rawServerUrl =
+    parseFlag("--server") ||
+    process.env.NEO_SERVER ||
+    config.serverUrl ||
+    "http://localhost:3000";
 
-## INVESTIGATION METHODOLOGY
-For a reported incident or suspicious user/host:
-- Start with timeline reconstruction
-- Check for TOR/proxy IPs, impossible travel, off-hours access
-- Look for privilege escalation (AuditLogs), lateral movement, persistence
-- Cross-reference identity risk with device/endpoint telemetry
-- Look for data exfil indicators (SharePoint/Exchange access anomalies)
+  const serverUrl = validateServerUrl(rawServerUrl);
 
-If a query returns no results, consider whether:
-- The table name or field names might be wrong for this workspace
-- The timespan might need to be extended
-- The data source might not be connected to Sentinel
-Always tell the user when a query returned no results vs returning clean results.
+  // ── Auth ──────────────────────────────────────────────────
 
-## RULES OF ENGAGEMENT
-READ operations (Sentinel queries, alert lookups, user info):
-→ Run autonomously, explain what you found
+  // CLI flag takes highest priority (dev-only convenience — visible in process table)
+  const flagApiKey = parseFlag("--api-key");
+  if (flagApiKey) {
+    return { serverUrl, authHeader: `Bearer ${flagApiKey}` };
+  }
 
-WRITE/DESTRUCTIVE operations (password reset, machine isolation):
-→ Before calling the tool, you MUST:
-  1. State your evidence and reasoning clearly
-  2. Explicitly tell the user you're about to perform the action
-  3. Wait for their explicit confirmation
-→ Always include a clear justification parameter that will go in the audit log
+  // Env var override
+  const envApiKey = process.env.NEO_API_KEY;
+  if (envApiKey) {
+    return { serverUrl, authHeader: `Bearer ${envApiKey}` };
+  }
 
-## CONTEXT
-- Environment: Law firm — treat all data with attorney-client privilege sensitivity
-- Primary XDR: Microsoft Defender for Endpoint (ask user if unsure)
-- Prioritize containment speed for confirmed compromises
-- Always surface confidence level (HIGH/MEDIUM/LOW) and alternative hypotheses
+  // Config store
+  if (config.authMethod === "api-key" && config.apiKey) {
+    return { serverUrl, authHeader: `Bearer ${config.apiKey}` };
+  }
 
-## RESPONSE FORMAT
-- Be concise but complete — this is a CLI, not a dashboard
-- Use structured text (not markdown headers) since this renders in a terminal
-- Lead with the most important finding
-- End investigation summaries with a clear RECOMMENDED ACTION`;
+  if (config.authMethod === "entra-id") {
+    try {
+      const token = await getAccessToken();
+      return { serverUrl, authHeader: `Bearer ${token}` };
+    } catch (err) {
+      console.error(`\n  Auth error: ${err.message}`);
+      if (err.message.includes("Not logged in") || err.message.includes("expired")) {
+        console.error(`  To re-authenticate, run: node src/index.js auth login\n`);
+      } else {
+        console.error(`  If this is a network error, check connectivity to login.microsoftonline.com`);
+        console.error(`  To re-authenticate, run: node src/index.js auth login\n`);
+      }
+      process.exit(1);
+    }
+  }
+
+  // Nothing configured
+  console.error(`
+  No authentication configured.
+
+  Option 1 — API Key:
+    export NEO_API_KEY=<your-api-key>
+    npm start
+
+  Option 2 — Entra ID:
+    node src/index.js auth login --tenant-id <id> --client-id <id>
+    npm start
+`);
+  process.exit(1);
+}
