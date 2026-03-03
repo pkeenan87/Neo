@@ -1,4 +1,9 @@
-import "dotenv/config";
+import dotenv from "dotenv";
+import { fileURLToPath } from "url";
+import { dirname, resolve } from "path";
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
+dotenv.config({ path: resolve(__dirname, "../../.env") });
 
 export const env = {
   ANTHROPIC_API_KEY:       process.env.ANTHROPIC_API_KEY,

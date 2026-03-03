@@ -4,6 +4,7 @@
 // ─────────────────────────────────────────────────────────────
 
 import { env } from "./config.js";
+import { randomInt } from "crypto";
 
 // ── Token cache ──────────────────────────────────────────────
 // Keyed by resource/scope string. Each entry: { token, expiresAt }
@@ -87,21 +88,23 @@ export function generateSecurePassword(length = 16) {
 
   // Guarantee at least one of each class
   const required = [
-    upper[Math.floor(Math.random() * upper.length)],
-    lower[Math.floor(Math.random() * lower.length)],
-    digits[Math.floor(Math.random() * digits.length)],
-    special[Math.floor(Math.random() * special.length)]
+    upper[randomInt(upper.length)],
+    lower[randomInt(lower.length)],
+    digits[randomInt(digits.length)],
+    special[randomInt(special.length)]
   ];
 
   // Fill remaining length with random chars from the full set
   const remaining = Array.from({ length: length - required.length }, () =>
-    all[Math.floor(Math.random() * all.length)]
+    all[randomInt(all.length)]
   );
 
-  // Shuffle so the required chars aren't always in the first 4 positions
-  const password = [...required, ...remaining]
-    .sort(() => Math.random() - 0.5)
-    .join("");
+  // Fisher-Yates shuffle with cryptographic randomness
+  const chars = [...required, ...remaining];
+  for (let i = chars.length - 1; i > 0; i--) {
+    const j = randomInt(i + 1);
+    [chars[i], chars[j]] = [chars[j], chars[i]];
+  }
 
-  return password;
+  return chars.join("");
 }

@@ -7,6 +7,7 @@ Your job is to coordinate two reviewer subagents in parallel:
 
 - **a11y-reviewer**
 - **code-quality-reviewer**
+- **nextjs-security-expert**
 
 Goal:
 1. Gather the current branch diff including BOTH staged and unstaged changes.

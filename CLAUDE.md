@@ -4,21 +4,46 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Security Agent CLI ("Neo") — a Claude-powered SOC analyst agent for the terminal. It investigates security incidents via Microsoft Sentinel KQL, Defender XDR, and Entra ID, and can execute containment actions (password reset, machine isolation) with human confirmation gates.
+Security Agent ("Neo") — a Claude-powered SOC analyst agent with both a CLI and web interface. It investigates security incidents via Microsoft Sentinel KQL, Defender XDR, and Entra ID, and can execute containment actions (password reset, machine isolation) with human confirmation gates.
+
+## Project Structure
+
+The repo is split into two independent projects with no cross-imports:
+
+```
+neo/
+├── cli/          # Terminal REPL agent
+│   ├── package.json
+│   └── src/
+├── web/          # Next.js web interface
+│   ├── package.json
+│   ├── app/
+│   └── lib/
+├── .env          # Shared environment variables (root level)
+└── CLAUDE.md
+```
 
 ## Commands
 
 ```bash
-npm install          # Install dependencies
-npm start            # Run the CLI (node --no-deprecation src/index.js)
-npm run dev          # Run with --watch for auto-reload during development
+# CLI
+cd cli && npm install    # Install CLI dependencies
+cd cli && npm start      # Run the CLI (node --no-deprecation src/index.js)
+cd cli && npm run dev    # Run with --watch for auto-reload during development
+
+# Web
+cd web && npm install    # Install web dependencies
+cd web && npm run dev    # Run Next.js dev server (localhost:3000)
+cd web && npm run build  # Production build
 ```
 
 Set `MOCK_MODE=true` (default) in `.env` to test without Azure credentials. Set `MOCK_MODE=false` and provide Azure credentials for live API calls.
 
 ## Architecture
 
-All source is in `src/` using ES modules (`"type": "module"` in package.json).
+### CLI (`cli/src/`)
+
+All source uses ES modules (`"type": "module"` in package.json).
 
 - **`index.js`** — CLI REPL, readline interface, colored terminal output, confirmation prompts. Entry point.
 - **`agent.js`** — Agentic loop that calls Claude API repeatedly until `end_turn` or a destructive tool needs confirmation. `runAgentLoop()` handles the main loop; `resumeAfterConfirmation()` resumes after user confirms/cancels.
@@ -26,6 +51,13 @@ All source is in `src/` using ES modules (`"type": "module"` in package.json).
 - **`executors.js`** — Tool implementations. Each tool function has dual paths: mock data (for `MOCK_MODE=true`) and real Azure API calls. The `executeTool()` router dispatches by tool name.
 - **`config.js`** — Environment variable loading (dotenv), validation, and the system prompt.
 - **`auth.js`** — Azure AD OAuth2 client_credentials flow with in-memory token caching. `getAzureToken(resource)` for any Azure resource, `getMSGraphToken()` convenience wrapper.
+
+### Web (`web/`)
+
+Next.js app with server-side Claude API integration.
+
+- **`app/`** — Next.js app router pages and API routes
+- **`lib/`** — Shared server-side logic (agent, tools, executors, auth, config, types)
 
 ## Key Design Patterns
 
@@ -35,19 +67,27 @@ All source is in `src/` using ES modules (`"type": "module"` in package.json).
 
 **Mock/Live dual-path**: Every executor function checks `env.MOCK_MODE` and branches to either mock data or real API calls. When adding new tools, follow this same pattern.
 
-## Adding a New Tool
+## Adding a New Tool (CLI)
 
-1. Add the tool schema to the `TOOLS` array in `tools.js`
-2. If destructive, add the tool name to `DESTRUCTIVE_TOOLS` in `tools.js`
-3. Add the executor function in `executors.js` with both mock and real implementations
-4. Register it in the `executors` object at the bottom of `executors.js`
-5. Optionally add a color mapping in `TOOL_COLORS` and a description in `TOOL_DESCRIPTIONS` in `index.js`
+1. Add the tool schema to the `TOOLS` array in `cli/src/tools.js`
+2. If destructive, add the tool name to `DESTRUCTIVE_TOOLS` in `cli/src/tools.js`
+3. Add the executor function in `cli/src/executors.js` with both mock and real implementations
+4. Register it in the `executors` object at the bottom of `cli/src/executors.js`
+5. Optionally add a color mapping in `TOOL_COLORS` and a description in `TOOL_DESCRIPTIONS` in `cli/src/index.js`
 
 ## Dependencies
 
+### CLI (`cli/package.json`)
 - `@anthropic-ai/sdk` — Claude API client (uses `claude-opus-4-5` model)
 - `chalk` — Terminal colors
 - `dotenv` — Environment variable loading
+
+### Web (`web/package.json`)
+- `next`, `react`, `react-dom` — Next.js framework
+- `tailwindcss`, `@tailwindcss/postcss`, `postcss`, `autoprefixer` — Styling
+- `@anthropic-ai/sdk` — Claude API client
+- `dotenv` — Environment variable loading
+- `typescript`, `@types/node`, `@types/react` — TypeScript support
 
 ## Environment Variables
 
