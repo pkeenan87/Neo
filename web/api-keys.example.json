@@ -1,0 +1,14 @@
+{
+  "keys": [
+    {
+      "key": "your-admin-api-key-here",
+      "role": "admin",
+      "label": "Admin Key"
+    },
+    {
+      "key": "your-reader-api-key-here",
+      "role": "reader",
+      "label": "Reader Key"
+    }
+  ]
+}

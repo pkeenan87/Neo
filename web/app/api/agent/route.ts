@@ -2,9 +2,18 @@ import { NextRequest } from "next/server";
 import { sessionStore } from "@/lib/session-store";
 import { runAgentLoop } from "@/lib/agent";
 import { createNDJSONStream, encodeNDJSON, writeAgentResult } from "@/lib/stream";
+import { resolveAuth } from "@/lib/auth-helpers";
 import type { AgentRequest } from "@/lib/types";
 
 export async function POST(request: NextRequest) {
+  const identity = await resolveAuth(request);
+  if (!identity) {
+    return new Response(JSON.stringify({ error: "Unauthorized" }), {
+      status: 401,
+      headers: { "Content-Type": "application/json" },
+    });
+  }
+
   let body: AgentRequest;
   try {
     body = await request.json();
@@ -27,13 +36,22 @@ export async function POST(request: NextRequest) {
   // Resolve or create session
   let sessionId: string;
   if (body.sessionId) {
-    const session = sessionStore.get(body.sessionId);
-    if (!session) {
+    const existing = sessionStore.get(body.sessionId);
+    if (!existing) {
       return new Response(JSON.stringify({ error: "Session not found" }), { status: 404 });
+    }
+    // Only the session owner (or an admin) may continue an existing session.
+    // existing.role governs tool access for this session's lifetime;
+    // identity.role is intentionally not used here.
+    if (existing.ownerId !== identity.name && identity.role !== "admin") {
+      return new Response(JSON.stringify({ error: "Forbidden" }), {
+        status: 403,
+        headers: { "Content-Type": "application/json" },
+      });
     }
     sessionId = body.sessionId;
   } else {
-    sessionId = sessionStore.create();
+    sessionId = sessionStore.create(identity.role, identity.name);
   }
 
   const session = sessionStore.get(sessionId)!;
@@ -41,7 +59,7 @@ export async function POST(request: NextRequest) {
   // Rate limit check
   if (sessionStore.isRateLimited(sessionId)) {
     return new Response(
-      JSON.stringify({ error: "Session message limit exceeded (100)" }),
+      JSON.stringify({ error: "Session message limit exceeded" }),
       { status: 429 }
     );
   }
@@ -57,18 +75,24 @@ export async function POST(request: NextRequest) {
     try {
       await writer.write(encodeNDJSON({ type: "session", sessionId }));
 
-      const result = await runAgentLoop(session.messages, {
-        onThinking: () => {
-          void writer.write(encodeNDJSON({ type: "thinking" })).catch(() => {});
+      const result = await runAgentLoop(
+        session.messages,
+        {
+          onThinking: () => {
+            void writer.write(encodeNDJSON({ type: "thinking" })).catch(() => {});
+          },
+          onToolCall: (name, input) => {
+            void writer.write(encodeNDJSON({ type: "tool_call", tool: name, input })).catch(() => {});
+          },
         },
-        onToolCall: (name, input) => {
-          void writer.write(encodeNDJSON({ type: "tool_call", tool: name, input })).catch(() => {});
-        },
-      });
+        session.role
+      );
 
       await writeAgentResult(result, session, sessionId, writer);
     } catch (err) {
-      await writer.write(encodeNDJSON({ type: "error", message: (err as Error).message }));
+      await writer.write(
+        encodeNDJSON({ type: "error", message: (err as Error).message, code: "AGENT_ERROR" })
+      );
     } finally {
       await writer.close();
     }

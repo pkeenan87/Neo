@@ -1,14 +1,16 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { env, SYSTEM_PROMPT } from "./config";
-import { TOOLS, DESTRUCTIVE_TOOLS } from "./tools";
+import { DESTRUCTIVE_TOOLS } from "./tools";
 import { executeTool } from "./executors";
+import { getToolsForRole, type Role } from "./permissions";
 import type { Message, AgentLoopResult, AgentCallbacks, PendingTool } from "./types";
 
 const client = new Anthropic({ apiKey: env.ANTHROPIC_API_KEY });
 
 export async function runAgentLoop(
   messages: Message[],
-  callbacks: AgentCallbacks = {}
+  callbacks: AgentCallbacks = {},
+  role: Role = "reader"
 ): Promise<AgentLoopResult> {
   const localMessages: Message[] = [...messages];
 
@@ -19,7 +21,7 @@ export async function runAgentLoop(
       model: "claude-opus-4-5",
       max_tokens: 4096,
       system: SYSTEM_PROMPT,
-      tools: TOOLS,
+      tools: getToolsForRole(role),
       messages: localMessages,
     });
 
@@ -84,7 +86,8 @@ export async function resumeAfterConfirmation(
   messages: Message[],
   pendingTool: PendingTool,
   confirmed: boolean,
-  callbacks: AgentCallbacks = {}
+  callbacks: AgentCallbacks = {},
+  role: Role = "reader"
 ): Promise<AgentLoopResult> {
   const localMessages: Message[] = [...messages];
   const { id, name, input } = pendingTool;
@@ -118,5 +121,5 @@ export async function resumeAfterConfirmation(
 
   localMessages.push({ role: "user", content: [toolResult] });
 
-  return runAgentLoop(localMessages, callbacks);
+  return runAgentLoop(localMessages, callbacks, role);
 }
