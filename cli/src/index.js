@@ -1,7 +1,7 @@
 import readline from "readline";
 import chalk from "chalk";
 import os from "os";
-import { resolveServerConfig, parseFlag } from "./config.js";
+import { resolveServerConfig, parseFlag, validateServerUrl } from "./config.js";
 import { runAgentLoop, confirmTool } from "./agent.js";
 import { login, logout, status } from "./auth-entra.js";
 import { readConfig, writeConfig } from "./config-store.js";
@@ -130,7 +130,6 @@ async function handleAuthCommand() {
 
   if (sub === "login") {
     const tenantId = parseFlag("--tenant-id");
-    const clientId = parseFlag("--client-id");
     // Dev-only convenience — API keys passed via CLI flags are visible in the
     // process table (ps aux). Prefer NEO_API_KEY env var or interactive login.
     const apiKey = parseFlag("--api-key");
@@ -145,14 +144,28 @@ async function handleAuthCommand() {
       return;
     }
 
+    // Resolve and validate server URL for Entra ID discovery
+    const config = readConfig();
+    const serverUrl = validateServerUrl(
+      parseFlag("--server") ||
+      process.env.NEO_SERVER ||
+      config.serverUrl ||
+      "http://localhost:3000"
+    );
+
     try {
-      const { displayName } = await login({ tenantId, clientId });
+      const { displayName } = await login({ tenantId, serverUrl });
       console.log(chalk.green(`\n  Logged in as ${displayName}. You can now run: npm start\n`));
     } catch (err) {
       console.error(chalk.red(`\n  Login failed: ${err.message}\n`));
       console.error("  Usage:");
-      console.error("    Entra ID: node src/index.js auth login --tenant-id <id> --client-id <id>");
+      console.error("    Entra ID: node src/index.js auth login [--tenant-id <id>]");
       console.error("    API key:  node src/index.js auth login --api-key <key>\n");
+      console.error("  The CLI auto-discovers Entra ID config from the Neo server.");
+      console.error("  Pass --tenant-id only if you need to override discovery.");
+      console.error("  If discovery fails, verify the server is reachable:");
+      console.error(`    Server: ${serverUrl}`);
+      console.error("  Override with: --server <url> or NEO_SERVER env variable.\n");
       process.exit(1);
     }
     return;
@@ -176,6 +189,7 @@ async function handleAuthCommand() {
       const s = status();
       console.log(`  Logged in:   ${s.loggedIn ? chalk.green("[yes]") : chalk.red("[no]")}`);
       if (s.username) console.log(`  User:        ${s.username}`);
+      if (config.entraId?.tenantId) console.log(`  Tenant:      ${config.entraId.tenantId}`);
       if (s.expiresAt) {
         const remaining = Math.max(0, Math.round((s.expiresAt.getTime() - Date.now()) / 60000));
         console.log(`  Token:       ${remaining > 0 ? chalk.green(`[valid] ${remaining}m remaining`) : chalk.red("[expired]")}`);

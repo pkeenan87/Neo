@@ -24,7 +24,7 @@ export function parseFlag(name) {
  * Validate and normalize a server URL.
  * Rejects non-http(s) schemes and requires HTTPS for non-localhost hosts.
  */
-function validateServerUrl(raw) {
+export function validateServerUrl(raw) {
   let parsed;
   try {
     parsed = new URL(raw);
@@ -109,7 +109,7 @@ export async function resolveServerConfig() {
     npm start
 
   Option 2 — Entra ID:
-    node src/index.js auth login --tenant-id <id> --client-id <id>
+    node src/index.js auth login
     npm start
 `);
   process.exit(1);

@@ -29,22 +29,30 @@ function generateCodeChallenge(verifier) {
   return base64url(createHash("sha256").update(verifier).digest());
 }
 
-// ── Resolve tenantId/clientId from config or env ──────────────
+// ── Resolve tenantId/clientId ─────────────────────────────────
+//
+// Priority: env vars > saved config > server discovery
 
-function resolveEntraConfig() {
-  const config = readConfig();
-  const tenantId = process.env.NEO_TENANT_ID || config.entraId?.tenantId;
-  const clientId = process.env.NEO_CLIENT_ID || config.entraId?.clientId;
+const GUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-  if (!tenantId || !clientId) {
-    throw new Error(
-      "Entra ID not configured.\n" +
-      "Set NEO_TENANT_ID and NEO_CLIENT_ID environment variables, or run:\n" +
-      "  node src/index.js auth login --tenant-id <id> --client-id <id>"
-    );
+async function discoverEntraConfig(serverUrl) {
+  try {
+    const res = await fetch(`${serverUrl}/api/auth/discover`);
+    if (!res.ok) {
+      if (process.env.DEBUG) process.stderr.write(`[debug] Discovery returned HTTP ${res.status} from ${serverUrl}/api/auth/discover\n`);
+      return null;
+    }
+    const data = await res.json();
+    // Validate UUID format to prevent injection into auth URLs
+    if (!GUID_RE.test(data.tenantId) || !GUID_RE.test(data.clientId)) {
+      if (process.env.DEBUG) process.stderr.write(`[debug] Discovery response contained invalid tenant/client IDs — ignoring\n`);
+      return null;
+    }
+    return { tenantId: data.tenantId, clientId: data.clientId };
+  } catch (err) {
+    if (process.env.DEBUG) process.stderr.write(`[debug] Discovery fetch failed: ${err.message}\n`);
+    return null;
   }
-
-  return { tenantId, clientId };
 }
 
 function authorizeUrl(tenantId) {
@@ -60,14 +68,34 @@ function tokenUrl(tenantId) {
 export async function login(options = {}) {
   const config = readConfig();
 
-  // Allow --tenant-id / --client-id to be passed at login time and persisted
-  const tenantId = options.tenantId || process.env.NEO_TENANT_ID || config.entraId?.tenantId;
-  const clientId = options.clientId || process.env.NEO_CLIENT_ID || config.entraId?.clientId;
+  // tenantId: flag > env > config > discovery
+  // clientId:         env > config > discovery  (no CLI flag; server-provided)
+  const flagTenantId = options.tenantId;
+  const envTenantId = process.env.NEO_TENANT_ID;
+  const savedTenantId = config.entraId?.tenantId;
+  const envClientId = process.env.NEO_CLIENT_ID;
+  const savedClientId = config.entraId?.clientId;
+
+  let tenantId = flagTenantId || envTenantId || savedTenantId;
+  let clientId = envClientId || savedClientId;
+
+  // If either is missing, try server discovery
+  if (!tenantId || !clientId) {
+    const discovered = options.serverUrl
+      ? await discoverEntraConfig(options.serverUrl)
+      : null;
+
+    if (discovered) {
+      tenantId = tenantId || discovered.tenantId;
+      clientId = clientId || discovered.clientId;
+    }
+  }
 
   if (!tenantId || !clientId) {
     throw new Error(
-      "Entra ID tenantId and clientId are required.\n" +
-      "Pass --tenant-id and --client-id, or set NEO_TENANT_ID / NEO_CLIENT_ID env vars."
+      "Could not resolve Entra ID configuration.\n" +
+      "  Ensure the Neo server has Entra ID configured, or pass --tenant-id\n" +
+      "  and set the NEO_CLIENT_ID environment variable."
     );
   }
 
@@ -194,7 +222,8 @@ export async function login(options = {}) {
     // ID token decode is best-effort for display only
   }
 
-  // Persist tokens and config
+  // Persist tokens and config — cache discovered tenantId/clientId so
+  // subsequent logins and token refreshes don't need discovery.
   writeConfig({
     ...config,
     authMethod: "entra-id",
@@ -231,7 +260,12 @@ export async function getAccessToken() {
     throw new Error("Session expired and no refresh token available. Run: node src/index.js auth login");
   }
 
-  const { tenantId, clientId } = resolveEntraConfig();
+  // For token refresh, tenantId/clientId must already be saved from login
+  const tenantId = entra.tenantId;
+  const clientId = entra.clientId;
+  if (!tenantId || !clientId) {
+    throw new Error("Entra ID config incomplete. Run: node src/index.js auth login");
+  }
 
   const body = new URLSearchParams({
     client_id: clientId,
