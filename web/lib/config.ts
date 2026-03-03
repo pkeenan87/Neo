@@ -23,6 +23,10 @@ export function validateConfig(): void {
     throw new Error("Missing ANTHROPIC_API_KEY in .env — server cannot start");
   }
 
+  if (!process.env.AUTH_SECRET) {
+    console.warn("AUTH_SECRET is not set — Auth.js requires this in production.");
+  }
+
   if (env.MOCK_MODE) {
     console.warn("Running in MOCK MODE — tool calls return simulated data.");
     console.warn("Set MOCK_MODE=false in .env and add Azure credentials to use real APIs.");

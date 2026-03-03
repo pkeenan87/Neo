@@ -2,6 +2,9 @@
 const nextConfig = {
   poweredByHeader: false,
   serverExternalPackages: ["@anthropic-ai/sdk", "dotenv"],
+  turbopack: {
+    root: ".",
+  },
   async headers() {
     return [
       {

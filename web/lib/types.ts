@@ -1,4 +1,5 @@
 import type Anthropic from "@anthropic-ai/sdk";
+import type { Role } from "./permissions";
 
 // ─────────────────────────────────────────────────────────────
 //  Environment
@@ -34,7 +35,7 @@ export type AgentEvent =
   | { type: "tool_call"; tool: string; input: Record<string, unknown> }
   | { type: "confirmation_required"; tool: PendingTool }
   | { type: "response"; text: string }
-  | { type: "error"; message: string };
+  | { type: "error"; message: string; code?: string };
 
 // ─────────────────────────────────────────────────────────────
 //  Session
@@ -50,6 +51,8 @@ export interface PendingTool {
 
 export interface Session {
   id: string;
+  role: Role;
+  ownerId: string;
   messages: Message[];
   createdAt: Date;
   lastActivityAt: Date;
@@ -59,6 +62,8 @@ export interface Session {
 
 export interface SessionMeta {
   id: string;
+  role: Role;
+  ownerId: string;
   createdAt: Date;
   messageCount: number;
 }
