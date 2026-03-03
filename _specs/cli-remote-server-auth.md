@@ -17,7 +17,7 @@ The current CLI embeds the full agent loop, tool executors, Azure credentials, a
 ## Non-Goals
 
 - Running the agent loop or tool executors locally (these move entirely to the server)
-- Supporting auth methods beyond API key and Entra ID device flow
+- Supporting auth methods beyond API key and Entra ID device flow - DO NOT USE Device Flow as it is turned off via conditional access policy. Use a redirect URL to launch the browser and have the user login.
 - Building a full auth UI or web-based login for the CLI
 - Changing the server-side implementation (this spec is CLI-only)
 - Multi-server or load-balanced client configurations
@@ -42,7 +42,7 @@ The current CLI embeds the full agent loop, tool executors, Azure credentials, a
 
 **Entra ID (Device Authorization Flow)**
 - The CLI initiates the OAuth 2.0 device authorization flow against the Entra ID tenant configured in the local config file or `NEO_TENANT_ID` / `NEO_CLIENT_ID` env vars
-- The user is shown a device code and URL, opens the URL in a browser, completes sign-in, and the CLI polls for the token
+- The user is shown a device code and URL, opens the URL in a browser, completes sign-in, and the CLI polls for the token - see comment above do not use device code flow.
 - The resulting access token (and refresh token) are cached in the local config file
 - On subsequent runs, the cached token is used; if expired, the refresh token is used to obtain a new access token silently
 - If the refresh token is also expired, the user is prompted to run `neo auth login` again
@@ -96,9 +96,9 @@ The existing entry point (`npm start` / `node src/index.js`) remains the primary
 
 ## Open Questions
 
-- Should the Entra ID client ID for the device flow be a dedicated CLI app registration in Entra ID, separate from the web app registration? A dedicated CLI registration is standard practice and allows the device flow grant type to be enabled without affecting the web app.
-- Should the config file be encrypted at rest, or is filesystem permissions (chmod 600) sufficient for the token cache?
-- Should `clear` delete the server session immediately, or just reset the local session ID (letting the server TTL expire it)?
+- Should the Entra ID client ID for the device flow be a dedicated CLI app registration in Entra ID, separate from the web app registration? A dedicated CLI registration is standard practice and allows the device flow grant type to be enabled without affecting the web app. yes dedicated
+- Should the config file be encrypted at rest, or is filesystem permissions (chmod 600) sufficient for the token cache? encrypted.
+- Should `clear` delete the server session immediately, or just reset the local session ID (letting the server TTL expire it)? reset the local session ID
 
 ## Success Criteria
 
