@@ -188,20 +188,28 @@ npm start -- --api-key <your-key>
 
 Browser-based login using OAuth2 Authorization Code with PKCE. No client secret required.
 
-**Prerequisites**: Your admin must add `http://localhost:4000/callback` as a redirect URI under "Mobile and desktop applications" in the Entra ID app registration (see [CLI Public Client Setup](#cli-public-client-setup)).
+**Prerequisites**: Your admin must configure Entra ID on the Neo web server and add `http://localhost:4000/callback` as a redirect URI under "Mobile and desktop applications" in the Entra ID app registration (see [CLI Public Client Setup](#cli-public-client-setup)).
 
-**Login**:
+**Login** (no flags needed):
 ```bash
-node src/index.js auth login --tenant-id <tenant-id> --client-id <client-id>
+node src/index.js auth login
 ```
 
+The CLI auto-discovers the tenant ID and client ID from the Neo server's `/api/auth/discover` endpoint. This means regular users don't need to know any app registration details — they just run `auth login` and the server provides the configuration.
+
 This will:
-1. Open your browser to the Microsoft login page.
-2. Start a temporary local server on port 4000 for the callback.
-3. Exchange the authorization code for tokens.
-4. Save encrypted tokens to `~/.neo/config.json`.
+1. Discover Entra ID configuration from the Neo server.
+2. Open your browser to the Microsoft login page.
+3. Start a temporary local server on port 4000 for the callback.
+4. Exchange the authorization code for tokens.
+5. Save encrypted tokens and discovered config to `~/.neo/config.json`.
 
 After login, just run `npm start` — the CLI will use the saved tokens and refresh them automatically.
+
+**Override tenant ID** (optional — only if your admin tells you to):
+```bash
+node src/index.js auth login --tenant-id <tenant-id>
+```
 
 **Logout**:
 ```bash
@@ -213,12 +221,14 @@ node src/index.js auth logout
 node src/index.js auth status
 ```
 
-You can also set tenant and client IDs via environment variables instead of flags:
+You can also set tenant and client IDs via environment variables:
 ```bash
 export NEO_TENANT_ID=<tenant-id>
 export NEO_CLIENT_ID=<client-id>
 node src/index.js auth login
 ```
+
+**Discovery endpoint**: The CLI fetches `GET {server-url}/api/auth/discover` to resolve Entra ID configuration. The endpoint returns `{ tenantId, clientId }` from the server's environment variables. This is an unauthenticated endpoint since the values are public identifiers, not secrets.
 
 ### Server URL
 

@@ -190,6 +190,6 @@ The CLI is a thin client. All agent logic, tool execution, and credential manage
 | Command | Description |
 |---------|-------------|
 | `node src/index.js auth login --api-key <key>` | Save API key |
-| `node src/index.js auth login --tenant-id <id> --client-id <id>` | Entra ID browser login |
+| `node src/index.js auth login` | Entra ID browser login (auto-discovers config) |
 | `node src/index.js auth logout` | Clear Entra ID credentials |
 | `node src/index.js auth status` | Show connection and auth status |

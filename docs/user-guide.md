@@ -64,9 +64,9 @@ This guide covers day-to-day usage of Neo for both regular users (readers) and a
    node src/index.js auth login --api-key <your-key>
    ```
 
-   **Entra ID** (browser login):
+   **Entra ID** (browser login — auto-discovers config from the server):
    ```bash
-   node src/index.js auth login --tenant-id <tenant-id> --client-id <client-id>
+   node src/index.js auth login
    ```
 
 3. **Verify your connection**:
@@ -517,7 +517,7 @@ The server runs on port 3000 by default. Set the `PORT` environment variable to 
 | `npm start` | Start the CLI REPL |
 | `npm run dev` | Start with auto-reload (development) |
 | `node src/index.js auth login --api-key <key>` | Save an API key |
-| `node src/index.js auth login --tenant-id <id> --client-id <id>` | Browser-based Entra ID login |
+| `node src/index.js auth login` | Browser-based Entra ID login (auto-discovers config from server) |
 | `node src/index.js auth logout` | Clear Entra ID credentials |
 | `node src/index.js auth status` | Show connection and auth status |
 
@@ -573,10 +573,11 @@ When the limit is reached, start a new session by typing `clear` in the CLI.
 
 ### API Endpoints
 
-All endpoints require authentication via `Authorization: Bearer <api-key>` header or Auth.js session cookie.
+All endpoints require authentication via `Authorization: Bearer <api-key>` header or Auth.js session cookie, except the discovery endpoint.
 
 | Method | Path | Description |
 |--------|------|-------------|
+| `GET` | `/api/auth/discover` | Unauthenticated. Returns `{ tenantId, clientId }` for CLI Entra ID login. |
 | `POST` | `/api/agent` | Send a message to the agent. Returns NDJSON stream. Body: `{ "message": "...", "sessionId?": "..." }` |
 | `POST` | `/api/agent/confirm` | Confirm or cancel a pending destructive tool. Body: `{ "sessionId": "...", "toolId": "...", "confirmed": true }` |
 | `GET` | `/api/agent/sessions` | List sessions. Admins see all; readers see own. |
