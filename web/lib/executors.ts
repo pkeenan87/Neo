@@ -41,9 +41,9 @@ async function run_sentinel_kql({ query, timespan = "PT24H" }: SentinelKqlInput)
     return mockSentinelKql(query);
   }
 
-  const token = await getAzureToken("https://management.azure.com");
+  const token = await getAzureToken("https://api.loganalytics.io");
   const res = await fetch(
-    `https://management.azure.com/subscriptions/${env.AZURE_SUBSCRIPTION_ID}/resourceGroups/${env.SENTINEL_RG}/providers/Microsoft.OperationalInsights/workspaces/${env.SENTINEL_WORKSPACE_NAME}/api/query?api-version=2020-08-01`,
+    `https://api.loganalytics.io/v1/workspaces/${env.SENTINEL_WORKSPACE_ID}/query`,
     {
       method: "POST",
       headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
@@ -53,8 +53,7 @@ async function run_sentinel_kql({ query, timespan = "PT24H" }: SentinelKqlInput)
 
   if (!res.ok) {
     const errText = await res.text();
-    console.error(`[executors] Sentinel KQL query failed (${res.status}):`, errText);
-    throw new Error(`Sentinel KQL query failed (${res.status})`);
+    throw new Error(`Sentinel KQL query failed (${res.status}): ${errText}`);
   }
 
   return await res.json();
@@ -77,8 +76,7 @@ async function get_sentinel_incidents({ severity, status = "New", limit = 10 }: 
 
   if (!res.ok) {
     const errText = await res.text();
-    console.error(`[executors] Sentinel incidents query failed (${res.status}):`, errText);
-    throw new Error(`Sentinel incidents query failed (${res.status})`);
+    throw new Error(`Sentinel incidents query failed (${res.status}): ${errText}`);
   }
 
   return await res.json();
@@ -99,8 +97,7 @@ async function get_xdr_alert({ alert_id, platform }: XdrAlertInput): Promise<unk
 
   if (!res.ok) {
     const errText = await res.text();
-    console.error(`[executors] XDR alert lookup failed (${res.status}):`, errText);
-    throw new Error(`XDR alert lookup failed (${res.status})`);
+    throw new Error(`XDR alert lookup failed (${res.status}): ${errText}`);
   }
 
   return await res.json();
@@ -121,8 +118,7 @@ async function search_xdr_by_host({ hostname, platform }: XdrHostSearchInput): P
 
   if (!res.ok) {
     const errText = await res.text();
-    console.error(`[executors] XDR machine lookup failed (${res.status}):`, errText);
-    throw new Error(`XDR machine lookup failed (${res.status})`);
+    throw new Error(`XDR machine lookup failed (${res.status}): ${errText}`);
   }
 
   const machines = await res.json();
@@ -139,8 +135,7 @@ async function search_xdr_by_host({ hostname, platform }: XdrHostSearchInput): P
 
   if (!alertsRes.ok) {
     const errText = await alertsRes.text();
-    console.error(`[executors] XDR alerts-by-machine failed (${alertsRes.status}):`, errText);
-    throw new Error(`XDR alerts-by-machine failed (${alertsRes.status})`);
+    throw new Error(`XDR alerts-by-machine failed (${alertsRes.status}): ${errText}`);
   }
 
   const alerts = await alertsRes.json();
@@ -162,7 +157,7 @@ async function get_user_info({ upn }: UserInfoInput): Promise<unknown> {
 
   const [user, mfa, groups, devices, riskDetections] = await Promise.allSettled([
     fetch(`https://graph.microsoft.com/v1.0/users/${encodedUpn}?$select=displayName,jobTitle,department,accountEnabled,lastPasswordChangeDateTime,userPrincipalName`, { headers }).then(r => r.json()),
-    fetch(`https://graph.microsoft.com/v1.0/reports/authenticationMethods/userRegistrationDetails/${encodedUpn}`, { headers }).then(r => r.json()),
+    fetch(`https://graph.microsoft.com/v1.0/reports/authenticationMethods/userRegistrationDetails?$filter=userPrincipalName eq '${escapeODataString(upn)}'`, { headers }).then(r => r.json()),
     fetch(`https://graph.microsoft.com/v1.0/users/${encodedUpn}/memberOf`, { headers }).then(r => r.json()),
     fetch(`https://graph.microsoft.com/v1.0/users/${encodedUpn}/registeredDevices`, { headers }).then(r => r.json()),
     fetch(`https://graph.microsoft.com/beta/identityProtection/riskDetections?$filter=userPrincipalName eq '${escapeODataString(upn)}'`, { headers }).then(r => r.json()),
@@ -204,8 +199,7 @@ async function reset_user_password({ upn, revoke_sessions = true, justification 
 
   if (!resetRes.ok) {
     const errText = await resetRes.text();
-    console.error(`[executors] Password reset failed (${resetRes.status}):`, errText);
-    throw new Error(`Password reset failed (${resetRes.status})`);
+    throw new Error(`Password reset failed (${resetRes.status}): ${errText}`);
   }
 
   let sessionRevoked = false;
@@ -262,8 +256,7 @@ async function isolate_machine({ hostname, machine_id, platform, isolation_type 
 
   if (!res.ok) {
     const errText = await res.text();
-    console.error(`[executors] Machine isolation failed (${res.status}):`, errText);
-    throw new Error(`Machine isolation failed (${res.status})`);
+    throw new Error(`Machine isolation failed (${res.status}): ${errText}`);
   }
 
   return await res.json();
@@ -300,8 +293,7 @@ async function unisolate_machine({ hostname, platform, justification }: Unisolat
 
   if (!res.ok) {
     const errText = await res.text();
-    console.error(`[executors] Machine unisolation failed (${res.status}):`, errText);
-    throw new Error(`Machine unisolation failed (${res.status})`);
+    throw new Error(`Machine unisolation failed (${res.status}): ${errText}`);
   }
 
   return await res.json();
