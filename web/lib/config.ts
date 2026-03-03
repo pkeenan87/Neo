@@ -2,6 +2,8 @@ import dotenv from "dotenv";
 import { fileURLToPath } from "url";
 import { dirname, resolve } from "path";
 import type { EnvConfig } from "./types";
+import type { Role } from "./permissions";
+import { getSkillsForRole } from "./skill-store";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 dotenv.config({ path: resolve(__dirname, "../../.env") });
@@ -33,7 +35,7 @@ export function validateConfig(): void {
   }
 }
 
-export const SYSTEM_PROMPT = `You are an expert AI security operations analyst assistant for Goodwin Procter LLP's security team.
+const BASE_SYSTEM_PROMPT = `You are an expert AI security operations analyst assistant for Goodwin Procter LLP's security team.
 You have direct access to Microsoft Sentinel, Defender XDR, and Entra ID management tools.
 
 ## YOUR ROLE
@@ -80,3 +82,23 @@ WRITE/DESTRUCTIVE operations (password reset, machine isolation):
 - Use structured text (not markdown headers) since this renders in a terminal
 - Lead with the most important finding
 - End investigation summaries with a clear RECOMMENDED ACTION`;
+
+export function getSystemPrompt(role: Role): string {
+  const skills = getSkillsForRole(role);
+  if (skills.length === 0) return BASE_SYSTEM_PROMPT;
+
+  const skillBlocks = skills.map((skill) => {
+    const params = skill.parameters.length > 0
+      ? `\nParameters: ${skill.parameters.join(", ")}`
+      : "";
+    return `### ${skill.name}${params}\n\n${skill.description}\n\n${skill.instructions}`;
+  });
+
+  return `${BASE_SYSTEM_PROMPT}
+
+## AVAILABLE SKILLS
+
+The following admin-defined investigation skills are available. When a user's request matches a skill, follow its steps precisely.
+
+${skillBlocks.join("\n\n---\n\n")}`;
+}

@@ -1,5 +1,5 @@
 import Anthropic from "@anthropic-ai/sdk";
-import { env, SYSTEM_PROMPT } from "./config";
+import { env, getSystemPrompt } from "./config";
 import { DESTRUCTIVE_TOOLS } from "./tools";
 import { executeTool } from "./executors";
 import { getToolsForRole, type Role } from "./permissions";
@@ -20,7 +20,7 @@ export async function runAgentLoop(
     const response = await client.messages.create({
       model: "claude-opus-4-5",
       max_tokens: 4096,
-      system: SYSTEM_PROMPT,
+      system: getSystemPrompt(role),
       tools: getToolsForRole(role),
       messages: localMessages,
     });

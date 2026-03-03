@@ -26,6 +26,9 @@ This guide covers day-to-day usage of Neo for both regular users (readers) and a
   - [Isolate a Machine](#isolate-a-machine)
   - [Release an Isolated Machine](#release-an-isolated-machine)
   - [Full Incident Response Workflow](#full-incident-response-workflow)
+- [Skills](#skills)
+  - [Using Skills](#using-skills)
+  - [Managing Skills (Admin)](#managing-skills-admin)
 - [Administration](#administration)
   - [Managing API Keys](#managing-api-keys)
   - [Managing Sessions (Admin)](#managing-sessions-admin)
@@ -405,6 +408,70 @@ The agent will typically:
 
 ---
 
+## Skills
+
+Skills are admin-defined investigation runbooks (markdown files) that guide the agent through multi-step workflows. When a user's request matches a skill, the agent follows its steps precisely.
+
+### Using Skills
+
+Skills are automatically available based on your role. Ask the agent what skills are available:
+
+```
+🔐 You: What skills are available?
+```
+
+To invoke a skill, describe the scenario naturally:
+
+```
+🔐 You: Investigate a TOR login for jsmith@contoso.com in the past 48 hours
+```
+
+If a matching skill exists (e.g., "TOR Login Investigation"), the agent will follow its defined steps — gathering user context, confirming the TOR login via KQL, checking for impossible travel, and so on.
+
+Skills that require destructive tools (password reset, isolation) are only available to `admin` users.
+
+### Managing Skills (Admin)
+
+Skills are stored as markdown files in `web/skills/` and can be managed via the API or by editing files directly.
+
+**List all skills**:
+```bash
+curl -H "Authorization: Bearer <api-key>" \
+  http://localhost:3000/api/skills
+```
+
+**Get a specific skill**:
+```bash
+curl -H "Authorization: Bearer <api-key>" \
+  http://localhost:3000/api/skills/tor-login-investigation
+```
+
+**Create a new skill**:
+```bash
+curl -X POST -H "Authorization: Bearer <admin-api-key>" \
+  -H "Content-Type: application/json" \
+  -d '{"id": "my-new-skill", "content": "# Skill: My New Skill\n\n## Description\n..."}' \
+  http://localhost:3000/api/skills
+```
+
+**Update a skill**:
+```bash
+curl -X PUT -H "Authorization: Bearer <admin-api-key>" \
+  -H "Content-Type: application/json" \
+  -d '{"content": "# Skill: Updated Skill\n\n## Description\n..."}' \
+  http://localhost:3000/api/skills/my-new-skill
+```
+
+**Delete a skill**:
+```bash
+curl -X DELETE -H "Authorization: Bearer <admin-api-key>" \
+  http://localhost:3000/api/skills/my-new-skill
+```
+
+You can also create skills by placing `.md` files directly in the `web/skills/` directory. The server watches this directory and loads changes automatically (no restart needed).
+
+---
+
 ## Administration
 
 ### Managing API Keys
@@ -558,6 +625,9 @@ The server runs on port 3000 by default. Set the `PORT` environment variable to 
 | View own sessions | Yes | Yes |
 | Delete any session | Yes | No |
 | Delete own sessions | Yes | Yes |
+| View skills | Yes | Yes |
+| Create/update/delete skills | Yes | No |
+| Use admin-only skills | Yes | No |
 | Message limit per session | 200 | 100 |
 
 ### Rate Limits
@@ -582,6 +652,11 @@ All endpoints require authentication via `Authorization: Bearer <api-key>` heade
 | `POST` | `/api/agent/confirm` | Confirm or cancel a pending destructive tool. Body: `{ "sessionId": "...", "toolId": "...", "confirmed": true }` |
 | `GET` | `/api/agent/sessions` | List sessions. Admins see all; readers see own. |
 | `DELETE` | `/api/agent/sessions` | Delete a session. Body: `{ "sessionId": "..." }` |
+| `GET` | `/api/skills` | List all skills (metadata only). All authenticated users. |
+| `POST` | `/api/skills` | Create a skill. Admin only. Body: `{ "id": "...", "content": "..." }` |
+| `GET` | `/api/skills/{id}` | Get full skill by ID. All authenticated users. |
+| `PUT` | `/api/skills/{id}` | Update a skill. Admin only. Body: `{ "content": "..." }` |
+| `DELETE` | `/api/skills/{id}` | Delete a skill. Admin only. |
 
 **NDJSON stream events** (returned by `/api/agent` and `/api/agent/confirm`):
 

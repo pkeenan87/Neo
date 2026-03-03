@@ -2,6 +2,22 @@ import type Anthropic from "@anthropic-ai/sdk";
 import type { Role } from "./permissions";
 
 // ─────────────────────────────────────────────────────────────
+//  Skills
+// ─────────────────────────────────────────────────────────────
+
+export interface Skill {
+  id: string;
+  name: string;
+  description: string;
+  instructions: string;
+  requiredTools: string[];
+  requiredRole: Role;
+  parameters: string[];
+}
+
+export type SkillMeta = Omit<Skill, "instructions">;
+
+// ─────────────────────────────────────────────────────────────
 //  Environment
 // ─────────────────────────────────────────────────────────────
 

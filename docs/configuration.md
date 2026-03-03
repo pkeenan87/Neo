@@ -19,6 +19,9 @@ This guide covers all configuration options for the Neo web server and CLI clien
 - [Azure App Registration](#azure-app-registration)
   - [Server App Registration](#server-app-registration)
   - [CLI Public Client Setup](#cli-public-client-setup)
+- [Skills Configuration](#skills-configuration)
+  - [Skills Directory](#skills-directory)
+  - [Skill File Format](#skill-file-format)
 - [Security Notes](#security-notes)
 
 ---
@@ -309,6 +312,72 @@ To enable Entra ID login from the CLI, add a public client redirect URI to the s
 5. Click **Save**.
 
 No client secret is needed for the CLI — it uses PKCE (Proof Key for Code Exchange).
+
+---
+
+## Skills Configuration
+
+### Skills Directory
+
+Skills are markdown files stored in `web/skills/`. The server watches this directory and reloads automatically when files change (no restart needed).
+
+```
+web/skills/
+  tor-login-investigation.md
+  phishing-response.md
+  insider-threat-triage.md
+```
+
+Each `.md` file in this directory is parsed as a skill. The filename (without extension) becomes the skill ID.
+
+**ID format**: Skill IDs must be 2–60 characters, lowercase alphanumeric with hyphens, matching `/^[a-z0-9][a-z0-9-]*[a-z0-9]$/`. Examples: `tor-login-investigation`, `phishing-response`.
+
+Skills can also be managed via the REST API (see [User Guide — Managing Skills](user-guide.md#managing-skills-admin)).
+
+### Skill File Format
+
+Each skill file uses markdown with specific headings:
+
+```markdown
+# Skill: TOR Login Investigation
+
+## Description
+
+Investigate a user account flagged for sign-in activity from a TOR exit node.
+
+## Required Tools
+
+- run_sentinel_kql
+- get_user_info
+- search_xdr_by_host
+
+## Required Role
+
+reader
+
+## Parameters
+
+- upn
+- timeframe
+
+## Steps
+
+Follow these steps in order...
+```
+
+| Section | Required | Description |
+|---------|----------|-------------|
+| `# Skill: <name>` | Yes | The skill name. Must be the first `#` heading. |
+| `## Description` | Yes | Short description shown in skill listings. |
+| `## Required Tools` | No | List of tool names the skill uses. Each must be a valid tool. Skills that reference destructive tools must have `Required Role` set to `admin`. |
+| `## Required Role` | No | `reader` (default) or `admin`. Controls which users see this skill. |
+| `## Parameters` | No | List of parameter names the skill accepts. These are substituted in the skill content. |
+| `## Steps` | No | The investigation steps. This is the main body injected into the agent's system prompt. |
+
+**Validation rules**:
+- Skills without a name or description are skipped with a warning.
+- Skills referencing unknown tools are skipped with a warning.
+- Skills that use destructive tools (`reset_user_password`, `isolate_machine`, `unisolate_machine`) but have `Required Role` set to `reader` are rejected.
 
 ---
 
