@@ -224,13 +224,21 @@ export async function login(options = {}) {
 
   // Persist tokens and config — cache discovered tenantId/clientId so
   // subsequent logins and token refreshes don't need discovery.
+  // We store the id_token (not the access_token) because the server verifies
+  // the token audience matches our app's clientId. The access_token from
+  // "openid profile offline_access" scopes is a Microsoft Graph token whose
+  // signature cannot be verified by third parties.
+  if (!tokens.id_token) {
+    throw new Error("No id_token in token response. Ensure 'openid' scope is requested.");
+  }
+
   writeConfig({
     ...config,
     authMethod: "entra-id",
     entraId: {
       tenantId,
       clientId,
-      accessToken: tokens.access_token,
+      idToken: tokens.id_token,
       refreshToken: tokens.refresh_token || null,
       expiresAt: Date.now() + tokens.expires_in * 1000,
       displayName,
@@ -246,13 +254,16 @@ export async function getAccessToken() {
   const config = readConfig();
   const entra = config.entraId;
 
-  if (!entra?.accessToken) {
+  // Support both new (idToken) and legacy (accessToken) config shapes
+  const cachedToken = entra?.idToken || entra?.accessToken;
+
+  if (!cachedToken) {
     throw new Error("Not logged in. Run: node src/index.js auth login");
   }
 
   // Return cached token if still fresh
   if (entra.expiresAt && entra.expiresAt - TOKEN_EXPIRY_BUFFER_MS > Date.now()) {
-    return entra.accessToken;
+    return cachedToken;
   }
 
   // Attempt silent refresh
@@ -286,6 +297,7 @@ export async function getAccessToken() {
       ...config,
       entraId: {
         ...entra,
+        idToken: null,
         accessToken: null,
         refreshToken: null,
         expiresAt: null,
@@ -296,17 +308,22 @@ export async function getAccessToken() {
 
   const tokens = await res.json();
 
+  if (!tokens.id_token) {
+    throw new Error("No id_token in refresh response. Re-login required: node src/index.js auth login");
+  }
+
   writeConfig({
     ...config,
     entraId: {
       ...entra,
-      accessToken: tokens.access_token,
+      idToken: tokens.id_token,
+      accessToken: undefined, // clear legacy field
       refreshToken: tokens.refresh_token || entra.refreshToken,
       expiresAt: Date.now() + tokens.expires_in * 1000,
     },
   });
 
-  return tokens.access_token;
+  return tokens.id_token;
 }
 
 // ── Logout ────────────────────────────────────────────────────
@@ -326,7 +343,7 @@ export function status() {
   const config = readConfig();
   const entra = config.entraId;
 
-  if (!entra?.accessToken) {
+  if (!entra?.idToken && !entra?.accessToken) {
     return { loggedIn: false, expiresAt: null, username: null };
   }
 
