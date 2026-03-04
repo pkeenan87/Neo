@@ -121,20 +121,20 @@ export async function login(options = {}) {
         const desc = url.searchParams.get("error_description") || error;
         if (process.env.DEBUG) process.stderr.write(`[debug] Entra error: ${desc}\n`);
         res.writeHead(400, { "Content-Type": "text/plain" });
-        res.end("Login failed. You can close this tab.");
+        res.end("Login failed. You can close this tab.", () =>
+          srv.close(() => reject(new Error(`Entra ID login failed: ${errorCode}`)))
+        );
         clearTimeout(timeoutHandle);
-        srv.close();
-        reject(new Error(`Entra ID login failed: ${errorCode}`));
         return;
       }
 
       const returnedState = url.searchParams.get("state");
       if (returnedState !== state) {
         res.writeHead(400, { "Content-Type": "text/plain" });
-        res.end("State mismatch — possible CSRF. Please try again.");
+        res.end("State mismatch — possible CSRF. Please try again.", () =>
+          srv.close(() => reject(new Error("OAuth state mismatch")))
+        );
         clearTimeout(timeoutHandle);
-        srv.close();
-        reject(new Error("OAuth state mismatch"));
         return;
       }
 
@@ -142,10 +142,9 @@ export async function login(options = {}) {
       res.writeHead(200, { "Content-Type": "text/html" });
       res.end(
         "<html><body><h2>Login successful — you can close this tab.</h2></body></html>",
-        () => srv.close()
+        () => srv.close(() => resolve({ code: authCode }))
       );
       clearTimeout(timeoutHandle);
-      resolve({ code: authCode });
     });
 
     srv.on("error", (err) => {
@@ -182,8 +181,9 @@ export async function login(options = {}) {
 
     // Timeout guard
     timeoutHandle = setTimeout(() => {
-      srv.close();
-      reject(new Error("Login timed out after 5 minutes. Please try again."));
+      srv.close(() =>
+        reject(new Error("Login timed out after 5 minutes. Please try again."))
+      );
     }, LOGIN_TIMEOUT_MS);
   });
 
