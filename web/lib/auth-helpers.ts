@@ -11,8 +11,23 @@ export interface ResolvedAuth {
 
 // ── Entra ID token verification ───────────────────────────────
 
-const tenantId = process.env.AUTH_MICROSOFT_ENTRA_ID_ISSUER?.split("/").filter(Boolean).pop();
+// Issuer is a full URL like https://login.microsoftonline.com/{tenantId}/v2.0
+const issuer = process.env.AUTH_MICROSOFT_ENTRA_ID_ISSUER;
 const clientId = process.env.AUTH_MICROSOFT_ENTRA_ID_ID;
+
+// Extract tenant ID from the issuer URL (segment after login.microsoftonline.com)
+function extractTenantId(issuerUrl: string | undefined): string | undefined {
+  if (!issuerUrl) return undefined;
+  try {
+    const segments = new URL(issuerUrl).pathname.split("/").filter(Boolean);
+    // pathname is /{tenantId}/v2.0 → segments[0] is the tenant ID
+    return segments[0] || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+const tenantId = extractTenantId(issuer);
 
 // JWKS endpoint for the tenant — cached by jose across calls
 const jwks = tenantId
@@ -30,11 +45,11 @@ const jwks = tenantId
 async function verifyEntraToken(
   token: string
 ): Promise<Record<string, unknown> | null> {
-  if (!jwks || !tenantId || !clientId) return null;
+  if (!jwks || !issuer || !clientId) return null;
 
   try {
     const { payload } = await jwtVerify(token, jwks, {
-      issuer: `https://login.microsoftonline.com/${tenantId}/v2.0`,
+      issuer,
       audience: clientId,
     });
     return payload as Record<string, unknown>;
