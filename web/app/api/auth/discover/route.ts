@@ -1,4 +1,6 @@
 import { NextResponse } from "next/server";
+// Import config to ensure dotenv loads .env from the project root
+import "@/lib/config";
 
 /**
  * Unauthenticated discovery endpoint for CLI Entra ID login.
