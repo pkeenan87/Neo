@@ -14,8 +14,8 @@ import { streamMessage, streamConfirm } from "./server-client.js";
  *   { type: "response", text, sessionId }
  *   { type: "confirmation_required", tool, sessionId }
  */
-export async function runAgentLoop(message, sessionId, callbacks, authHeader, serverUrl) {
-  return streamMessage(serverUrl, authHeader, sessionId, message, callbacks);
+export async function runAgentLoop(message, sessionId, callbacks, getAuthHeader, serverUrl) {
+  return streamMessage(serverUrl, getAuthHeader, sessionId, message, callbacks);
 }
 
 /**
@@ -23,6 +23,6 @@ export async function runAgentLoop(message, sessionId, callbacks, authHeader, se
  *
  * Returns the same shape as runAgentLoop.
  */
-export async function confirmTool(sessionId, tool, confirmed, callbacks, authHeader, serverUrl) {
-  return streamConfirm(serverUrl, authHeader, sessionId, tool.id, confirmed, callbacks);
+export async function confirmTool(sessionId, tool, confirmed, callbacks, getAuthHeader, serverUrl) {
+  return streamConfirm(serverUrl, getAuthHeader, sessionId, tool.id, confirmed, callbacks);
 }

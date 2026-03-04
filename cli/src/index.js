@@ -3,8 +3,10 @@ import chalk from "chalk";
 import os from "os";
 import { resolveServerConfig, parseFlag, validateServerUrl } from "./config.js";
 import { runAgentLoop, confirmTool } from "./agent.js";
-import { login, logout, status } from "./auth-entra.js";
+import { login, logout, status, getAccessToken } from "./auth-entra.js";
 import { readConfig, writeConfig } from "./config-store.js";
+
+const REFRESH_INTERVAL_MS = 4 * 60 * 1000; // 4 minutes — must be shorter than the 5-minute buffer in getAccessToken()
 
 
 // ─────────────────────────────────────────────────────────────
@@ -223,10 +225,35 @@ async function main() {
   }
 
   // Resolve server config (exits on failure)
-  const { serverUrl, authHeader } = await resolveServerConfig();
+  const { serverUrl, getAuthHeader, authMethod } = await resolveServerConfig();
 
   printBanner();
   console.log(chalk.gray(`    Connected to ${serverUrl}\n`));
+
+  // ── Background token refresh for Entra ID sessions ──────
+  let refreshInterval = null;
+  if (authMethod === "entra-id") {
+    refreshInterval = setInterval(async () => {
+      try {
+        await getAccessToken();
+        if (process.env.DEBUG) process.stderr.write("[debug] Background token refresh succeeded\n");
+      } catch (err) {
+        console.error(chalk.yellow(`\n  ⚠ Token refresh failed — session may expire soon.`));
+        if (process.env.DEBUG) console.error(chalk.yellow(`    ${err.message}`));
+        console.error(chalk.yellow(`    Run 'auth login' to re-authenticate.\n`));
+      }
+    }, REFRESH_INTERVAL_MS);
+    refreshInterval.unref();
+  }
+
+  function cleanup() {
+    if (refreshInterval) clearInterval(refreshInterval);
+  }
+
+  process.on("SIGINT", () => {
+    cleanup();
+    process.exit(0);
+  });
 
   const rl = readline.createInterface({
     input: process.stdin,
@@ -250,6 +277,7 @@ async function main() {
 
     if (userInput.trim().toLowerCase() === "exit") {
       console.log(chalk.gray("\nGoodbye.\n"));
+      cleanup();
       rl.close();
       break;
     }
@@ -261,7 +289,7 @@ async function main() {
     }
 
     try {
-      let result = await runAgentLoop(userInput, sessionId, callbacks, authHeader, serverUrl);
+      let result = await runAgentLoop(userInput, sessionId, callbacks, getAuthHeader, serverUrl);
 
       // Update sessionId from server response
       if (result.sessionId) sessionId = result.sessionId;
@@ -286,7 +314,7 @@ async function main() {
           result.tool,
           confirmed,
           callbacks,
-          authHeader,
+          getAuthHeader,
           serverUrl
         );
 

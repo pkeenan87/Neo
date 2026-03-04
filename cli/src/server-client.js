@@ -86,9 +86,17 @@ async function processStream(response, callbacks) {
 /**
  * Send a message to the agent and stream the response.
  */
-export async function streamMessage(serverUrl, authHeader, sessionId, message, callbacks) {
+export async function streamMessage(serverUrl, getAuthHeader, sessionId, message, callbacks) {
   const body = { message };
   if (sessionId) body.sessionId = sessionId;
+
+  let authHeader;
+  try {
+    authHeader = await getAuthHeader();
+  } catch (err) {
+    err.code = "AUTH_ERROR";
+    throw err;
+  }
 
   const res = await fetch(`${serverUrl}/api/agent`, {
     method: "POST",
@@ -117,7 +125,15 @@ export async function streamMessage(serverUrl, authHeader, sessionId, message, c
 /**
  * Confirm or cancel a pending destructive tool and stream the response.
  */
-export async function streamConfirm(serverUrl, authHeader, sessionId, toolId, confirmed, callbacks) {
+export async function streamConfirm(serverUrl, getAuthHeader, sessionId, toolId, confirmed, callbacks) {
+  let authHeader;
+  try {
+    authHeader = await getAuthHeader();
+  } catch (err) {
+    err.code = "AUTH_ERROR";
+    throw err;
+  }
+
   const res = await fetch(`${serverUrl}/api/agent/confirm`, {
     method: "POST",
     headers: {

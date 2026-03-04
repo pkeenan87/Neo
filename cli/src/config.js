@@ -48,9 +48,10 @@ export function validateServerUrl(raw) {
 }
 
 /**
- * Resolve the server URL and auth header for the current run.
+ * Resolve the server URL and auth getter for the current run.
  *
- * Returns { serverUrl: string, authHeader: string }
+ * Returns { serverUrl: string, getAuthHeader: () => Promise<string>, authMethod: string }
+ * getAuthHeader resolves a fresh auth header before each API call.
  * Exits the process if auth is not configured.
  */
 export async function resolveServerConfig() {
@@ -70,24 +71,28 @@ export async function resolveServerConfig() {
   // CLI flag takes highest priority (dev-only convenience — visible in process table)
   const flagApiKey = parseFlag("--api-key");
   if (flagApiKey) {
-    return { serverUrl, authHeader: `Bearer ${flagApiKey}` };
+    // Closure captures the key once at startup — the value is immutable for the session
+    const header = `Bearer ${flagApiKey}`;
+    return { serverUrl, getAuthHeader: async () => header, authMethod: "api-key" };
   }
 
   // Env var override
   const envApiKey = process.env.NEO_API_KEY;
   if (envApiKey) {
-    return { serverUrl, authHeader: `Bearer ${envApiKey}` };
+    const header = `Bearer ${envApiKey}`;
+    return { serverUrl, getAuthHeader: async () => header, authMethod: "api-key" };
   }
 
   // Config store
   if (config.authMethod === "api-key" && config.apiKey) {
-    return { serverUrl, authHeader: `Bearer ${config.apiKey}` };
+    const header = `Bearer ${config.apiKey}`;
+    return { serverUrl, getAuthHeader: async () => header, authMethod: "api-key" };
   }
 
   if (config.authMethod === "entra-id") {
+    // Verify a token can be obtained at startup — does not guarantee it stays valid
     try {
-      const token = await getAccessToken();
-      return { serverUrl, authHeader: `Bearer ${token}` };
+      await getAccessToken();
     } catch (err) {
       console.error(`\n  Auth error: ${err.message}`);
       if (err.message.includes("Not logged in") || err.message.includes("expired")) {
@@ -98,6 +103,13 @@ export async function resolveServerConfig() {
       }
       process.exit(1);
     }
+
+    // Return a getter that resolves a fresh token before each API call
+    const getAuthHeader = async () => {
+      const token = await getAccessToken();
+      return `Bearer ${token}`;
+    };
+    return { serverUrl, getAuthHeader, authMethod: "entra-id" };
   }
 
   // Nothing configured
