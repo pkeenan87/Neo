@@ -4,6 +4,7 @@ import { DESTRUCTIVE_TOOLS } from "./tools";
 import { executeTool } from "./executors";
 import { getToolsForRole, type Role } from "./permissions";
 import { logger } from "./logger";
+import { wrapToolResult } from "./injection-guard";
 import type { Message, AgentLoopResult, AgentCallbacks, PendingTool } from "./types";
 
 const client = new Anthropic({ apiKey: env.ANTHROPIC_API_KEY });
@@ -11,7 +12,8 @@ const client = new Anthropic({ apiKey: env.ANTHROPIC_API_KEY });
 export async function runAgentLoop(
   messages: Message[],
   callbacks: AgentCallbacks = {},
-  role: Role = "reader"
+  role: Role = "reader",
+  sessionId: string = "unknown"
 ): Promise<AgentLoopResult> {
   const localMessages: Message[] = [...messages];
   logger.info("Agent loop started", "agent", { role });
@@ -65,18 +67,21 @@ export async function runAgentLoop(
         }
 
         // Execute the tool
-        let result: unknown;
         try {
-          result = await executeTool(name, input as Record<string, unknown>);
+          const result = await executeTool(name, input as Record<string, unknown>);
+          toolResults.push({
+            type: "tool_result",
+            tool_use_id: id,
+            content: wrapToolResult(name, result, { sessionId }),
+          });
         } catch (err) {
-          result = { error: (err as Error).message, tool: name };
+          toolResults.push({
+            type: "tool_result",
+            tool_use_id: id,
+            content: wrapToolResult(name, { error: (err as Error).message, tool: name }, { sessionId }),
+            is_error: true,
+          });
         }
-
-        toolResults.push({
-          type: "tool_result",
-          tool_use_id: id,
-          content: JSON.stringify(result, null, 2),
-        });
       }
 
       localMessages.push({ role: "user", content: toolResults });
@@ -93,7 +98,8 @@ export async function resumeAfterConfirmation(
   pendingTool: PendingTool,
   confirmed: boolean,
   callbacks: AgentCallbacks = {},
-  role: Role = "reader"
+  role: Role = "reader",
+  sessionId: string = "unknown"
 ): Promise<AgentLoopResult> {
   const localMessages: Message[] = [...messages];
   const { id, name, input } = pendingTool;
@@ -108,7 +114,7 @@ export async function resumeAfterConfirmation(
       toolResult = {
         type: "tool_result",
         tool_use_id: id,
-        content: JSON.stringify(result, null, 2),
+        content: wrapToolResult(name, result, { sessionId }),
       };
     } catch (err) {
       logger.error("Tool execution error after confirmation", "agent", {
@@ -118,7 +124,7 @@ export async function resumeAfterConfirmation(
       toolResult = {
         type: "tool_result",
         tool_use_id: id,
-        content: JSON.stringify({ error: (err as Error).message }),
+        content: wrapToolResult(name, { error: (err as Error).message }, { sessionId }),
         is_error: true,
       };
     }
@@ -133,5 +139,5 @@ export async function resumeAfterConfirmation(
 
   localMessages.push({ role: "user", content: [toolResult] });
 
-  return runAgentLoop(localMessages, callbacks, role);
+  return runAgentLoop(localMessages, callbacks, role, sessionId);
 }

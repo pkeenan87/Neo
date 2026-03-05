@@ -122,6 +122,7 @@ az webapp config appsettings set `
     --settings `
         WEBSITE_NODE_DEFAULT_VERSION="~20" `
         MOCK_MODE="false" `
+        INJECTION_GUARD_MODE="monitor" `
         SCM_DO_BUILD_DURING_DEPLOYMENT="false" `
     --output none
 if ($LASTEXITCODE -ne 0) {
@@ -199,6 +200,7 @@ Write-Host "      SENTINEL_WORKSPACE_NAME=`"<workspace-name>`" ``" -ForegroundCo
 Write-Host "      SENTINEL_RESOURCE_GROUP=`"<resource-group>`" ``" -ForegroundColor Gray
 Write-Host "      AUTH_MICROSOFT_ENTRA_ID_ID=`"<entra-client-id>`" ``" -ForegroundColor Gray
 Write-Host "      AUTH_MICROSOFT_ENTRA_ID_SECRET=`"<entra-secret>`" ``" -ForegroundColor Gray
-Write-Host "      AUTH_MICROSOFT_ENTRA_ID_ISSUER=`"<entra-issuer>`"" -ForegroundColor Gray
+Write-Host "      AUTH_MICROSOFT_ENTRA_ID_ISSUER=`"<entra-issuer>`" ``" -ForegroundColor Gray
+Write-Host "      INJECTION_GUARD_MODE=`"monitor`"" -ForegroundColor Gray
 Write-Host ""
 Write-Host "  Then deploy with: ./scripts/deploy-azure.ps1`n" -ForegroundColor Yellow

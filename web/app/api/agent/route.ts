@@ -3,6 +3,7 @@ import { sessionStore } from "@/lib/session-store";
 import { runAgentLoop } from "@/lib/agent";
 import { createNDJSONStream, encodeNDJSON, writeAgentResult } from "@/lib/stream";
 import { resolveAuth } from "@/lib/auth-helpers";
+import { scanUserInput, shouldBlock } from "@/lib/injection-guard";
 import { logger } from "@/lib/logger";
 import type { AgentRequest } from "@/lib/types";
 
@@ -30,6 +31,21 @@ export async function POST(request: NextRequest) {
   if (body.message.length > MAX_MESSAGE_LENGTH) {
     return new Response(
       JSON.stringify({ error: `Message too long (max ${MAX_MESSAGE_LENGTH} chars)` }),
+      { status: 400 }
+    );
+  }
+
+  // Injection scan — runs post-auth so identity context is available for audit log.
+  // Runs before session creation so flagged requests never enter session history.
+  const scanResult = scanUserInput(body.message, {
+    sessionId: body.sessionId ?? "new",
+    userId: identity.name,
+    role: identity.role,
+  });
+
+  if (shouldBlock(scanResult)) {
+    return new Response(
+      JSON.stringify({ error: "Request could not be processed." }),
       { status: 400 }
     );
   }
@@ -88,7 +104,8 @@ export async function POST(request: NextRequest) {
             void writer.write(encodeNDJSON({ type: "tool_call", tool: name, input })).catch(() => {});
           },
         },
-        session.role
+        session.role,
+        sessionId
       );
 
       await writeAgentResult(result, session, sessionId, writer);

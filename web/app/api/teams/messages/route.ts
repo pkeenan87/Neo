@@ -11,6 +11,7 @@ import { sessionStore } from "@/lib/session-store";
 import { runAgentLoop, resumeAfterConfirmation } from "@/lib/agent";
 import { canUseTool } from "@/lib/permissions";
 import { resolveTeamsRole } from "@/lib/teams-auth";
+import { scanUserInput, shouldBlock } from "@/lib/injection-guard";
 import { logger, hashPii } from "@/lib/logger";
 import {
   getSessionId,
@@ -208,7 +209,8 @@ async function handleTurn(context: TurnContext): Promise<void> {
       pendingTool,
       confirmed,
       {},
-      session.role
+      session.role,
+      neoSessionId
     );
 
     session.messages = result.messages;
@@ -247,6 +249,20 @@ async function handleTurn(context: TurnContext): Promise<void> {
 
   const session = sessionStore.get(resolvedSessionId)!;
 
+  // Injection scan — mirrors the check in api/agent/route.ts
+  const scanResult = scanUserInput(messageText, {
+    sessionId: resolvedSessionId,
+    userId: aadObjectId,
+    role,
+  });
+
+  if (shouldBlock(scanResult)) {
+    await context.sendActivity(
+      "Your message could not be processed. Please rephrase your request."
+    );
+    return;
+  }
+
   if (sessionStore.isRateLimited(resolvedSessionId)) {
     logger.warn("Teams rate limit exceeded", "teams", { sessionId: resolvedSessionId });
     await context.sendActivity(
@@ -260,7 +276,7 @@ async function handleTurn(context: TurnContext): Promise<void> {
 
   await context.sendActivities([{ type: ActivityTypes.Typing }]);
 
-  const result = await runAgentLoop(session.messages, {}, session.role);
+  const result = await runAgentLoop(session.messages, {}, session.role, resolvedSessionId);
 
   session.messages = result.messages;
   await sendAgentResult(context, result, resolvedSessionId);

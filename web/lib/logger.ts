@@ -90,6 +90,11 @@ const SAFE_METADATA_FIELDS = new Set([
   "action",
   "conversationId",
   "aadObjectIdHash",
+  "matchCount",
+  "messageLength",
+  "mode",
+  "label",
+  "userIdHash",
 ]);
 
 function sanitizeMetadata(

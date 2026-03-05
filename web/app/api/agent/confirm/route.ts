@@ -97,7 +97,8 @@ export async function POST(request: NextRequest) {
             void writer.write(encodeNDJSON({ type: "tool_call", tool: name, input })).catch(() => {});
           },
         },
-        session.role
+        session.role,
+        body.sessionId
       );
 
       await writeAgentResult(result, session, body.sessionId, writer);
