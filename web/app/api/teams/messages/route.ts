@@ -1,3 +1,4 @@
+import { Readable } from "stream";
 import {
   CloudAdapter,
   ConfigurationBotFrameworkAuthentication,
@@ -290,27 +291,20 @@ async function handleTurn(context: TurnContext): Promise<void> {
 
 export async function POST(request: Request): Promise<Response> {
   const bodyText = await request.text();
+  const bodyParsed = JSON.parse(bodyText);
 
-  // Build a minimal IncomingMessage-like object
+  // Build headers object
   const headers: Record<string, string> = {};
   request.headers.forEach((value, key) => {
     headers[key] = value;
   });
 
-  const fakeReq = {
+  // Real Readable stream + parsed body so the SDK is happy either way
+  const fakeReq = Object.assign(Readable.from(Buffer.from(bodyText, "utf-8")), {
     method: "POST",
     headers,
-    body: bodyText,
-    on(event: string, cb: (chunk?: string) => void) {
-      if (event === "data") {
-        cb(bodyText);
-      } else if (event === "end") {
-        cb();
-      }
-      return fakeReq;
-    },
-    removeListener: () => fakeReq,
-  };
+    body: bodyParsed,
+  });
 
   // Capture the response written by the adapter
   let statusCode = 200;
@@ -345,16 +339,12 @@ export async function POST(request: Request): Promise<Response> {
     },
   };
 
-  // The Bot Framework SDK expects Node.js IncomingMessage/ServerResponse.
-  // We provide a minimal shim; `as never` suppresses the structural type mismatch.
   try {
-    await getAdapter().process(
-      fakeReq as never,
-      fakeRes as never,
-      handleTurn
-    );
+    await getAdapter().process(fakeReq as never, fakeRes as never, handleTurn);
   } catch (err) {
-    logger.error("Adapter process error", "teams", { errorMessage: (err as Error).message });
+    logger.error("Adapter process error", "teams", {
+      errorMessage: (err as Error).message,
+    });
     return new Response("Internal Server Error", { status: 500 });
   }
 
