@@ -28,8 +28,9 @@ This guide covers all configuration options for the Neo web server and CLI clien
   - [Prerequisites](#prerequisites)
   - [1. Provision App Service](#1-provision-app-service)
   - [2. Provision Event Hub (Optional)](#2-provision-event-hub-optional)
-  - [3. Set Secret Environment Variables](#3-set-secret-environment-variables)
-  - [4. Build and Deploy](#4-build-and-deploy)
+  - [3. Provision Log Analytics Custom Table (Optional)](#3-provision-log-analytics-custom-table-optional)
+  - [4. Set Secret Environment Variables](#4-set-secret-environment-variables)
+  - [5. Build and Deploy](#5-build-and-deploy)
 - [Security Notes](#security-notes)
 
 ---
@@ -504,7 +505,7 @@ This creates an Event Hub Namespace, Hub (2 partitions, 1-day retention), and a 
 
 ## Azure Deployment
 
-Three PowerShell scripts in `scripts/` handle Azure infrastructure provisioning and application deployment. All scripts are idempotent — safe to re-run without creating duplicates.
+Four PowerShell scripts in `scripts/` handle Azure infrastructure provisioning and application deployment. All scripts are idempotent — safe to re-run without creating duplicates.
 
 ### Prerequisites
 
@@ -572,7 +573,64 @@ EVENT_HUB_CONNECTION_STRING="<connection-string-from-script-output>"
 EVENT_HUB_NAME="neo-logs"
 ```
 
-### 3. Set Secret Environment Variables
+### 3. Provision Log Analytics Custom Table (Optional)
+
+`scripts/provision-log-analytics.ps1` creates a custom Log Analytics table (`NeoLogs_CL`) and a Data Collection Rule (DCR) for ingesting structured application logs. Skip this step if you only need Event Hub or console logging.
+
+The table schema maps directly to the `LogEntry` interface in `web/lib/logger.ts`:
+
+| Column | Type | Source |
+|--------|------|--------|
+| `TimeGenerated` | datetime | `LogEntry.timestamp` |
+| `Level` | string | `LogEntry.level` (debug, info, warn, error) |
+| `Component` | string | `LogEntry.component` |
+| `Message` | string | `LogEntry.message` |
+| `Metadata` | dynamic | `LogEntry.metadata` (PII-sanitized key-value pairs) |
+
+**Prerequisites**: A Log Analytics workspace must already exist. If you don't have one, create it first:
+
+```powershell
+az monitor log-analytics workspace create `
+    --resource-group neo-rg `
+    --workspace-name neo-log-workspace `
+    --location eastus
+```
+
+**Run the script**:
+
+```powershell
+# Default — creates NeoLogs_CL table, DCE, and DCR in neo-log-workspace
+./scripts/provision-log-analytics.ps1
+
+# Custom workspace, region, and retention
+./scripts/provision-log-analytics.ps1 -WorkspaceName "neo-prod-workspace" -Location "westus2" -RetentionDays 90 -TotalRetentionDays 365
+```
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `-ResourceGroupName` | `neo-rg` | Azure Resource Group name (reuses existing) |
+| `-WorkspaceName` | `neo-log-workspace` | Existing Log Analytics workspace name |
+| `-Location` | `eastus` | Azure region |
+| `-TableName` | `NeoLogs_CL` | Custom table name (must end in `_CL`) |
+| `-DcrName` | `neo-logs-dcr` | Data Collection Rule name |
+| `-RetentionDays` | `30` | Interactive retention in days (30–730) |
+| `-TotalRetentionDays` | `90` | Total retention including cold storage (30–2556) |
+
+The script creates three resources:
+
+1. **Custom table** (`NeoLogs_CL`) in the Log Analytics workspace with the schema above.
+2. **Data Collection Endpoint (DCE)** — provides the HTTPS ingestion URL.
+3. **Data Collection Rule (DCR)** — defines the incoming stream, maps it to the workspace, and includes a KQL transform that renames the camelCase application fields to PascalCase table columns.
+
+The script outputs the DCE endpoint URL, DCR immutable ID, and stream name needed for log ingestion. To query the table after logs are flowing:
+
+```kql
+NeoLogs_CL
+| where Level == "error"
+| order by TimeGenerated desc
+```
+
+### 4. Set Secret Environment Variables
 
 After provisioning, set the secret app settings that the provisioning script does not set (secrets should not be passed as script parameters):
 
@@ -606,7 +664,7 @@ az webapp config appsettings set `
         EVENT_HUB_NAME="neo-logs"
 ```
 
-### 4. Build and Deploy
+### 5. Build and Deploy
 
 `scripts/deploy-azure.ps1` builds the Next.js app in standalone mode and deploys it to the existing Azure Web App via zip deploy.
 
