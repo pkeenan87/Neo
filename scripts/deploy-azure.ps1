@@ -99,9 +99,10 @@ if ($SkipBuild) {
         exit 1
     }
 
-    $ServerJs = Join-Path $StandaloneDir "server.js"
-    if (-not (Test-Path $ServerJs)) {
-        Write-Host "`n  ERROR: .next/standalone/server.js missing. The previous build appears incomplete.`n" -ForegroundColor Red
+    # server.js may be at the standalone root or nested in a subdirectory (monorepo)
+    $ServerJs = Get-ChildItem -Path $StandaloneDir -Filter "server.js" -Recurse -File | Select-Object -First 1
+    if (-not $ServerJs) {
+        Write-Host "`n  ERROR: server.js not found in .next/standalone/. The previous build appears incomplete.`n" -ForegroundColor Red
         exit 1
     }
 
@@ -137,6 +138,21 @@ if ($SkipBuild) {
     }
 }
 
+# Next.js monorepo builds can nest server.js under a subdirectory matching
+# the package folder name (e.g. standalone/web/server.js instead of
+# standalone/server.js). Detect and resolve the actual server root.
+$ServerRoot = $StandaloneDir
+if (-not (Test-Path (Join-Path $StandaloneDir "server.js"))) {
+    $NestedServer = Get-ChildItem -Path $StandaloneDir -Filter "server.js" -Recurse -File | Select-Object -First 1
+    if ($NestedServer) {
+        $ServerRoot = $NestedServer.DirectoryName
+        Write-Host "  Detected monorepo layout — server.js found at: $($NestedServer.FullName)" -ForegroundColor Yellow
+    } else {
+        Write-Host "`n  ERROR: server.js not found anywhere in standalone output.`n" -ForegroundColor Red
+        exit 1
+    }
+}
+
 # ─────────────────────────────────────────────────────────────
 #  Package
 # ─────────────────────────────────────────────────────────────
@@ -147,8 +163,10 @@ $StagingDir = Join-Path ([System.IO.Path]::GetTempPath()) "neo-deploy-$([System.
 $ZipPath = "$StagingDir.zip"
 
 try {
-    # Copy standalone output (contains server.js and trimmed node_modules)
-    Copy-Item -Path $StandaloneDir -Destination $StagingDir -Recurse
+    # Copy the server root (contains server.js and trimmed node_modules).
+    # When Next.js nests under a subdirectory, $ServerRoot points to that
+    # subdirectory so the zip root will always contain server.js directly.
+    Copy-Item -Path $ServerRoot -Destination $StagingDir -Recurse
 
     # Copy public/ assets (not included in standalone)
     $PublicDir = Join-Path $WebDir "public"
@@ -162,6 +180,16 @@ try {
         $DestStatic = Join-Path $StagingDir ".next" "static"
         New-Item -ItemType Directory -Path (Join-Path $StagingDir ".next") -Force | Out-Null
         Copy-Item -Path $StaticDir -Destination $DestStatic -Recurse
+    }
+
+    # Also copy node_modules from the standalone root if server root is nested,
+    # since Next.js hoists shared dependencies to the standalone root.
+    if ($ServerRoot -ne $StandaloneDir) {
+        $RootNodeModules = Join-Path $StandaloneDir "node_modules"
+        $StagingNodeModules = Join-Path $StagingDir "node_modules"
+        if ((Test-Path $RootNodeModules) -and -not (Test-Path $StagingNodeModules)) {
+            Copy-Item -Path $RootNodeModules -Destination $StagingNodeModules -Recurse
+        }
     }
 
     # Create zip
@@ -187,6 +215,21 @@ try {
     }
 
     Write-Host "  Deployment complete." -ForegroundColor Green
+
+    # Configure the startup command so Azure runs the Next.js standalone server
+    # instead of looking for a default entry point.
+    Write-Host "`n  Configuring startup command..." -ForegroundColor Cyan
+    az webapp config set `
+        --resource-group $ResourceGroupName `
+        --name $WebAppName `
+        --startup-file "node server.js" `
+        --output none
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "  WARNING: Failed to set startup command. You may need to set it manually in Azure Portal." -ForegroundColor Yellow
+        Write-Host "  Set Startup Command to: node server.js" -ForegroundColor Yellow
+    } else {
+        Write-Host "  Startup command set to: node server.js" -ForegroundColor Green
+    }
 
 } finally {
     # ─────────────────────────────────────────────────────────
