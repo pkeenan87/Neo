@@ -301,7 +301,14 @@ export async function POST(request: Request): Promise<Response> {
     method: "POST",
     headers,
     body: bodyText,
-    on: () => fakeReq,
+    on(event: string, cb: (chunk?: string) => void) {
+      if (event === "data") {
+        cb(bodyText);
+      } else if (event === "end") {
+        cb();
+      }
+      return fakeReq;
+    },
     removeListener: () => fakeReq,
   };
 
@@ -311,8 +318,10 @@ export async function POST(request: Request): Promise<Response> {
   const responseHeaders: Record<string, string> = {};
 
   const fakeRes = {
+    statusCode,
     status: (code: number) => {
       statusCode = code;
+      fakeRes.statusCode = code;
       return fakeRes;
     },
     setHeader: (name: string, value: string) => {
