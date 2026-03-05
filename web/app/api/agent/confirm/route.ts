@@ -4,6 +4,7 @@ import { resumeAfterConfirmation } from "@/lib/agent";
 import { createNDJSONStream, encodeNDJSON, writeAgentResult } from "@/lib/stream";
 import { resolveAuth } from "@/lib/auth-helpers";
 import { canUseTool } from "@/lib/permissions";
+import { logger } from "@/lib/logger";
 import type { ConfirmRequest } from "@/lib/types";
 
 export async function POST(request: NextRequest) {
@@ -36,11 +37,18 @@ export async function POST(request: NextRequest) {
 
   // Only the session owner (or an admin) may confirm tools in a session
   if (session.ownerId !== identity.name && identity.role !== "admin") {
+    logger.warn("Confirm ownership mismatch", "api/confirm", { sessionId: body.sessionId });
     return new Response(JSON.stringify({ error: "Forbidden" }), {
       status: 403,
       headers: { "Content-Type": "application/json" },
     });
   }
+
+  logger.info("Confirmation request", "api/confirm", {
+    sessionId: body.sessionId,
+    toolId: body.toolId,
+    action: body.confirmed ? "confirm" : "cancel",
+  });
 
   const pendingTool = sessionStore.clearPendingConfirmation(body.sessionId);
   if (!pendingTool) {
@@ -51,6 +59,7 @@ export async function POST(request: NextRequest) {
   }
 
   if (pendingTool.id !== body.toolId) {
+    logger.warn("Tool ID mismatch on confirmation", "api/confirm", { sessionId: body.sessionId, toolId: body.toolId });
     sessionStore.setPendingConfirmation(body.sessionId, pendingTool);
     return new Response(
       JSON.stringify({ error: "Tool ID mismatch: confirmation rejected" }),
@@ -64,6 +73,7 @@ export async function POST(request: NextRequest) {
   // Safety net: use session.role (the role the session was provisioned with)
   // rather than identity.role to prevent privilege confusion across users
   if (!canUseTool(session.role, pendingTool.name)) {
+    logger.warn("Permission denied for tool confirmation", "api/confirm", { sessionId: body.sessionId, toolName: pendingTool.name });
     sessionStore.setPendingConfirmation(body.sessionId, pendingTool);
     return new Response(JSON.stringify({ error: "Forbidden" }), {
       status: 403,
@@ -92,6 +102,7 @@ export async function POST(request: NextRequest) {
 
       await writeAgentResult(result, session, body.sessionId, writer);
     } catch (err) {
+      logger.error("Confirmation handler error", "api/confirm", { sessionId: body.sessionId, errorMessage: (err as Error).message });
       await writer.write(
         encodeNDJSON({ type: "error", message: (err as Error).message, code: "AGENT_ERROR" })
       );

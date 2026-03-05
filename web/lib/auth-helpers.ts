@@ -1,6 +1,7 @@
 import { createRemoteJWKSet, jwtVerify } from "jose";
 import { auth } from "@/auth";
 import { findApiKey } from "./api-key-store";
+import { logger } from "./logger";
 import type { Role } from "./permissions";
 
 export interface ResolvedAuth {
@@ -80,6 +81,7 @@ export async function resolveAuth(
     // Try API key first (fast, in-memory lookup)
     const entry = findApiKey(token);
     if (entry) {
+      logger.info("Auth resolved via API key", "auth", { role: entry.role, provider: "api-key" });
       return {
         role: entry.role,
         name: entry.label,
@@ -97,10 +99,12 @@ export async function resolveAuth(
         (payload.preferred_username as string) ??
         (payload.name as string) ??
         "Unknown";
+      logger.info("Auth resolved via Entra ID token", "auth", { role, provider: "entra-id" });
       return { role, name, provider: "entra-id" };
     }
 
     // Invalid bearer token — don't fall through to session
+    logger.warn("Invalid bearer token — auth rejected", "auth");
     return null;
   }
 
@@ -112,6 +116,7 @@ export async function resolveAuth(
     const rawRole = user.role;
     const role: Role =
       rawRole === "admin" || rawRole === "reader" ? rawRole : "reader";
+    logger.info("Auth resolved via Auth.js session", "auth", { role, provider: "entra-id" });
     return {
       role,
       name: (user.name as string) ?? "Unknown",
@@ -119,5 +124,6 @@ export async function resolveAuth(
     };
   }
 
+  logger.debug("No auth credentials found", "auth");
   return null;
 }

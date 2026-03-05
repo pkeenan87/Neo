@@ -1,5 +1,6 @@
 import { getMSGraphToken } from "./auth";
 import { env } from "./config";
+import { logger, hashPii } from "./logger";
 import type { Role } from "./permissions";
 
 // ─────────────────────────────────────────────────────────────
@@ -45,8 +46,9 @@ export async function resolveTeamsRole(aadObjectId: string): Promise<Role> {
     const spObjectId = env.MICROSOFT_APP_SP_OBJECT_ID;
 
     if (!spObjectId) {
-      console.warn(
-        "[teams-auth] MICROSOFT_APP_SP_OBJECT_ID is not set — all Teams users will be assigned 'reader' role."
+      logger.warn(
+        "MICROSOFT_APP_SP_OBJECT_ID is not set — all Teams users will be assigned 'reader' role.",
+        "teams-auth"
       );
       roleCache.set(aadObjectId, { role, expiresAt: Date.now() + CACHE_TTL_MS });
       return role;
@@ -78,17 +80,19 @@ export async function resolveTeamsRole(aadObjectId: string): Promise<Role> {
         );
       }
     } else {
-      console.warn(
-        `[teams-auth] Graph lookup failed for user ${aadObjectId.slice(0, 8)}...: ${res.status} ${res.statusText}`
+      logger.warn(
+        `Graph lookup failed for user ${aadObjectId.slice(0, 8)}...: ${res.status} ${res.statusText}`,
+        "teams-auth"
       );
     }
   } catch (err) {
-    console.warn(
-      `[teams-auth] Could not resolve role for user ${aadObjectId.slice(0, 8)}..., defaulting to reader:`,
-      (err as Error).message
+    logger.warn(
+      `Could not resolve role for user ${aadObjectId.slice(0, 8)}..., defaulting to reader: ${(err as Error).message}`,
+      "teams-auth"
     );
   }
 
+  logger.info(`Teams role resolved: ${role}`, "teams-auth", { role, aadObjectIdHash: hashPii(aadObjectId) });
   roleCache.set(aadObjectId, { role, expiresAt: Date.now() + CACHE_TTL_MS });
   return role;
 }

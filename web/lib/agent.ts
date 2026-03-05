@@ -3,6 +3,7 @@ import { env, getSystemPrompt } from "./config";
 import { DESTRUCTIVE_TOOLS } from "./tools";
 import { executeTool } from "./executors";
 import { getToolsForRole, type Role } from "./permissions";
+import { logger } from "./logger";
 import type { Message, AgentLoopResult, AgentCallbacks, PendingTool } from "./types";
 
 const client = new Anthropic({ apiKey: env.ANTHROPIC_API_KEY });
@@ -13,6 +14,7 @@ export async function runAgentLoop(
   role: Role = "reader"
 ): Promise<AgentLoopResult> {
   const localMessages: Message[] = [...messages];
+  logger.info("Agent loop started", "agent", { role });
 
   while (true) {
     if (callbacks.onThinking) callbacks.onThinking();
@@ -33,6 +35,7 @@ export async function runAgentLoop(
         .filter((b): b is Anthropic.Messages.TextBlock => b.type === "text")
         .map((b) => b.text)
         .join("\n");
+      logger.info("Agent loop completed", "agent");
       return { type: "response", text, messages: localMessages };
     }
 
@@ -49,9 +52,11 @@ export async function runAgentLoop(
         if (callbacks.onToolCall) {
           callbacks.onToolCall(name, input as Record<string, unknown>);
         }
+        logger.info(`Tool call: ${name}`, "agent", { toolName: name, toolId: id });
 
         // Confirmation gate for destructive actions
         if (DESTRUCTIVE_TOOLS.has(name)) {
+          logger.info("Confirmation gate triggered", "agent", { toolName: name, toolId: id });
           return {
             type: "confirmation_required",
             tool: { id, name, input: input as Record<string, unknown> },
@@ -78,6 +83,7 @@ export async function runAgentLoop(
       continue;
     }
 
+    logger.warn(`Unexpected stop_reason: ${response.stop_reason}`, "agent");
     throw new Error(`Unexpected stop_reason: ${response.stop_reason}`);
   }
 }
@@ -95,6 +101,7 @@ export async function resumeAfterConfirmation(
   let toolResult: Anthropic.Messages.ToolResultBlockParam;
 
   if (confirmed) {
+    logger.info("Tool confirmed", "agent", { toolName: name, toolId: id });
     if (callbacks.onToolCall) callbacks.onToolCall(name, input);
     try {
       const result = await executeTool(name, input);
@@ -104,6 +111,10 @@ export async function resumeAfterConfirmation(
         content: JSON.stringify(result, null, 2),
       };
     } catch (err) {
+      logger.error("Tool execution error after confirmation", "agent", {
+        toolName: name,
+        errorMessage: (err as Error).message,
+      });
       toolResult = {
         type: "tool_result",
         tool_use_id: id,
@@ -112,6 +123,7 @@ export async function resumeAfterConfirmation(
       };
     }
   } else {
+    logger.info("Tool cancelled", "agent", { toolName: name, toolId: id });
     toolResult = {
       type: "tool_result",
       tool_use_id: id,

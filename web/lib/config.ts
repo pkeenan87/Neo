@@ -21,8 +21,13 @@ export const env: EnvConfig = {
   MICROSOFT_APP_ID:             process.env.MICROSOFT_APP_ID,
   MICROSOFT_APP_PASSWORD:       process.env.MICROSOFT_APP_PASSWORD,
   MICROSOFT_APP_SP_OBJECT_ID:   process.env.MICROSOFT_APP_SP_OBJECT_ID,
+  EVENT_HUB_CONNECTION_STRING:  process.env.EVENT_HUB_CONNECTION_STRING,
+  EVENT_HUB_NAME:               process.env.EVENT_HUB_NAME,
+  LOG_LEVEL:                    process.env.LOG_LEVEL,
 };
 
+// Note: validateConfig uses console.warn directly (not logger) because
+// logger imports config → circular dependency if config imports logger.
 export function validateConfig(): void {
   if (!env.ANTHROPIC_API_KEY) {
     throw new Error("Missing ANTHROPIC_API_KEY in .env — server cannot start");

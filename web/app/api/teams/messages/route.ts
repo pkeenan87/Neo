@@ -11,6 +11,7 @@ import { sessionStore } from "@/lib/session-store";
 import { runAgentLoop, resumeAfterConfirmation } from "@/lib/agent";
 import { canUseTool } from "@/lib/permissions";
 import { resolveTeamsRole } from "@/lib/teams-auth";
+import { logger, hashPii } from "@/lib/logger";
 import {
   getSessionId,
   setSessionId,
@@ -153,6 +154,7 @@ async function handleTurn(context: TurnContext): Promise<void> {
 
   if (cardValue?.action && cardValue.neoSessionId && cardValue.toolId) {
     const { action, neoSessionId, toolId } = cardValue;
+    logger.info("Card submit received", "teams", { action, sessionId: neoSessionId });
 
     if (action !== "confirm" && action !== "cancel") {
       await context.sendActivity("Unknown action. Please use the card buttons.");
@@ -162,6 +164,7 @@ async function handleTurn(context: TurnContext): Promise<void> {
     // Verify the submitter's identity — prevents cross-user confirmation
     const submitterAadId = context.activity.from?.aadObjectId;
     if (!submitterAadId) {
+      logger.warn("Could not verify Teams submitter identity", "teams");
       await context.sendActivity("Could not verify your identity.");
       return;
     }
@@ -174,6 +177,7 @@ async function handleTurn(context: TurnContext): Promise<void> {
 
     // Only the session owner may confirm/cancel actions (mirrors confirm/route.ts)
     if (session.ownerId !== submitterAadId) {
+      logger.warn("Teams confirm ownership mismatch", "teams", { sessionId: neoSessionId });
       await context.sendActivity("You are not authorized to confirm actions on this session.");
       return;
     }
@@ -218,6 +222,7 @@ async function handleTurn(context: TurnContext): Promise<void> {
 
   const aadObjectId = context.activity.from?.aadObjectId;
   if (!aadObjectId) {
+    logger.warn("Could not identify Teams user AAD account", "teams");
     await context.sendActivity(
       "Could not identify your Azure AD account. Please ensure you are signed in to Teams with your organizational account."
     );
@@ -226,6 +231,7 @@ async function handleTurn(context: TurnContext): Promise<void> {
 
   const role = await resolveTeamsRole(aadObjectId);
   const conversationId = context.activity.conversation.id;
+  logger.info("Teams message received", "teams", { aadObjectIdHash: hashPii(aadObjectId), conversationId });
 
   // Resolve or create session
   let resolvedSessionId: string;
@@ -242,6 +248,7 @@ async function handleTurn(context: TurnContext): Promise<void> {
   const session = sessionStore.get(resolvedSessionId)!;
 
   if (sessionStore.isRateLimited(resolvedSessionId)) {
+    logger.warn("Teams rate limit exceeded", "teams", { sessionId: resolvedSessionId });
     await context.sendActivity(
       "You have reached the message limit for this session. Please start a new conversation."
     );
@@ -319,7 +326,7 @@ export async function POST(request: Request): Promise<Response> {
       handleTurn
     );
   } catch (err) {
-    console.error("[teams/messages] Adapter process error:", err);
+    logger.error("Adapter process error", "teams", { errorMessage: (err as Error).message });
     return new Response("Internal Server Error", { status: 500 });
   }
 

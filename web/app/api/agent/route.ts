@@ -3,6 +3,7 @@ import { sessionStore } from "@/lib/session-store";
 import { runAgentLoop } from "@/lib/agent";
 import { createNDJSONStream, encodeNDJSON, writeAgentResult } from "@/lib/stream";
 import { resolveAuth } from "@/lib/auth-helpers";
+import { logger } from "@/lib/logger";
 import type { AgentRequest } from "@/lib/types";
 
 export async function POST(request: NextRequest) {
@@ -55,9 +56,11 @@ export async function POST(request: NextRequest) {
   }
 
   const session = sessionStore.get(sessionId)!;
+  logger.info("Agent request", "api/agent", { sessionId, role: session.role, provider: identity.provider });
 
   // Rate limit check
   if (sessionStore.isRateLimited(sessionId)) {
+    logger.warn("Rate limit exceeded", "api/agent", { sessionId });
     return new Response(
       JSON.stringify({ error: "Session message limit exceeded" }),
       { status: 429 }
@@ -90,6 +93,7 @@ export async function POST(request: NextRequest) {
 
       await writeAgentResult(result, session, sessionId, writer);
     } catch (err) {
+      logger.error("Agent loop error", "api/agent", { sessionId, errorMessage: (err as Error).message });
       await writer.write(
         encodeNDJSON({ type: "error", message: (err as Error).message, code: "AGENT_ERROR" })
       );

@@ -1,5 +1,6 @@
 import crypto from "crypto";
 import { RATE_LIMITS, type Role } from "./permissions";
+import { logger, hashPii } from "./logger";
 import type { Session, SessionMeta, PendingTool } from "./types";
 
 const TTL_MS = 30 * 60 * 1000; // 30 minutes
@@ -24,6 +25,7 @@ class SessionStore {
       messageCount: 0,
       pendingConfirmation: null,
     });
+    logger.info("Session created", "session-store", { sessionId: id, role, ownerIdHash: hashPii(ownerId) });
     return id;
   }
 
@@ -32,6 +34,7 @@ class SessionStore {
     if (!session) return undefined;
 
     if (Date.now() - session.lastActivityAt.getTime() > TTL_MS) {
+      logger.info("Session expired", "session-store", { sessionId: id });
       this.sessions.delete(id);
       return undefined;
     }
@@ -69,6 +72,7 @@ class SessionStore {
     const session = this.sessions.get(id);
     if (session) {
       session.pendingConfirmation = tool;
+      logger.info("Pending confirmation set", "session-store", { sessionId: id, toolName: tool.name, toolId: tool.id });
     }
   }
 
@@ -77,6 +81,7 @@ class SessionStore {
     if (!session) return null;
     const pending = session.pendingConfirmation;
     session.pendingConfirmation = null;
+    logger.info("Pending confirmation cleared", "session-store", { sessionId: id });
     return pending;
   }
 
@@ -90,6 +95,7 @@ class SessionStore {
     const now = Date.now();
     for (const [id, session] of this.sessions) {
       if (now - session.lastActivityAt.getTime() > TTL_MS) {
+        logger.debug("Session swept", "session-store", { sessionId: id });
         this.sessions.delete(id);
       }
     }

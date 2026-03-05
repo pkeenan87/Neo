@@ -1,5 +1,6 @@
 import { env } from "./config";
 import { getAzureToken, getMSGraphToken, generateSecurePassword } from "./auth";
+import { logger } from "./logger";
 import type {
   SentinelKqlInput,
   SentinelIncidentsInput,
@@ -313,8 +314,12 @@ const executors: Record<string, (input: Record<string, unknown>) => Promise<unkn
 };
 
 export async function executeTool(toolName: string, toolInput: Record<string, unknown>): Promise<unknown> {
+  logger.debug(`Executing tool: ${toolName}`, "executors", { toolName });
   const fn = executors[toolName];
-  if (!fn) throw new Error(`Unknown tool: ${toolName}`);
+  if (!fn) {
+    logger.error(`Unknown tool: ${toolName}`, "executors", { toolName });
+    throw new Error(`Unknown tool: ${toolName}`);
+  }
   return await fn(toolInput);
 }
 
