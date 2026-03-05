@@ -18,6 +18,9 @@ export const env: EnvConfig = {
   SENTINEL_WORKSPACE_NAME: process.env.SENTINEL_WORKSPACE_NAME,
   SENTINEL_RG:             process.env.SENTINEL_RESOURCE_GROUP,
   MOCK_MODE:               process.env.MOCK_MODE !== "false",
+  MICROSOFT_APP_ID:             process.env.MICROSOFT_APP_ID,
+  MICROSOFT_APP_PASSWORD:       process.env.MICROSOFT_APP_PASSWORD,
+  MICROSOFT_APP_SP_OBJECT_ID:   process.env.MICROSOFT_APP_SP_OBJECT_ID,
 };
 
 export function validateConfig(): void {

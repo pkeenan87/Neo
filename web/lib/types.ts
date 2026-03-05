@@ -31,6 +31,9 @@ export interface EnvConfig {
   SENTINEL_WORKSPACE_NAME: string | undefined;
   SENTINEL_RG: string | undefined;
   MOCK_MODE: boolean;
+  MICROSOFT_APP_ID: string | undefined;
+  MICROSOFT_APP_PASSWORD: string | undefined;
+  MICROSOFT_APP_SP_OBJECT_ID: string | undefined;
 }
 
 // ─────────────────────────────────────────────────────────────

@@ -2,7 +2,7 @@
 const nextConfig = {
   output: "standalone",
   poweredByHeader: false,
-  serverExternalPackages: ["@anthropic-ai/sdk", "dotenv"],
+  serverExternalPackages: ["@anthropic-ai/sdk", "dotenv", "botbuilder"],
   turbopack: {
     root: ".",
   },
