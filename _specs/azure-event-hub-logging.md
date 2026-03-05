@@ -8,7 +8,7 @@ The Neo application has no structured logging. `console.log` and `console.warn` 
 
 ## Goals
 
-- Introduce a lightweight structured logging module usable by both the CLI and web projects
+- Introduce a lightweight structured logging module usable by both the CLI and web projects - just the web project for now
 - Every log entry includes a consistent schema: timestamp, level, component, message, and structured metadata
 - All log output is sent to an Azure Event Hub in near-real-time for centralized collection
 - Provide a PowerShell provisioning script that creates the Event Hub Namespace, Event Hub, and authorization rules
@@ -37,7 +37,7 @@ The Neo application has no structured logging. `console.log` and `console.warn` 
 
 ### Logger Module Location and Sharing
 
-Both the CLI (`cli/src/`) and web (`web/lib/`) projects need access to the logger. Since the two projects have no cross-imports (per CLAUDE.md), the logger module should be implemented independently in each project, following the same interface and schema. Alternatively, a shared `lib/` directory at the repo root could hold the logger, but this would break the current "no cross-imports" convention. The simpler path is to create a `logger.ts` (or `logger.js` for CLI) in each project with an identical public API.
+Just the web (`web/lib/`) projects need access to the logger. 
 
 ### Log Schema
 
@@ -95,18 +95,16 @@ When `MOCK_MODE=true` or `LOG_LEVEL=debug`, the logger should also write to stdo
 
 ## Key Files
 
-- `cli/src/logger.js` — CLI logging module with Event Hub and console sinks
 - `web/lib/logger.ts` — Web logging module with Event Hub and console sinks
 - `scripts/provision-event-hub.ps1` — PowerShell script to create Event Hub Namespace, Hub, and auth rules
-- `cli/src/config.js` — Add new env vars (`EVENT_HUB_CONNECTION_STRING`, `EVENT_HUB_NAME`, `LOG_LEVEL`)
 - `web/lib/config.ts` — Add new env vars to `EnvConfig` and `env` object
 - `web/lib/types.ts` — Extend `EnvConfig` interface with new env vars
 - `.env.example` — Document new env vars
 
 ## Open Questions
 
-1. Should the CLI and web logger modules be fully independent implementations (matching interface, separate code), or should a shared package be introduced at the repo root? Independent copies are simpler but risk drift over time.
-2. What message retention period should the Event Hub default to? 1 day is the minimum (Basic SKU), 7 days is the Standard SKU default. Longer retention increases cost but allows replaying events if the downstream SIEM misses ingestion.
-3. Should the provisioning script also create a Consumer Group for the downstream SIEM, or leave that to the SIEM setup?
-4. Should the logger redact all values for keys matching patterns like `password`, `secret`, `token`, `key`, or should it use an explicit allowlist of safe fields?
-5. What partition count should the Event Hub default to? 2 is sufficient for the expected log volume, but higher counts allow more parallel consumers downstream.
+1. Should the CLI and web logger modules be fully independent implementations (matching interface, separate code), or should a shared package be introduced at the repo root? Independent copies are simpler but risk drift over time. only do the web logger
+2. What message retention period should the Event Hub default to? 1 day is the minimum (Basic SKU), 7 days is the Standard SKU default. Longer retention increases cost but allows replaying events if the downstream SIEM misses ingestion. 1 day
+3. Should the provisioning script also create a Consumer Group for the downstream SIEM, or leave that to the SIEM setup? leave that to SIEM setup
+4. Should the logger redact all values for keys matching patterns like `password`, `secret`, `token`, `key`, or should it use an explicit allowlist of safe fields? allowlist of safe fields
+5. What partition count should the Event Hub default to? 2 is sufficient for the expected log volume, but higher counts allow more parallel consumers downstream. 2
