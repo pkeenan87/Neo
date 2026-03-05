@@ -24,6 +24,12 @@ This guide covers all configuration options for the Neo web server and CLI clien
   - [Skill File Format](#skill-file-format)
 - [Prompt Injection Guard](#prompt-injection-guard)
 - [Structured Logging](#structured-logging)
+- [Azure Deployment](#azure-deployment)
+  - [Prerequisites](#prerequisites)
+  - [1. Provision App Service](#1-provision-app-service)
+  - [2. Provision Event Hub (Optional)](#2-provision-event-hub-optional)
+  - [3. Set Secret Environment Variables](#3-set-secret-environment-variables)
+  - [4. Build and Deploy](#4-build-and-deploy)
 - [Security Notes](#security-notes)
 
 ---
@@ -493,6 +499,137 @@ Use the provisioning script to create the Event Hub infrastructure:
 ```
 
 This creates an Event Hub Namespace, Hub (2 partitions, 1-day retention), and a Send-only authorization rule. The script outputs the connection string to set in `.env`.
+
+---
+
+## Azure Deployment
+
+Three PowerShell scripts in `scripts/` handle Azure infrastructure provisioning and application deployment. All scripts are idempotent — safe to re-run without creating duplicates.
+
+### Prerequisites
+
+All scripts require:
+
+- **Azure CLI** (`az`) installed — [Install guide](https://learn.microsoft.com/en-us/cli/azure/install-azure-cli)
+- **Logged in** to Azure CLI: `az login`
+- **Correct subscription** selected: `az account set --subscription <id>`
+
+The deploy script additionally requires **npm** installed locally.
+
+### 1. Provision App Service
+
+`scripts/provision-azure.ps1` creates the Azure App Service infrastructure: Resource Group, Linux App Service Plan, and Web App configured for Node.js.
+
+```powershell
+# Default — creates neo-rg, neo-plan (B1), neo-web
+./scripts/provision-azure.ps1
+
+# Production — custom name, higher SKU, different region
+./scripts/provision-azure.ps1 -WebAppName "neo-prod" -Sku "P1v3" -Location "westus2"
+```
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `-ResourceGroupName` | `neo-rg` | Azure Resource Group name |
+| `-AppServicePlanName` | `neo-plan` | App Service Plan name |
+| `-WebAppName` | `neo-web` | Web App name (becomes `<name>.azurewebsites.net`) |
+| `-Location` | `eastus` | Azure region |
+| `-Sku` | `B1` | App Service Plan tier (`B1`, `B2`, `B3`, `S1`–`S3`, `P1v2`–`P3v3`) |
+| `-NodeVersion` | `20-lts` | Node.js runtime version (`20-lts` or `22-lts`) |
+
+The script automatically configures:
+- `MOCK_MODE=false` and `INJECTION_GUARD_MODE=monitor` as app settings
+- Startup command: `node server.js`
+- HTTPS-only with TLS 1.2 minimum
+
+### 2. Provision Event Hub (Optional)
+
+`scripts/provision-event-hub.ps1` creates the Azure Event Hub infrastructure for structured audit logging. Skip this step if you only need console logging.
+
+```powershell
+# Default — creates neo-eventhub-ns (Basic), neo-logs hub, Send-only auth rule
+./scripts/provision-event-hub.ps1
+
+# Production — Standard tier, custom namespace
+./scripts/provision-event-hub.ps1 -NamespaceName "neo-prod-eventhub-ns" -Sku "Standard" -Location "westus2"
+```
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `-ResourceGroupName` | `neo-rg` | Azure Resource Group name (reuses existing) |
+| `-NamespaceName` | `neo-eventhub-ns` | Event Hub Namespace name |
+| `-EventHubName` | `neo-logs` | Event Hub name |
+| `-Location` | `eastus` | Azure region |
+| `-Sku` | `Basic` | Namespace tier (`Basic` or `Standard`) |
+| `-PartitionCount` | `2` | Number of partitions (1–32) |
+| `-MessageRetentionDays` | `1` | Message retention in days (1–7) |
+| `-AuthRuleName` | `neo-send-policy` | Name of the Send-only authorization rule |
+
+The script outputs the connection string at the end. Add it to your `.env` or app settings:
+
+```bash
+EVENT_HUB_CONNECTION_STRING="<connection-string-from-script-output>"
+EVENT_HUB_NAME="neo-logs"
+```
+
+### 3. Set Secret Environment Variables
+
+After provisioning, set the secret app settings that the provisioning script does not set (secrets should not be passed as script parameters):
+
+```powershell
+az webapp config appsettings set `
+    --name neo-web `
+    --resource-group neo-rg `
+    --settings `
+        ANTHROPIC_API_KEY="<your-key>" `
+        AUTH_SECRET="<openssl rand -hex 32>" `
+        AZURE_TENANT_ID="<tenant-id>" `
+        AZURE_CLIENT_ID="<client-id>" `
+        AZURE_CLIENT_SECRET="<client-secret>" `
+        AZURE_SUBSCRIPTION_ID="<subscription-id>" `
+        SENTINEL_WORKSPACE_ID="<workspace-id>" `
+        SENTINEL_WORKSPACE_NAME="<workspace-name>" `
+        SENTINEL_RESOURCE_GROUP="<resource-group>" `
+        AUTH_MICROSOFT_ENTRA_ID_ID="<entra-client-id>" `
+        AUTH_MICROSOFT_ENTRA_ID_SECRET="<entra-secret>" `
+        AUTH_MICROSOFT_ENTRA_ID_ISSUER="<entra-issuer>"
+```
+
+If you provisioned Event Hub, also add:
+
+```powershell
+az webapp config appsettings set `
+    --name neo-web `
+    --resource-group neo-rg `
+    --settings `
+        EVENT_HUB_CONNECTION_STRING="<connection-string>" `
+        EVENT_HUB_NAME="neo-logs"
+```
+
+### 4. Build and Deploy
+
+`scripts/deploy-azure.ps1` builds the Next.js app in standalone mode and deploys it to the existing Azure Web App via zip deploy.
+
+```powershell
+# Default — builds and deploys to neo-web
+./scripts/deploy-azure.ps1
+
+# Deploy to a different app name
+./scripts/deploy-azure.ps1 -WebAppName "neo-prod"
+
+# Skip build (reuse previous build output)
+./scripts/deploy-azure.ps1 -SkipBuild
+```
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `-ResourceGroupName` | `neo-rg` | Azure Resource Group name |
+| `-WebAppName` | `neo-web` | Target Web App name |
+| `-SkipBuild` | (off) | Skip `npm install` and `npm run build`, reuse existing `.next/standalone/` output |
+
+The script packages the Next.js standalone output, `public/` assets, and `.next/static/` into a zip file and deploys via `az webapp deploy`. The `-SkipBuild` flag is useful for redeploying without rebuilding (e.g., after changing only app settings). It warns if the build artifact is more than 24 hours old.
+
+The Web App must already exist — run `provision-azure.ps1` first.
 
 ---
 
