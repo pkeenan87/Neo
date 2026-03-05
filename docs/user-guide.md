@@ -35,6 +35,7 @@ This guide covers day-to-day usage of Neo for both regular users (readers) and a
   - [Starting the Server](#starting-the-server)
   - [Going Live with Azure](#going-live-with-azure)
   - [Monitoring](#monitoring)
+  - [Prompt Injection Guard](#prompt-injection-guard)
 - [Reference](#reference)
   - [CLI Commands](#cli-commands)
   - [Tool Reference](#tool-reference)
@@ -570,8 +571,23 @@ The server runs on port 3000 by default. Set the `PORT` environment variable to 
 ### Monitoring
 
 - **Debug logging**: Set `DEBUG=1` when running the CLI for verbose output.
-- **Server logs**: Next.js logs requests to stdout. Check the terminal running `npm run dev`.
+- **Server logs**: Next.js logs requests to stdout. Check the terminal running `npm run dev`. Set `LOG_LEVEL=debug` for detailed output including tool execution and session lifecycle events.
+- **Structured audit logs**: When configured, all events (auth, tool calls, confirmations, errors) are sent to Azure Event Hub as JSON. See [Configuration Guide — Structured Logging](configuration.md#structured-logging).
+- **Injection detection logs**: Prompt injection detections appear as `warn`-level log entries with component `injection-guard`. In monitor mode, these are informational. Review them to calibrate false-positive rates before enabling block mode.
 - **Session inspection**: Use the sessions API endpoint to monitor active sessions and message counts.
+
+### Prompt Injection Guard
+
+Neo includes built-in protection against prompt injection attacks. This is transparent to normal users — legitimate SOC queries are not affected.
+
+**What happens when an injection is detected:**
+
+- In **monitor mode** (default): The detection is logged and the request proceeds normally. The agent may also flag the attempt in its response.
+- In **block mode**: Messages with 2 or more pattern matches are rejected with a generic error. Single-pattern matches are allowed through to avoid false positives.
+
+**If the agent flags your message as a potential injection attempt**, it means your message matched one of the detection patterns. This can occasionally happen with legitimate queries. If you receive an injection warning, rephrase your request. If it happens frequently with normal queries, ask your admin to review the injection guard logs and consider adjusting the configuration.
+
+**For admins**: Set `INJECTION_GUARD_MODE` in `.env`. Start with `monitor` (the default) and review the injection guard logs in your Event Hub or console output. Switch to `block` only after confirming that false-positive rates are acceptable for your team's query patterns. See [Configuration Guide — Prompt Injection Guard](configuration.md#prompt-injection-guard).
 
 ---
 

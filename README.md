@@ -49,6 +49,8 @@ neo/
 │       ├── stream.ts       # NDJSON streaming helpers
 │       ├── auth-helpers.ts # Request authentication resolver
 │       ├── api-key-store.ts # API key lookup with hot-reload
+│       ├── injection-guard.ts # Prompt injection scanner + trust boundary wrapper
+│       ├── logger.ts       # Structured logger (console + Azure Event Hub)
 │       └── config.ts       # Server environment config
 ├── docs/                   # Documentation
 │   ├── configuration.md    # Configuration guide
@@ -125,6 +127,17 @@ Read-only tools execute automatically. Destructive tools pause for human confirm
 |------|----------------|-------------------|--------------------|
 | `admin` | All | All (with confirmation) | All sessions |
 | `reader` | All | Blocked | Own sessions only |
+
+## Security
+
+Neo includes defense-in-depth protections against prompt injection — attempts to manipulate the agent via message content or adversarial data in external API responses.
+
+- **Input scanning** — All user messages (web API and Teams) are scanned against regex patterns that detect instruction overrides, persona reassignment, privilege claims, gate bypass attempts, and jailbreak phrases. In `monitor` mode (default) detections are logged; in `block` mode messages with 2+ pattern matches are rejected.
+- **Tool result wrapping** — Every tool response is wrapped in a `_neo_trust_boundary` envelope that instructs the model to treat the data as untrusted. A separate pattern scan detects injected directives in API responses and flags them.
+- **System prompt hardening** — The system prompt includes explicit security principles that instruct the model to reject social engineering, never skip the confirmation gate, and flag injection attempts in its response.
+- **Structured audit logging** — All injection detections are logged to the Event Hub audit trail with session, role, and pattern metadata (never raw message content).
+
+Set `INJECTION_GUARD_MODE=monitor` (default) or `block` in `.env`. See [Configuration Guide](docs/configuration.md#prompt-injection-guard) for details.
 
 ## Authentication
 
