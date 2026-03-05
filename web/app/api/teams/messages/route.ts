@@ -318,6 +318,9 @@ export async function POST(request: Request): Promise<Response> {
     setHeader: (name: string, value: string) => {
       responseHeaders[name] = value;
     },
+    header: (name: string, value: string) => {
+      responseHeaders[name] = value;
+    },
     end: (body?: string) => {
       if (body) responseBody = body;
     },
