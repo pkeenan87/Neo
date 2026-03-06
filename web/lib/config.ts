@@ -143,7 +143,11 @@ export function getSystemPrompt(role: Role): string {
 
 ## AVAILABLE SKILLS
 
-The following admin-defined investigation skills are available. When a user's request matches a skill, follow its steps precisely.
+The following admin-defined investigation skills are available.
+
+- When a user's request clearly matches a skill, follow its steps precisely.
+- When a user's request partially aligns with a skill, proactively suggest it (e.g., "I have a TOR Login Investigation skill that covers this scenario — shall I follow it?").
+- When a user asks what you can do or what skills are available, list all skills below by name and description.
 
 ${skillBlocks.join("\n\n---\n\n")}`;
 }

@@ -1,12 +1,14 @@
 import { readFileSync, readdirSync, writeFileSync, unlinkSync, watch, mkdirSync, existsSync } from "fs";
-import { resolve, dirname, basename } from "path";
-import { fileURLToPath } from "url";
+import { resolve, basename } from "path";
 import { TOOLS, DESTRUCTIVE_TOOLS } from "./tools";
 import type { Role } from "./permissions";
 import type { Skill, SkillMeta } from "./types";
 
-const __dirname = dirname(fileURLToPath(import.meta.url));
-const SKILLS_DIR = resolve(__dirname, "../skills");
+const SKILLS_DIR = resolve(process.cwd(), "skills");
+
+if (!existsSync(SKILLS_DIR)) {
+  console.warn(`[skill-store] Skills directory not found at ${SKILLS_DIR}. No skills will be loaded.`);
+}
 
 const VALID_ID = /^[a-z0-9][a-z0-9-]*[a-z0-9]$/;
 const MAX_ID_LENGTH = 60;

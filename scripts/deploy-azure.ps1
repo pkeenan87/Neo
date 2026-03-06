@@ -182,6 +182,14 @@ try {
         Copy-Item -Path $StaticDir -Destination $DestStatic -Recurse
     }
 
+    # Copy skills/ directory (skill markdown files read at runtime)
+    $SkillsDir = Join-Path $WebDir "skills"
+    if (Test-Path $SkillsDir) {
+        Copy-Item -Path $SkillsDir -Destination (Join-Path $StagingDir "skills") -Recurse
+        $SkillCount = (Get-ChildItem -Path $SkillsDir -Filter "*.md" -File).Count
+        Write-Host "  Copied $SkillCount skill file(s)." -ForegroundColor Green
+    }
+
     # Also copy node_modules from the standalone root if server root is nested,
     # since Next.js hoists shared dependencies to the standalone root.
     if ($ServerRoot -ne $StandaloneDir) {
