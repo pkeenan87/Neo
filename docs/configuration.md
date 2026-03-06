@@ -73,6 +73,9 @@ EVENT_HUB_CONNECTION_STRING=
 EVENT_HUB_NAME=neo-logs
 LOG_LEVEL=
 
+# Teams bot role (default: reader)
+TEAMS_BOT_ROLE=reader
+
 # Prompt injection guard
 INJECTION_GUARD_MODE=monitor
 ```
@@ -94,7 +97,7 @@ INJECTION_GUARD_MODE=monitor
 | `SENTINEL_RESOURCE_GROUP` | When live | Resource group containing the Sentinel workspace |
 | `MICROSOFT_APP_ID` | No | Bot Framework app ID (for Teams channel) |
 | `MICROSOFT_APP_PASSWORD` | No | Bot Framework app password |
-| `MICROSOFT_APP_SP_OBJECT_ID` | No | Service principal object ID for RBAC role lookups |
+| `TEAMS_BOT_ROLE` | No | Role for all Teams bot users: `admin` or `reader` (default: `reader`) |
 | `EVENT_HUB_CONNECTION_STRING` | No | Azure Event Hub connection string for structured audit logs |
 | `EVENT_HUB_NAME` | No | Event Hub name (default: `neo-logs`) |
 | `LOG_LEVEL` | No | Minimum log level: `debug`, `info` (default), `warn`, `error` |
@@ -445,11 +448,11 @@ INJECTION_GUARD_MODE=block     # Reject 2+ pattern matches
 ### Trust boundary envelope
 
 All tool results are wrapped in a `_neo_trust_boundary` JSON envelope before being returned to the model. This envelope includes:
-- An explicit warning instructing the model to treat the data as untrusted
+- `source: "external_api"` identifying the data origin
 - An `injection_detected` boolean flag
 - The original data in a `data` field
 
-This gives the model structural context to distrust embedded directives regardless of whether the pattern scanner flags them.
+The system prompt instructs the model to treat all trust-boundary-wrapped content as untrusted and to flag any result where `injection_detected` is true. Detections are logged to the audit trail but no warning text is included in the envelope itself, keeping user-facing responses clean.
 
 ### System prompt reinforcement
 
@@ -539,7 +542,7 @@ The deploy script additionally requires **npm** installed locally.
 | `-NodeVersion` | `20-lts` | Node.js runtime version (`20-lts` or `22-lts`) |
 
 The script automatically configures:
-- `MOCK_MODE=false` and `INJECTION_GUARD_MODE=monitor` as app settings
+- `MOCK_MODE=false`, `INJECTION_GUARD_MODE=monitor`, and `TEAMS_BOT_ROLE=reader` as app settings
 - Startup command: `node server.js`
 - HTTPS-only with TLS 1.2 minimum
 
@@ -685,7 +688,7 @@ az webapp config appsettings set `
 | `-WebAppName` | `neo-web` | Target Web App name |
 | `-SkipBuild` | (off) | Skip `npm install` and `npm run build`, reuse existing `.next/standalone/` output |
 
-The script packages the Next.js standalone output, `public/` assets, and `.next/static/` into a zip file and deploys via `az webapp deploy`. The `-SkipBuild` flag is useful for redeploying without rebuilding (e.g., after changing only app settings). It warns if the build artifact is more than 24 hours old.
+The script packages the Next.js standalone output, `public/` assets, `.next/static/`, and `skills/` into a zip file and deploys via `az webapp deploy`. The `-SkipBuild` flag is useful for redeploying without rebuilding (e.g., after changing only app settings). It warns if the build artifact is more than 24 hours old.
 
 The Web App must already exist — run `provision-azure.ps1` first.
 
