@@ -33,7 +33,7 @@ export interface EnvConfig {
   MOCK_MODE: boolean;
   MICROSOFT_APP_ID: string | undefined;
   MICROSOFT_APP_PASSWORD: string | undefined;
-  MICROSOFT_APP_SP_OBJECT_ID: string | undefined;
+  TEAMS_BOT_ROLE: Role;
   EVENT_HUB_CONNECTION_STRING: string | undefined;
   EVENT_HUB_NAME: string | undefined;
   LOG_LEVEL: string | undefined;

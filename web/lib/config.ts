@@ -20,7 +20,7 @@ export const env: EnvConfig = {
   MOCK_MODE:               process.env.MOCK_MODE !== "false",
   MICROSOFT_APP_ID:             process.env.MICROSOFT_APP_ID,
   MICROSOFT_APP_PASSWORD:       process.env.MICROSOFT_APP_PASSWORD,
-  MICROSOFT_APP_SP_OBJECT_ID:   process.env.MICROSOFT_APP_SP_OBJECT_ID,
+  TEAMS_BOT_ROLE:               process.env.TEAMS_BOT_ROLE === "admin" ? "admin" : "reader",
   EVENT_HUB_CONNECTION_STRING:  process.env.EVENT_HUB_CONNECTION_STRING,
   EVENT_HUB_NAME:               process.env.EVENT_HUB_NAME,
   LOG_LEVEL:                    process.env.LOG_LEVEL,
@@ -40,6 +40,11 @@ export function validateConfig(): void {
   if (env.MOCK_MODE) {
     console.warn("Running in MOCK MODE — tool calls return simulated data.");
     console.warn("Set MOCK_MODE=false in .env and add Azure credentials to use real APIs.");
+  }
+
+  const rawBotRole = process.env.TEAMS_BOT_ROLE;
+  if (rawBotRole !== undefined && rawBotRole !== "admin" && rawBotRole !== "reader") {
+    console.warn(`TEAMS_BOT_ROLE has unrecognized value "${rawBotRole}" — defaulting to "reader".`);
   }
 }
 

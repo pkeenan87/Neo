@@ -11,7 +11,6 @@ import { env } from "@/lib/config";
 import { sessionStore } from "@/lib/session-store";
 import { runAgentLoop, resumeAfterConfirmation } from "@/lib/agent";
 import { canUseTool } from "@/lib/permissions";
-import { resolveTeamsRole } from "@/lib/teams-auth";
 import { scanUserInput, shouldBlock } from "@/lib/injection-guard";
 import { logger, hashPii } from "@/lib/logger";
 import {
@@ -232,7 +231,7 @@ async function handleTurn(context: TurnContext): Promise<void> {
     return;
   }
 
-  const role = await resolveTeamsRole(aadObjectId);
+  const role = env.TEAMS_BOT_ROLE;
   const conversationId = context.activity.conversation.id;
   logger.info("Teams message received", "teams", { aadObjectIdHash: hashPii(aadObjectId), conversationId });
 

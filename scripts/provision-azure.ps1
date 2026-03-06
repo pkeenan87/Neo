@@ -123,6 +123,7 @@ az webapp config appsettings set `
         WEBSITE_NODE_DEFAULT_VERSION="~20" `
         MOCK_MODE="false" `
         INJECTION_GUARD_MODE="monitor" `
+        TEAMS_BOT_ROLE="reader" `
         SCM_DO_BUILD_DURING_DEPLOYMENT="false" `
     --output none
 if ($LASTEXITCODE -ne 0) {
