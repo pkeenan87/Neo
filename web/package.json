@@ -14,6 +14,7 @@
     "@tailwindcss/postcss": "^4.2.1",
     "@types/node": "^25.3.3",
     "@types/react": "^19.2.14",
+    "agentation": "^2.2.1",
     "autoprefixer": "^10.4.27",
     "botbuilder": "^4.23.3",
     "dotenv": "^16.4.0",
