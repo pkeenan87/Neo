@@ -158,7 +158,7 @@ export function LoginPage({
                   <span className={styles.statusDot} aria-hidden="true" />
                   System Online
                 </div>
-                <div>Node: AIS-US-EAST-5</div>
+                <div>Node: APP-NEO-PROD-001</div>
               </div>
             </div>
 
