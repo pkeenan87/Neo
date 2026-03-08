@@ -24,7 +24,7 @@ const nextConfig = {
           { key: "X-Frame-Options", value: "DENY" },
           { key: "Referrer-Policy", value: "no-referrer" },
           { key: "Strict-Transport-Security", value: "max-age=63072000; includeSubDomains" },
-          // CSP is set via middleware.ts with per-request nonce
+          // CSP is set via proxy.ts with per-request nonce
           {
             key: "Permissions-Policy",
             value: "camera=(), microphone=(), geolocation=(), payment=()",
