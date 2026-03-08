@@ -38,6 +38,19 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
   ],
   session: { strategy: "jwt" },
   callbacks: {
+    authorized({ auth: session, request }) {
+      // In dev with DEV_AUTH_BYPASS, allow all requests
+      if (
+        process.env.NODE_ENV === "development" &&
+        process.env.DEV_AUTH_BYPASS === "true"
+      ) {
+        return true;
+      }
+      const isLoggedIn = !!session?.user;
+      const isOnChat = request.nextUrl.pathname.startsWith("/chat");
+      if (isOnChat) return isLoggedIn;
+      return true;
+    },
     jwt({ token, user, account }) {
       // On initial sign-in, persist role and provider into the JWT
       if (account && user) {
@@ -69,6 +82,6 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
     },
   },
   pages: {
-    signIn: "/api/auth/signin",
+    signIn: "/",
   },
 });

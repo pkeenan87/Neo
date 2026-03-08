@@ -1,3 +1,12 @@
+import { config as dotenvConfig } from "dotenv";
+import { resolve, dirname } from "path";
+import { fileURLToPath } from "url";
+
+// Load .env from the repo root (one level above web/) so AUTH_SECRET
+// and other vars are available before any module (including auth.ts) runs.
+const __dirname = dirname(fileURLToPath(import.meta.url));
+dotenvConfig({ path: resolve(__dirname, "../.env") });
+
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   output: "standalone",
@@ -15,18 +24,7 @@ const nextConfig = {
           { key: "X-Frame-Options", value: "DENY" },
           { key: "Referrer-Policy", value: "no-referrer" },
           { key: "Strict-Transport-Security", value: "max-age=63072000; includeSubDomains" },
-          {
-            key: "Content-Security-Policy",
-            value: [
-              "default-src 'self'",
-              "script-src 'self'",
-              "style-src 'self' 'unsafe-inline'",
-              "font-src 'self' https://fonts.gstatic.com",
-              "img-src 'self' data:",
-              "connect-src 'self'",
-              "frame-ancestors 'none'",
-            ].join("; "),
-          },
+          // CSP is set via middleware.ts with per-request nonce
           {
             key: "Permissions-Policy",
             value: "camera=(), microphone=(), geolocation=(), payment=()",

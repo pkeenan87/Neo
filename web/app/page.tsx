@@ -1,15 +1,37 @@
-export default function Home() {
+'use client'
+
+import { useEffect, useState } from 'react'
+import { useRouter } from 'next/navigation'
+import { signIn } from 'next-auth/react'
+import { LoginPage } from '@/components/LoginPage'
+
+export default function NeoPage() {
+  const router = useRouter()
+  const [isAuthenticating, setIsAuthenticating] = useState(false)
+  const [bootSequence, setBootSequence] = useState(true)
+
+  useEffect(() => {
+    const timer = setTimeout(() => setBootSequence(false), 3000)
+    return () => clearTimeout(timer)
+  }, [])
+
+  const handleLogin = () => {
+    setIsAuthenticating(true)
+
+    // In dev with DEV_AUTH_BYPASS, skip SSO and go straight to chat
+    if (process.env.NODE_ENV === 'development' && process.env.NEXT_PUBLIC_DEV_AUTH_BYPASS === 'true') {
+      router.push('/chat')
+      return
+    }
+
+    signIn('microsoft-entra-id', { callbackUrl: '/chat' })
+  }
+
   return (
-    <main className="flex min-h-screen items-center justify-center">
-      <div className="text-center">
-        <h1 className="text-3xl font-bold tracking-tight">
-          Neo Security Agent API
-        </h1>
-        <p className="mt-4">
-          Claude-powered SOC analyst agent. POST to{" "}
-          <code>/api/agent</code> to begin.
-        </p>
-      </div>
-    </main>
-  );
+    <LoginPage
+      bootSequence={bootSequence}
+      isAuthenticating={isAuthenticating}
+      onLogin={handleLogin}
+    />
+  )
 }
