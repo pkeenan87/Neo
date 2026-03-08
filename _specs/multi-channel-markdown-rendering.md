@@ -15,6 +15,7 @@ The screenshot in the web UI shows a typical example: an assistant greeting with
 - Render Claude's markdown as styled terminal output in the **CLI** (ANSI colors, bold, indentation for lists)
 - Preserve code blocks and KQL queries with monospace formatting across all channels
 - Handle long responses gracefully (Teams has a 28 KB message limit; CLI has terminal width constraints)
+- Handle carriage returns
 
 ## Non-Goals
 
@@ -57,9 +58,9 @@ The screenshot in the web UI shows a typical example: an assistant greeting with
 
 ## Open Questions
 
-1. **Teams markdown fidelity** — Teams supports basic markdown in `sendActivity()` text, but fidelity varies between desktop, mobile, and web clients. Should we test with plain Teams markdown first and only fall back to Adaptive Cards if rendering is poor, or go straight to Adaptive Cards for all agent responses?
-2. **Streaming and partial markdown** — The web UI streams responses via NDJSON. Should markdown be rendered incrementally as chunks arrive (may cause layout jumps), or should rendering wait until the full response is received (current behavior, since `response` event only fires once)?
-3. **Tables** — Claude sometimes outputs markdown tables for structured data (alert summaries, user info). Tables render poorly in Teams and terminals. Should we convert tables to a different format per channel, or instruct Claude via the system prompt to avoid tables?
+1. **Teams markdown fidelity** — Teams supports basic markdown in `sendActivity()` text, but fidelity varies between desktop, mobile, and web clients. Should we test with plain Teams markdown first and only fall back to Adaptive Cards if rendering is poor, or go straight to Adaptive Cards for all agent responses? test with plan teams markdown
+2. **Streaming and partial markdown** — The web UI streams responses via NDJSON. Should markdown be rendered incrementally as chunks arrive (may cause layout jumps), or should rendering wait until the full response is received (current behavior, since `response` event only fires once)? wait until full response
+3. **Tables** — Claude sometimes outputs markdown tables for structured data (alert summaries, user info). Tables render poorly in Teams and terminals. Should we convert tables to a different format per channel, or instruct Claude via the system prompt to avoid tables? convert into a different format per channel.
 
 ## Success Criteria
 
