@@ -22,15 +22,17 @@ This guide covers all configuration options for the Neo web server and CLI clien
 - [Skills Configuration](#skills-configuration)
   - [Skills Directory](#skills-directory)
   - [Skill File Format](#skill-file-format)
+- [Chat Persistence (Cosmos DB)](#chat-persistence-cosmos-db)
 - [Prompt Injection Guard](#prompt-injection-guard)
 - [Structured Logging](#structured-logging)
 - [Azure Deployment](#azure-deployment)
   - [Prerequisites](#prerequisites)
   - [1. Provision App Service](#1-provision-app-service)
-  - [2. Provision Event Hub (Optional)](#2-provision-event-hub-optional)
-  - [3. Provision Log Analytics Custom Table (Optional)](#3-provision-log-analytics-custom-table-optional)
-  - [4. Set Secret Environment Variables](#4-set-secret-environment-variables)
-  - [5. Build and Deploy](#5-build-and-deploy)
+  - [2. Provision Cosmos DB (Optional)](#2-provision-cosmos-db-optional)
+  - [3. Provision Event Hub (Optional)](#3-provision-event-hub-optional)
+  - [4. Provision Log Analytics Custom Table (Optional)](#4-provision-log-analytics-custom-table-optional)
+  - [5. Set Secret Environment Variables](#5-set-secret-environment-variables)
+  - [6. Build and Deploy](#6-build-and-deploy)
 - [Security Notes](#security-notes)
 
 ---
@@ -68,6 +70,12 @@ SENTINEL_WORKSPACE_ID=
 SENTINEL_WORKSPACE_NAME=
 SENTINEL_RESOURCE_GROUP=
 
+# Chat persistence (optional — omit for in-memory sessions)
+COSMOS_ENDPOINT=https://<account-name>.documents.azure.com:443/
+
+# Development auth bypass (never enable in production)
+# DEV_AUTH_BYPASS=true
+
 # Logging (optional — omit Event Hub vars for console-only logging)
 EVENT_HUB_CONNECTION_STRING=
 EVENT_HUB_NAME=neo-logs
@@ -95,6 +103,8 @@ INJECTION_GUARD_MODE=monitor
 | `SENTINEL_WORKSPACE_ID` | When live | Log Analytics workspace GUID |
 | `SENTINEL_WORKSPACE_NAME` | When live | Log Analytics workspace name |
 | `SENTINEL_RESOURCE_GROUP` | When live | Resource group containing the Sentinel workspace |
+| `COSMOS_ENDPOINT` | No | Azure Cosmos DB endpoint URL. Omit for in-memory sessions (no persistence). |
+| `DEV_AUTH_BYPASS` | No | Set to `true` in development only. Bypasses all auth checks with a dev-operator identity. Blocked in production by a startup guard. |
 | `MICROSOFT_APP_ID` | No | Bot Framework app ID (for Teams channel) |
 | `MICROSOFT_APP_PASSWORD` | No | Bot Framework app password |
 | `TEAMS_BOT_ROLE` | No | Role for all Teams bot users: `admin` or `reader` (default: `reader`) |
@@ -408,6 +418,60 @@ Follow these steps in order...
 
 ---
 
+## Chat Persistence (Cosmos DB)
+
+When `COSMOS_ENDPOINT` is set and `MOCK_MODE` is `false`, Neo persists conversations in Azure Cosmos DB. This enables conversation history in the web UI sidebar, resumable sessions across server restarts, and a 90-day retention window for audit purposes.
+
+### How it works
+
+- **Partition key**: `/ownerId` — the immutable AAD Object ID (`oid` claim) from Entra ID. This ensures each user's conversations are co-located for efficient queries and isolated from other users.
+- **Session abstraction**: A `SessionStore` interface abstracts the storage backend. When Cosmos DB is configured, a `CosmosSessionStore` adapter is used. Otherwise, an `InMemorySessionStore` provides the same interface with no persistence.
+- **Auto-titling**: After the first assistant response in a new conversation, a Claude Haiku call generates a short title (max 8 words). Users can rename conversations manually.
+- **Idle timeout**: Sessions idle for 30 minutes are treated as expired for active use, but the conversation document remains in Cosmos DB.
+- **Document TTL**: Conversations have a 90-day TTL. Cosmos DB automatically deletes expired documents.
+- **Concurrency**: Message appends use ETag-based optimistic concurrency to prevent lost updates.
+
+### Authentication
+
+Cosmos DB access uses `DefaultAzureCredential` from `@azure/identity` — no connection strings or keys. In Azure, this uses Managed Identity. Locally, it uses your Azure CLI login (`az login`).
+
+The identity used must have the **Cosmos DB Built-in Data Contributor** role on the Cosmos DB account.
+
+### Provisioning
+
+Use the provisioning script to create the Cosmos DB infrastructure:
+
+```powershell
+# Default — creates neo-cosmos-db account, neo-db database, conversations container
+./scripts/provision-cosmos-db.ps1
+
+# Custom account name and region
+./scripts/provision-cosmos-db.ps1 -AccountName "neo-prod-cosmos" -Location "westus2"
+```
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `-ResourceGroupName` | `neo-rg` | Azure Resource Group name (reuses existing) |
+| `-AccountName` | `neo-cosmos-db` | Cosmos DB account name (globally unique) |
+| `-DatabaseName` | `neo-db` | Database name |
+| `-ContainerName` | `conversations` | Container name |
+| `-Location` | `eastus` | Azure region |
+| `-PartitionKeyPath` | `/ownerId` | Partition key path |
+
+The script creates the account in serverless capacity mode (pay-per-request), enables the TTL policy on the container, and assigns the **Cosmos DB Built-in Data Contributor** role to the currently logged-in Azure CLI user.
+
+After provisioning, set the endpoint in your `.env`:
+
+```bash
+COSMOS_ENDPOINT=https://<account-name>.documents.azure.com:443/
+```
+
+### Without Cosmos DB
+
+If `COSMOS_ENDPOINT` is not set (or `MOCK_MODE` is `true`), Neo falls back to the in-memory session store. A warning is logged once at startup. Conversations are not persisted across server restarts, and the web UI sidebar will not show conversation history.
+
+---
+
 ## Prompt Injection Guard
 
 Neo scans user messages and tool results for prompt injection patterns — attempts to override the agent's instructions, claim elevated privileges, bypass the confirmation gate, or smuggle directives through external API data.
@@ -546,7 +610,23 @@ The script automatically configures:
 - Startup command: `node server.js`
 - HTTPS-only with TLS 1.2 minimum
 
-### 2. Provision Event Hub (Optional)
+### 2. Provision Cosmos DB (Optional)
+
+`scripts/provision-cosmos-db.ps1` creates the Azure Cosmos DB infrastructure for chat persistence. Skip this step if you only need in-memory sessions.
+
+```powershell
+# Default — creates neo-cosmos-db (serverless), neo-db database, conversations container
+./scripts/provision-cosmos-db.ps1
+
+# Production — custom account name
+./scripts/provision-cosmos-db.ps1 -AccountName "neo-prod-cosmos" -Location "westus2"
+```
+
+The script outputs the endpoint URL. Add it to your app settings (see step 5).
+
+For full parameter reference, see [Chat Persistence — Provisioning](#provisioning).
+
+### 3. Provision Event Hub (Optional)
 
 `scripts/provision-event-hub.ps1` creates the Azure Event Hub infrastructure for structured audit logging. Skip this step if you only need console logging.
 
@@ -576,7 +656,7 @@ EVENT_HUB_CONNECTION_STRING="<connection-string-from-script-output>"
 EVENT_HUB_NAME="neo-logs"
 ```
 
-### 3. Provision Log Analytics Custom Table (Optional)
+### 4. Provision Log Analytics Custom Table (Optional)
 
 `scripts/provision-log-analytics.ps1` creates a custom Log Analytics table (`NeoLogs_CL`) and a Data Collection Rule (DCR) for ingesting structured application logs. Skip this step if you only need Event Hub or console logging.
 
@@ -633,7 +713,7 @@ NeoLogs_CL
 | order by TimeGenerated desc
 ```
 
-### 4. Set Secret Environment Variables
+### 5. Set Secret Environment Variables
 
 After provisioning, set the secret app settings that the provisioning script does not set (secrets should not be passed as script parameters):
 
@@ -656,6 +736,16 @@ az webapp config appsettings set `
         AUTH_MICROSOFT_ENTRA_ID_ISSUER="<entra-issuer>"
 ```
 
+If you provisioned Cosmos DB, also add:
+
+```powershell
+az webapp config appsettings set `
+    --name neo-web `
+    --resource-group neo-rg `
+    --settings `
+        COSMOS_ENDPOINT="https://<account-name>.documents.azure.com:443/"
+```
+
 If you provisioned Event Hub, also add:
 
 ```powershell
@@ -667,7 +757,7 @@ az webapp config appsettings set `
         EVENT_HUB_NAME="neo-logs"
 ```
 
-### 5. Build and Deploy
+### 6. Build and Deploy
 
 `scripts/deploy-azure.ps1` builds the Next.js app in standalone mode and deploys it to the existing Azure Web App via zip deploy.
 
@@ -701,6 +791,6 @@ The Web App must already exist — run `provision-azure.ps1` first.
 - **HTTPS enforcement**: The CLI rejects plain HTTP connections to non-localhost servers.
 - **Token refresh**: Entra ID tokens are refreshed automatically. If the refresh token expires, you will need to run `auth login` again.
 - **File permissions**: `~/.neo/config.json` is created with `0600` (owner-only). The directory is `0700`.
-- **Session ownership**: Each agent session is tied to the identity that created it. Only the owner or an admin can access or delete a session.
+- **Session ownership**: Each agent session is tied to the identity that created it. Only the owner or an admin can access or delete a session. Cosmos DB conversations use the immutable AAD Object ID (`oid` claim) as the partition key, ensuring ownership cannot change if a user's display name is updated.
 - **Prompt injection guard**: User messages and tool results are scanned for adversarial patterns. Detections are logged but never include raw message content. See [Prompt Injection Guard](#prompt-injection-guard).
 - **Audit logging**: Structured events (authentication, tool calls, confirmations, injection detections) are sent to Azure Event Hub. PII fields are one-way hashed before logging. See [Structured Logging](#structured-logging).

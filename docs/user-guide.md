@@ -215,6 +215,19 @@ Each conversation creates a server-side session that maintains your message hist
 
 Sessions persist on the server between CLI restarts. If you restart the CLI without typing `clear`, a new session is created.
 
+### Conversation History (Web)
+
+When Azure Cosmos DB is configured, the web interface persists conversations across sessions and server restarts. The sidebar shows your recent conversations, and you can:
+
+- **Resume a conversation**: Click any conversation in the sidebar to reload its full message history.
+- **Rename a conversation**: Hover over a conversation and click the edit icon. Titles are auto-generated after the first exchange but can be changed at any time (max 200 characters).
+- **Delete a conversation**: Hover over a conversation and click the delete icon. Deletion waits for server confirmation before removing the conversation from the sidebar.
+- **Start a new conversation**: Click "New Operation" in the sidebar.
+
+Conversations idle for 30 minutes are treated as expired for active session purposes, but the full message history is retained in Cosmos DB for 90 days.
+
+Without Cosmos DB configured (or in mock mode), sessions are stored in-memory and do not persist across server restarts.
+
 ### Debugging
 
 Set the `DEBUG` environment variable for verbose output:
@@ -668,6 +681,10 @@ All endpoints require authentication via `Authorization: Bearer <api-key>` heade
 | `POST` | `/api/agent/confirm` | Confirm or cancel a pending destructive tool. Body: `{ "sessionId": "...", "toolId": "...", "confirmed": true }` |
 | `GET` | `/api/agent/sessions` | List sessions. Admins see all; readers see own. |
 | `DELETE` | `/api/agent/sessions` | Delete a session. Body: `{ "sessionId": "..." }` |
+| `GET` | `/api/conversations` | List conversations for the authenticated user (requires Cosmos DB). |
+| `GET` | `/api/conversations/{id}` | Get a conversation by ID, including full message history. |
+| `PATCH` | `/api/conversations/{id}` | Rename a conversation. Body: `{ "title": "..." }` (max 200 chars). |
+| `DELETE` | `/api/conversations/{id}` | Delete a conversation permanently. |
 | `GET` | `/api/skills` | List all skills (metadata only). All authenticated users. |
 | `POST` | `/api/skills` | Create a skill. Admin only. Body: `{ "id": "...", "content": "..." }` |
 | `GET` | `/api/skills/{id}` | Get full skill by ID. All authenticated users. |
