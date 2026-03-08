@@ -8,7 +8,7 @@ import {
   type Attachment,
 } from "botbuilder";
 import { env } from "@/lib/config";
-import { sessionStore } from "@/lib/session-store";
+import { sessionStore } from "@/lib/session-factory";
 import { runAgentLoop, resumeAfterConfirmation } from "@/lib/agent";
 import { canUseTool } from "@/lib/permissions";
 import { scanUserInput, shouldBlock } from "@/lib/injection-guard";
@@ -124,7 +124,7 @@ async function sendAgentResult(
   sessionId: string
 ): Promise<void> {
   if (result.type === "confirmation_required") {
-    sessionStore.setPendingConfirmation(sessionId, result.tool);
+    await sessionStore.setPendingConfirmation(sessionId, result.tool);
     const card = buildConfirmationCard(result.tool, sessionId);
     await context.sendActivity({ attachments: [card] });
   } else {
@@ -170,7 +170,7 @@ async function handleTurn(context: TurnContext): Promise<void> {
       return;
     }
 
-    const session = sessionStore.get(neoSessionId);
+    const session = await sessionStore.get(neoSessionId);
     if (!session) {
       await context.sendActivity("Session expired. Please start a new conversation.");
       return;
@@ -183,20 +183,20 @@ async function handleTurn(context: TurnContext): Promise<void> {
       return;
     }
 
-    const pendingTool = sessionStore.clearPendingConfirmation(neoSessionId);
+    const pendingTool = await sessionStore.clearPendingConfirmation(neoSessionId);
     if (!pendingTool) {
       await context.sendActivity("No pending confirmation for this session.");
       return;
     }
 
     if (pendingTool.id !== toolId) {
-      sessionStore.setPendingConfirmation(neoSessionId, pendingTool);
+      await sessionStore.setPendingConfirmation(neoSessionId, pendingTool);
       await context.sendActivity("Tool ID mismatch — confirmation rejected.");
       return;
     }
 
     if (!canUseTool(session.role, pendingTool.name)) {
-      sessionStore.setPendingConfirmation(neoSessionId, pendingTool);
+      await sessionStore.setPendingConfirmation(neoSessionId, pendingTool);
       await context.sendActivity("Your role does not permit this action.");
       return;
     }
@@ -238,16 +238,16 @@ async function handleTurn(context: TurnContext): Promise<void> {
   // Resolve or create session
   let resolvedSessionId: string;
   const existingId = getSessionId(conversationId);
-  const existingSession = existingId ? sessionStore.get(existingId) : undefined;
+  const existingSession = existingId ? await sessionStore.get(existingId) : undefined;
 
   if (existingSession && existingId) {
     resolvedSessionId = existingId;
   } else {
-    resolvedSessionId = sessionStore.create(role, aadObjectId);
+    resolvedSessionId = await sessionStore.create(role, aadObjectId, "teams");
     setSessionId(conversationId, resolvedSessionId);
   }
 
-  const session = sessionStore.get(resolvedSessionId)!;
+  const session = (await sessionStore.get(resolvedSessionId))!;
 
   // Injection scan — mirrors the check in api/agent/route.ts
   const scanResult = scanUserInput(messageText, {
@@ -263,7 +263,7 @@ async function handleTurn(context: TurnContext): Promise<void> {
     return;
   }
 
-  if (sessionStore.isRateLimited(resolvedSessionId)) {
+  if (await sessionStore.isRateLimited(resolvedSessionId)) {
     logger.warn("Teams rate limit exceeded", "teams", { sessionId: resolvedSessionId });
     await context.sendActivity(
       "You have reached the message limit for this session. Please start a new conversation."

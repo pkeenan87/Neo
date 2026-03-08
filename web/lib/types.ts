@@ -37,6 +37,7 @@ export interface EnvConfig {
   EVENT_HUB_CONNECTION_STRING: string | undefined;
   EVENT_HUB_NAME: string | undefined;
   LOG_LEVEL: string | undefined;
+  COSMOS_ENDPOINT: string | undefined;
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -89,6 +90,28 @@ export interface SessionMeta {
   createdAt: Date;
   messageCount: number;
 }
+
+// ─────────────────────────────────────────────────────────────
+//  Conversation (Cosmos DB persistence)
+// ─────────────────────────────────────────────────────────────
+
+export type Channel = "web" | "cli" | "teams";
+
+export interface Conversation {
+  id: string;
+  ownerId: string;
+  title: string | null;
+  createdAt: string;
+  updatedAt: string;
+  messageCount: number;
+  role: Role;
+  channel: Channel;
+  messages: Message[];
+  pendingConfirmation: PendingTool | null;
+  ttl?: number;
+}
+
+export type ConversationMeta = Omit<Conversation, "messages" | "pendingConfirmation">;
 
 // ─────────────────────────────────────────────────────────────
 //  Request / Response

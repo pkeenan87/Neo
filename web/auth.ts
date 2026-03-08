@@ -51,8 +51,8 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
       if (isOnChat) return isLoggedIn;
       return true;
     },
-    jwt({ token, user, account }) {
-      // On initial sign-in, persist role and provider into the JWT
+    jwt({ token, user, account, profile }) {
+      // On initial sign-in, persist role, provider, and AAD object ID into the JWT
       if (account && user) {
         if (account.provider === "microsoft-entra-id") {
           // Entra ID app roles come as a "roles" array in the ID token
@@ -65,6 +65,12 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
             token.role = "reader";
           }
           token.authProvider = "entra-id";
+          // Persist immutable AAD object ID for use as Cosmos partition key
+          const entraProfile = profile as Record<string, unknown> | undefined;
+          token.oid =
+            (entraProfile?.oid as string) ??
+            (entraProfile?.sub as string) ??
+            user.id;
         } else if (account.provider === "api-key") {
           token.role = (user as Record<string, unknown>).role as Role;
           token.authProvider = "api-key";
@@ -77,6 +83,7 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
         const user = session.user as unknown as Record<string, unknown>;
         user.role = token.role;
         user.authProvider = token.authProvider;
+        user.oid = token.oid;
       }
       return session;
     },

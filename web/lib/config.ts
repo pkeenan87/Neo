@@ -24,6 +24,7 @@ export const env: EnvConfig = {
   EVENT_HUB_CONNECTION_STRING:  process.env.EVENT_HUB_CONNECTION_STRING,
   EVENT_HUB_NAME:               process.env.EVENT_HUB_NAME,
   LOG_LEVEL:                    process.env.LOG_LEVEL,
+  COSMOS_ENDPOINT:              process.env.COSMOS_ENDPOINT,
 };
 
 // Note: validateConfig uses console.warn directly (not logger) because
@@ -31,6 +32,10 @@ export const env: EnvConfig = {
 export function validateConfig(): void {
   if (!env.ANTHROPIC_API_KEY) {
     throw new Error("Missing ANTHROPIC_API_KEY in .env — server cannot start");
+  }
+
+  if (process.env.DEV_AUTH_BYPASS === "true" && process.env.NODE_ENV !== "development") {
+    throw new Error("DEV_AUTH_BYPASS must not be enabled outside of development — aborting.");
   }
 
   if (!process.env.AUTH_SECRET) {

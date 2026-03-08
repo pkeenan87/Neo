@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { sessionStore } from "@/lib/session-store";
+import { sessionStore } from "@/lib/session-factory";
 import { resolveAuth } from "@/lib/auth-helpers";
 
 export async function GET(request: NextRequest) {
@@ -11,8 +11,8 @@ export async function GET(request: NextRequest) {
   // Admins see all sessions; readers see only their own
   const sessions =
     identity.role === "admin"
-      ? sessionStore.list()
-      : sessionStore.listForOwner(identity.name);
+      ? await sessionStore.list()
+      : await sessionStore.listForOwner(identity.ownerId);
 
   return NextResponse.json({ sessions });
 }
@@ -34,16 +34,16 @@ export async function DELETE(request: NextRequest) {
     return NextResponse.json({ error: "Missing 'sessionId'" }, { status: 400 });
   }
 
-  const session = sessionStore.get(body.sessionId);
+  const session = await sessionStore.get(body.sessionId);
   if (!session) {
     return NextResponse.json({ error: "Session not found" }, { status: 404 });
   }
 
   // Only the session owner or an admin may delete a session
-  if (session.ownerId !== identity.name && identity.role !== "admin") {
+  if (session.ownerId !== identity.ownerId && identity.role !== "admin") {
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
 
-  sessionStore.delete(body.sessionId);
+  await sessionStore.delete(body.sessionId);
   return NextResponse.json({ deleted: true });
 }

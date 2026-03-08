@@ -1,19 +1,39 @@
 import crypto from "crypto";
 import { RATE_LIMITS, type Role } from "./permissions";
 import { logger, hashPii } from "./logger";
-import type { Session, SessionMeta, PendingTool } from "./types";
+import type { Session, SessionMeta, PendingTool, Channel } from "./types";
 
 const TTL_MS = 30 * 60 * 1000; // 30 minutes
 const SWEEP_INTERVAL_MS = 60 * 1000; // 1 minute
 
-class SessionStore {
+// ─────────────────────────────────────────────────────────────
+//  SessionStore interface
+// ─────────────────────────────────────────────────────────────
+
+export interface SessionStore {
+  create(role: Role, ownerId: string, channel?: Channel): Promise<string>;
+  get(id: string): Promise<Session | undefined>;
+  delete(id: string): Promise<boolean>;
+  list(): Promise<SessionMeta[]>;
+  listForOwner(ownerId: string): Promise<SessionMeta[]>;
+  setPendingConfirmation(id: string, tool: PendingTool): Promise<void>;
+  clearPendingConfirmation(id: string): Promise<PendingTool | null>;
+  isRateLimited(id: string): Promise<boolean>;
+}
+
+// ─────────────────────────────────────────────────────────────
+//  In-memory implementation (used in MOCK_MODE or when Cosmos
+//  is not configured)
+// ─────────────────────────────────────────────────────────────
+
+export class InMemorySessionStore implements SessionStore {
   private sessions = new Map<string, Session>();
 
   constructor() {
     setInterval(() => this.sweep(), SWEEP_INTERVAL_MS);
   }
 
-  create(role: Role, ownerId: string): string {
+  async create(role: Role, ownerId: string): Promise<string> {
     const id = crypto.randomUUID();
     this.sessions.set(id, {
       id,
@@ -29,7 +49,7 @@ class SessionStore {
     return id;
   }
 
-  get(id: string): Session | undefined {
+  async get(id: string): Promise<Session | undefined> {
     const session = this.sessions.get(id);
     if (!session) return undefined;
 
@@ -43,11 +63,11 @@ class SessionStore {
     return session;
   }
 
-  delete(id: string): boolean {
+  async delete(id: string): Promise<boolean> {
     return this.sessions.delete(id);
   }
 
-  list(): SessionMeta[] {
+  async list(): Promise<SessionMeta[]> {
     const now = Date.now();
     const result: SessionMeta[] = [];
     for (const session of this.sessions.values()) {
@@ -64,11 +84,12 @@ class SessionStore {
     return result;
   }
 
-  listForOwner(ownerId: string): SessionMeta[] {
-    return this.list().filter((s) => s.ownerId === ownerId);
+  async listForOwner(ownerId: string): Promise<SessionMeta[]> {
+    const all = await this.list();
+    return all.filter((s) => s.ownerId === ownerId);
   }
 
-  setPendingConfirmation(id: string, tool: PendingTool): void {
+  async setPendingConfirmation(id: string, tool: PendingTool): Promise<void> {
     const session = this.sessions.get(id);
     if (session) {
       session.pendingConfirmation = tool;
@@ -76,7 +97,7 @@ class SessionStore {
     }
   }
 
-  clearPendingConfirmation(id: string): PendingTool | null {
+  async clearPendingConfirmation(id: string): Promise<PendingTool | null> {
     const session = this.sessions.get(id);
     if (!session) return null;
     const pending = session.pendingConfirmation;
@@ -85,7 +106,7 @@ class SessionStore {
     return pending;
   }
 
-  isRateLimited(id: string): boolean {
+  async isRateLimited(id: string): Promise<boolean> {
     const session = this.sessions.get(id);
     if (!session) return false;
     return session.messageCount >= RATE_LIMITS[session.role].messagesPerSession;
@@ -101,5 +122,3 @@ class SessionStore {
     }
   }
 }
-
-export const sessionStore = new SessionStore();

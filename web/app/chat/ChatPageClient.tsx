@@ -3,13 +3,15 @@
 import { useRouter } from 'next/navigation'
 import { signOut } from 'next-auth/react'
 import { ChatInterface } from '@/components/ChatInterface'
+import type { ConversationMeta } from '@/lib/types'
 
 interface ChatPageClientProps {
   userName: string
   userRole: string
+  initialConversations: ConversationMeta[]
 }
 
-export function ChatPageClient({ userName, userRole }: ChatPageClientProps) {
+export function ChatPageClient({ userName, userRole, initialConversations }: ChatPageClientProps) {
   const router = useRouter()
 
   const handleLogout = () => {
@@ -26,6 +28,7 @@ export function ChatPageClient({ userName, userRole }: ChatPageClientProps) {
       onLogout={handleLogout}
       userName={userName}
       userRole={userRole}
+      initialConversations={initialConversations}
     />
   )
 }

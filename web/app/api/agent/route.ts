@@ -1,5 +1,5 @@
 import { NextRequest } from "next/server";
-import { sessionStore } from "@/lib/session-store";
+import { sessionStore } from "@/lib/session-factory";
 import { runAgentLoop } from "@/lib/agent";
 import { createNDJSONStream, encodeNDJSON, writeAgentResult } from "@/lib/stream";
 import { resolveAuth } from "@/lib/auth-helpers";
@@ -53,14 +53,14 @@ export async function POST(request: NextRequest) {
   // Resolve or create session
   let sessionId: string;
   if (body.sessionId) {
-    const existing = sessionStore.get(body.sessionId);
+    const existing = await sessionStore.get(body.sessionId);
     if (!existing) {
       return new Response(JSON.stringify({ error: "Session not found" }), { status: 404 });
     }
     // Only the session owner (or an admin) may continue an existing session.
     // existing.role governs tool access for this session's lifetime;
     // identity.role is intentionally not used here.
-    if (existing.ownerId !== identity.name && identity.role !== "admin") {
+    if (existing.ownerId !== identity.ownerId && identity.role !== "admin") {
       return new Response(JSON.stringify({ error: "Forbidden" }), {
         status: 403,
         headers: { "Content-Type": "application/json" },
@@ -68,14 +68,14 @@ export async function POST(request: NextRequest) {
     }
     sessionId = body.sessionId;
   } else {
-    sessionId = sessionStore.create(identity.role, identity.name);
+    sessionId = await sessionStore.create(identity.role, identity.ownerId);
   }
 
-  const session = sessionStore.get(sessionId)!;
+  const session = (await sessionStore.get(sessionId))!;
   logger.info("Agent request", "api/agent", { sessionId, role: session.role, provider: identity.provider });
 
   // Rate limit check
-  if (sessionStore.isRateLimited(sessionId)) {
+  if (await sessionStore.isRateLimited(sessionId)) {
     logger.warn("Rate limit exceeded", "api/agent", { sessionId });
     return new Response(
       JSON.stringify({ error: "Session message limit exceeded" }),

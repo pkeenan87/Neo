@@ -1,5 +1,5 @@
 import { NextRequest } from "next/server";
-import { sessionStore } from "@/lib/session-store";
+import { sessionStore } from "@/lib/session-factory";
 import { resumeAfterConfirmation } from "@/lib/agent";
 import { createNDJSONStream, encodeNDJSON, writeAgentResult } from "@/lib/stream";
 import { resolveAuth } from "@/lib/auth-helpers";
@@ -30,13 +30,13 @@ export async function POST(request: NextRequest) {
     );
   }
 
-  const session = sessionStore.get(body.sessionId);
+  const session = await sessionStore.get(body.sessionId);
   if (!session) {
     return new Response(JSON.stringify({ error: "Session not found" }), { status: 404 });
   }
 
   // Only the session owner (or an admin) may confirm tools in a session
-  if (session.ownerId !== identity.name && identity.role !== "admin") {
+  if (session.ownerId !== identity.ownerId && identity.role !== "admin") {
     logger.warn("Confirm ownership mismatch", "api/confirm", { sessionId: body.sessionId });
     return new Response(JSON.stringify({ error: "Forbidden" }), {
       status: 403,
@@ -50,7 +50,7 @@ export async function POST(request: NextRequest) {
     action: body.confirmed ? "confirm" : "cancel",
   });
 
-  const pendingTool = sessionStore.clearPendingConfirmation(body.sessionId);
+  const pendingTool = await sessionStore.clearPendingConfirmation(body.sessionId);
   if (!pendingTool) {
     return new Response(
       JSON.stringify({ error: "No pending confirmation for this session" }),
@@ -60,7 +60,7 @@ export async function POST(request: NextRequest) {
 
   if (pendingTool.id !== body.toolId) {
     logger.warn("Tool ID mismatch on confirmation", "api/confirm", { sessionId: body.sessionId, toolId: body.toolId });
-    sessionStore.setPendingConfirmation(body.sessionId, pendingTool);
+    await sessionStore.setPendingConfirmation(body.sessionId, pendingTool);
     return new Response(
       JSON.stringify({ error: "Tool ID mismatch: confirmation rejected" }),
       {
@@ -74,7 +74,7 @@ export async function POST(request: NextRequest) {
   // rather than identity.role to prevent privilege confusion across users
   if (!canUseTool(session.role, pendingTool.name)) {
     logger.warn("Permission denied for tool confirmation", "api/confirm", { sessionId: body.sessionId, toolName: pendingTool.name });
-    sessionStore.setPendingConfirmation(body.sessionId, pendingTool);
+    await sessionStore.setPendingConfirmation(body.sessionId, pendingTool);
     return new Response(JSON.stringify({ error: "Forbidden" }), {
       status: 403,
       headers: { "Content-Type": "application/json" },

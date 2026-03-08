@@ -7,6 +7,7 @@ import type { Role } from "./permissions";
 export interface ResolvedAuth {
   role: Role;
   name: string;
+  ownerId: string;
   provider: "entra-id" | "api-key";
 }
 
@@ -73,6 +74,15 @@ async function verifyEntraToken(
 export async function resolveAuth(
   request: Request
 ): Promise<ResolvedAuth | null> {
+  // Dev bypass — first check so it short-circuits all auth paths in local dev
+  if (
+    process.env.NODE_ENV === "development" &&
+    process.env.DEV_AUTH_BYPASS === "true"
+  ) {
+    logger.debug("Auth bypassed (DEV_AUTH_BYPASS)", "auth");
+    return { role: "admin", name: "dev-operator", ownerId: "dev-operator", provider: "entra-id" };
+  }
+
   // Check for Bearer token in Authorization header
   const authHeader = request.headers.get("authorization");
   if (authHeader?.startsWith("Bearer ")) {
@@ -85,6 +95,7 @@ export async function resolveAuth(
       return {
         role: entry.role,
         name: entry.label,
+        ownerId: entry.label,
         provider: "api-key",
       };
     }
@@ -99,8 +110,13 @@ export async function resolveAuth(
         (payload.preferred_username as string) ??
         (payload.name as string) ??
         "Unknown";
+      // Use immutable AAD object ID as ownerId for Cosmos partition key
+      const ownerId =
+        (payload.oid as string) ??
+        (payload.sub as string) ??
+        name;
       logger.info("Auth resolved via Entra ID token", "auth", { role, provider: "entra-id" });
-      return { role, name, provider: "entra-id" };
+      return { role, name, ownerId, provider: "entra-id" };
     }
 
     // Invalid bearer token — don't fall through to session
@@ -116,10 +132,17 @@ export async function resolveAuth(
     const rawRole = user.role;
     const role: Role =
       rawRole === "admin" || rawRole === "reader" ? rawRole : "reader";
+    // Use immutable AAD object ID persisted in JWT, fall back to sub/name
+    const ownerId =
+      (user.oid as string) ??
+      (user.id as string) ??
+      (user.name as string) ??
+      "Unknown";
     logger.info("Auth resolved via Auth.js session", "auth", { role, provider: "entra-id" });
     return {
       role,
       name: (user.name as string) ?? "Unknown",
+      ownerId,
       provider: "entra-id",
     };
   }

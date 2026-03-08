@@ -1,4 +1,4 @@
-import { sessionStore } from "./session-store";
+import { sessionStore } from "./session-factory";
 import type { AgentEvent, AgentLoopResult, Session } from "./types";
 
 const encoder = new TextEncoder();
@@ -26,7 +26,7 @@ export async function writeAgentResult(
 ): Promise<void> {
   session.messages = result.messages;
   if (result.type === "confirmation_required") {
-    sessionStore.setPendingConfirmation(sessionId, result.tool);
+    await sessionStore.setPendingConfirmation(sessionId, result.tool);
     await writer.write(encodeNDJSON({ type: "confirmation_required", tool: result.tool }));
   } else {
     await writer.write(encodeNDJSON({ type: "response", text: result.text }));

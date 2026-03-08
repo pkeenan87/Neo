@@ -11,7 +11,7 @@ dotenvConfig({ path: resolve(__dirname, "../.env") });
 const nextConfig = {
   output: "standalone",
   poweredByHeader: false,
-  serverExternalPackages: ["@anthropic-ai/sdk", "dotenv", "botbuilder", "@azure/event-hubs"],
+  serverExternalPackages: ["@anthropic-ai/sdk", "dotenv", "botbuilder", "@azure/event-hubs", "@azure/cosmos", "@azure/identity"],
   turbopack: {
     root: ".",
   },
