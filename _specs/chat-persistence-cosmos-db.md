@@ -128,8 +128,8 @@ New variables needed:
 
 ## Open Questions
 
-1. Should conversation history have a separate, longer TTL than the active session idle timeout? For example, 30 minutes idle timeout for active sessions but 30 days for browsing history. This affects whether users can return to old conversations days later.
-2. Should the "New Operation" button create an empty session immediately, or only when the first message is sent? Creating on first message avoids empty session documents.
-3. What is the maximum number of conversations to show in the sidebar? Should there be pagination or infinite scroll, or is a fixed limit (e.g., 50 most recent) sufficient?
-4. Should the Cosmos DB account use serverless or provisioned throughput? Serverless is cheaper for low-to-moderate traffic but has a 1MB document size limit and 5000 RU/s burst limit.
-5. Should conversation titles be editable by the user, or always auto-generated?
+1. Should conversation history have a separate, longer TTL than the active session idle timeout? For example, 30 minutes idle timeout for active sessions but 30 days for browsing history. This affects whether users can return to old conversations days later. Yes. Please reference ../staging/neo-chat-persistence-recommendation.md
+2. Should the "New Operation" button create an empty session immediately, or only when the first message is sent? Creating on first message avoids empty session documents. only when first message is sent.
+3. What is the maximum number of conversations to show in the sidebar? Should there be pagination or infinite scroll, or is a fixed limit (e.g., 50 most recent) sufficient? 50 most recent with scrolling.
+4. Should the Cosmos DB account use serverless or provisioned throughput? Serverless is cheaper for low-to-moderate traffic but has a 1MB document size limit and 5000 RU/s burst limit. Please reference ../staging/neo-chat-persistence-recommendation.md
+5. Should conversation titles be editable by the user, or always auto-generated? editable
