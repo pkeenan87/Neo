@@ -69,6 +69,6 @@ This is primarily a **client-side rendering change** in `ChatInterface.tsx`. The
 
 ## Open Questions
 
-1. **Tool summary format** — Should the tool summary be a simple comma-separated list (e.g., "Tools used: query_sentinel_incidents, get_user_details") or a bulleted list? Should it be visually distinct (smaller text, muted color)?
-2. **Tool summary position** — Should the tool summary appear at the top of the response (before the assistant's text) or at the bottom (after the text)? The user mentioned "at the bottom."
-3. **Thinking indicator during tools** — The current loading spinner says "Processing..." while tools run. Should this be enhanced to show which tool is currently running (e.g., "Running query_sentinel_incidents..."), or is the generic indicator sufficient?
+1. **Tool summary format** — Should the tool summary be a simple comma-separated list (e.g., "Tools used: query_sentinel_incidents, get_user_details") or a bulleted list? Should it be visually distinct (smaller text, muted color)? bulleted and visually distinct.
+2. **Tool summary position** — Should the tool summary appear at the top of the response (before the assistant's text) or at the bottom (after the text)? The user mentioned "at the bottom." bottom.
+3. **Thinking indicator during tools** — The current loading spinner says "Processing..." while tools run. Should this be enhanced to show which tool is currently running (e.g., "Running query_sentinel_incidents..."), or is the generic indicator sufficient? yes enhance it to say which tool is running.
