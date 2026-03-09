@@ -21,9 +21,10 @@ import {
   Loader2,
 } from 'lucide-react'
 import { useTheme } from '@/context/ThemeContext'
+import { useConversationCache } from '@/context/ConversationCacheContext'
 import { MarkdownRenderer } from '@/components/MarkdownRenderer'
 import styles from './ChatInterface.module.css'
-import type { ConversationMeta, PendingTool } from '@/lib/types'
+import type { Conversation, ConversationMeta, PendingTool } from '@/lib/types'
 
 // ─────────────────────────────────────────────────────────────
 //  Types for NDJSON stream events and content blocks
@@ -74,6 +75,7 @@ export interface ChatInterfaceProps {
   userName?: string
   userRole?: string
   initialConversations?: ConversationMeta[]
+  initialConversation?: Conversation
   className?: string
 }
 
@@ -103,23 +105,56 @@ function relativeTime(dateStr: string): string {
 //  Component
 // ─────────────────────────────────────────────────────────────
 
+function conversationToChatMessages(conv: Conversation): ChatMessage[] {
+  const chatMessages: ChatMessage[] = []
+  for (const msg of conv.messages ?? []) {
+    if (msg.role === 'user' || msg.role === 'assistant') {
+      const content = typeof msg.content === 'string'
+        ? msg.content
+        : Array.isArray(msg.content)
+          ? msg.content.filter(isTextBlock).map((b: TextBlock) => b.text).join('\n')
+          : ''
+      if (content) {
+        chatMessages.push({
+          id: crypto.randomUUID(),
+          role: msg.role,
+          content,
+        })
+      }
+    }
+  }
+  return chatMessages
+}
+
 export function ChatInterface({
   onLogout,
   userName = 'Operator',
   userRole = 'Reader',
   initialConversations = [],
+  initialConversation,
   className,
 }: ChatInterfaceProps) {
   const { theme, toggleTheme } = useTheme()
+  const cache = useConversationCache()
   const [isSidebarOpen, setIsSidebarOpen] = useState(true)
-  const [messages, setMessages] = useState<ChatMessage[]>(INITIAL_MESSAGES)
+  const [messages, setMessages] = useState<ChatMessage[]>(() => {
+    if (initialConversation) {
+      const loaded = conversationToChatMessages(initialConversation)
+      return loaded.length > 0 ? loaded : INITIAL_MESSAGES
+    }
+    return INITIAL_MESSAGES
+  })
   const [inputValue, setInputValue] = useState('')
   const [isLoading, setIsLoading] = useState(false)
-  const [activeConversationId, _setActiveConversationId] = useState<string | null>(null)
+  const [activeConversationId, _setActiveConversationId] = useState<string | null>(
+    initialConversation?.id ?? null
+  )
   const [conversations, setConversations] = useState<ConversationMeta[]>(initialConversations)
   const [editingTitleId, setEditingTitleId] = useState<string | null>(null)
   const [editingTitleValue, setEditingTitleValue] = useState('')
-  const [pendingConfirmation, setPendingConfirmation] = useState<PendingTool | null>(null)
+  const [pendingConfirmation, setPendingConfirmation] = useState<PendingTool | null>(
+    initialConversation?.pendingConfirmation ?? null
+  )
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const editInputRef = useRef<HTMLInputElement>(null)
@@ -127,11 +162,19 @@ export function ChatInterface({
   const isDark = theme === 'dark'
 
   // Ref to keep activeConversationId current inside async closures
-  const activeConversationIdRef = useRef<string | null>(null)
+  const activeConversationIdRef = useRef<string | null>(initialConversation?.id ?? null)
   const setActiveConversationId = (id: string | null) => {
     activeConversationIdRef.current = id
     _setActiveConversationId(id)
   }
+
+  // Cache the initial conversation if provided
+  useEffect(() => {
+    if (initialConversation) {
+      cache.setCached(initialConversation.id, initialConversation)
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [initialConversation])
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
@@ -170,47 +213,49 @@ export function ChatInterface({
     }
   }, [])
 
+  const applyConversation = useCallback((id: string, conv: Conversation) => {
+    setActiveConversationId(id)
+    setPendingConfirmation(conv.pendingConfirmation ?? null)
+    const chatMessages = conversationToChatMessages(conv)
+    setMessages(chatMessages.length > 0 ? chatMessages : INITIAL_MESSAGES)
+    window.history.pushState({}, '', `/chat/${id}`)
+    document.title = conv.title ? `${conv.title} — Neo` : 'Neo'
+  }, [])
+
   const loadConversation = useCallback(async (id: string) => {
+    // Serve from cache immediately (stale-while-revalidate)
+    const cached = cache.getCached(id)
+    if (cached) {
+      applyConversation(id, cached)
+    }
+
+    // Always revalidate from server
     try {
-      const res = await fetch(`/api/conversations/${id}`)
+      const res = await fetch(`/api/conversations/${encodeURIComponent(id)}`)
       if (!res.ok) {
-        console.error('[loadConversation] Server returned', res.status)
+        if (!cached) console.error('[loadConversation] Server returned', res.status)
         return
       }
 
-      const conv = await res.json()
-      setActiveConversationId(id)
-      setPendingConfirmation(conv.pendingConfirmation ?? null)
+      const conv: Conversation = await res.json()
+      cache.setCached(id, conv)
 
-      // Convert Anthropic messages to ChatMessage format
-      const chatMessages: ChatMessage[] = []
-      for (const msg of conv.messages ?? []) {
-        if (msg.role === 'user' || msg.role === 'assistant') {
-          const content = typeof msg.content === 'string'
-            ? msg.content
-            : Array.isArray(msg.content)
-              ? msg.content.filter(isTextBlock).map((b: TextBlock) => b.text).join('\n')
-              : ''
-          if (content) {
-            chatMessages.push({
-              id: crypto.randomUUID(),
-              role: msg.role,
-              content,
-            })
-          }
-        }
+      // Apply fresh data if user hasn't navigated away, or if there was no cache hit
+      const isStillActive = activeConversationIdRef.current === id
+      if (isStillActive || !cached) {
+        applyConversation(id, conv)
       }
-
-      setMessages(chatMessages.length > 0 ? chatMessages : INITIAL_MESSAGES)
     } catch (err) {
-      console.error('[loadConversation]', err)
+      if (!cached) console.error('[loadConversation]', err)
     }
-  }, [])
+  }, [applyConversation, cache])
 
   const handleNewConversation = () => {
     setActiveConversationId(null)
     setMessages(INITIAL_MESSAGES)
     setPendingConfirmation(null)
+    window.history.pushState({}, '', '/chat')
+    document.title = 'Neo'
   }
 
   const handleDeleteConversation = async (id: string, e: React.MouseEvent) => {
@@ -305,6 +350,9 @@ export function ChatInterface({
       ])
     } finally {
       setIsLoading(false)
+      if (activeConversationIdRef.current) {
+        cache.invalidate(activeConversationIdRef.current)
+      }
       void refreshConversations()
     }
   }
@@ -332,6 +380,7 @@ export function ChatInterface({
             case 'session':
               if (!activeConversationIdRef.current) {
                 setActiveConversationId(event.sessionId)
+                window.history.replaceState({}, '', `/chat/${event.sessionId}`)
               }
               break
             case 'thinking':
@@ -416,9 +465,34 @@ export function ChatInterface({
       ])
     } finally {
       setIsLoading(false)
+      if (activeConversationIdRef.current) {
+        cache.invalidate(activeConversationIdRef.current)
+      }
       void refreshConversations()
     }
   }
+
+  // Handle browser back/forward navigation (Step 10)
+  useEffect(() => {
+    const handlePopState = () => {
+      const match = window.location.pathname.match(/^\/chat\/(conv_[0-9a-f-]+)\/?$/i)
+      if (match) {
+        const id = match[1]
+        if (id !== activeConversationIdRef.current) {
+          void loadConversation(id)
+        }
+      } else if (window.location.pathname === '/chat') {
+        if (activeConversationIdRef.current) {
+          setActiveConversationId(null)
+          setMessages(INITIAL_MESSAGES)
+          setPendingConfirmation(null)
+        }
+      }
+    }
+
+    window.addEventListener('popstate', handlePopState)
+    return () => window.removeEventListener('popstate', handlePopState)
+  }, [loadConversation])
 
   return (
     <div className={`${styles.container} ${className ?? ''}`}>
@@ -428,6 +502,7 @@ export function ChatInterface({
         animate={{ width: isSidebarOpen ? 280 : 0, opacity: isSidebarOpen ? 1 : 0 }}
         className={styles.sidebar}
         aria-label="Navigation sidebar"
+        {...(!isSidebarOpen ? { inert: true } : {})}
       >
         {/* Sidebar header */}
         <div className={styles.sidebarHeader}>
@@ -457,6 +532,8 @@ export function ChatInterface({
                 type="button"
                 className={`${styles.conversationItem} ${conv.id === activeConversationId ? styles.conversationItemActive : ''}`}
                 onClick={() => loadConversation(conv.id)}
+                onMouseEnter={() => cache.prefetch(conv.id)}
+                aria-current={conv.id === activeConversationId ? 'true' : undefined}
               >
                 {editingTitleId === conv.id ? (
                   <div className={styles.editTitleRow}>
@@ -541,7 +618,7 @@ export function ChatInterface({
             <Settings className="w-4 h-4" aria-hidden="true" />
           </div>
 
-          <button onClick={onLogout} className={styles.logoutButton}>
+          <button type="button" onClick={onLogout} className={styles.logoutButton}>
             <LogOut className="w-4 h-4" />
             <span>Terminate Session</span>
           </button>
@@ -554,8 +631,10 @@ export function ChatInterface({
         <header className={styles.header}>
           <div className={styles.headerBtnGroup}>
             <button
+              type="button"
               onClick={() => setIsSidebarOpen(v => !v)}
               aria-label={isSidebarOpen ? 'Close sidebar' : 'Open sidebar'}
+              aria-expanded={isSidebarOpen}
               className={styles.headerBtn}
             >
               {isSidebarOpen
@@ -563,6 +642,7 @@ export function ChatInterface({
                 : <PanelLeftOpen className="w-5 h-5" />}
             </button>
             <button
+              type="button"
               onClick={toggleTheme}
               aria-label={isDark ? 'Switch to light mode' : 'Switch to dark mode'}
               className={styles.headerBtn}
@@ -642,37 +722,40 @@ export function ChatInterface({
               </motion.div>
             )}
 
-            {pendingConfirmation && (
-              <motion.div
-                role="alertdialog"
-                aria-live="assertive"
-                aria-label={`Confirm action: ${pendingConfirmation.name}`}
-                initial={{ opacity: 0, y: 10 }}
-                animate={{ opacity: 1, y: 0 }}
-                className={styles.confirmationBar}
-              >
-                <span>Confirm action: {pendingConfirmation.name}?</span>
-                <div className={styles.confirmationBtns}>
-                  <button
-                    ref={confirmBtnRef}
-                    className={styles.confirmBtn}
-                    onClick={() => { void handleConfirmAction(true) }}
-                  >
-                    Confirm
-                  </button>
-                  <button
-                    className={styles.cancelBtn}
-                    onClick={() => { void handleConfirmAction(false) }}
-                  >
-                    Cancel
-                  </button>
-                </div>
-              </motion.div>
-            )}
-
             <div ref={messagesEndRef} />
           </div>
         </div>
+
+        {pendingConfirmation && (
+          <motion.div
+            role="alertdialog"
+            aria-modal="true"
+            aria-label={`Confirm action: ${pendingConfirmation.name}`}
+            aria-describedby="confirm-action-desc"
+            initial={{ opacity: 0, y: 10 }}
+            animate={{ opacity: 1, y: 0 }}
+            className={styles.confirmationBar}
+          >
+            <span id="confirm-action-desc">Confirm action: {pendingConfirmation.name}?</span>
+            <div className={styles.confirmationBtns}>
+              <button
+                ref={confirmBtnRef}
+                type="button"
+                className={styles.confirmBtn}
+                onClick={() => { void handleConfirmAction(true) }}
+              >
+                Confirm
+              </button>
+              <button
+                type="button"
+                className={styles.cancelBtn}
+                onClick={() => { void handleConfirmAction(false) }}
+              >
+                Cancel
+              </button>
+            </div>
+          </motion.div>
+        )}
 
         {/* Input */}
         <div className={styles.inputArea}>

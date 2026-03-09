@@ -1,7 +1,7 @@
 import crypto from "crypto";
 import { RATE_LIMITS, type Role } from "./permissions";
 import { logger, hashPii } from "./logger";
-import type { Session, SessionMeta, PendingTool, Channel } from "./types";
+import type { Message, Session, SessionMeta, PendingTool, Channel } from "./types";
 
 const TTL_MS = 30 * 60 * 1000; // 30 minutes
 const SWEEP_INTERVAL_MS = 60 * 1000; // 1 minute
@@ -19,6 +19,7 @@ export interface SessionStore {
   setPendingConfirmation(id: string, tool: PendingTool): Promise<void>;
   clearPendingConfirmation(id: string): Promise<PendingTool | null>;
   isRateLimited(id: string): Promise<boolean>;
+  saveMessages(id: string, messages: Message[], title?: string): Promise<void>;
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -110,6 +111,10 @@ export class InMemorySessionStore implements SessionStore {
     const session = this.sessions.get(id);
     if (!session) return false;
     return session.messageCount >= RATE_LIMITS[session.role].messagesPerSession;
+  }
+
+  async saveMessages(_id: string, _messages: Message[], _title?: string): Promise<void> {
+    // No-op — in-memory store is already mutated via direct object reference
   }
 
   private sweep(): void {

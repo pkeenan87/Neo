@@ -3,19 +3,18 @@
 import { useRouter } from 'next/navigation'
 import { signOut } from 'next-auth/react'
 import { ChatInterface } from '@/components/ChatInterface'
-import type { ConversationMeta } from '@/lib/types'
+import { useChatLayout } from './ChatLayoutContext'
+import type { Conversation } from '@/lib/types'
 
 interface ChatPageClientProps {
-  userName: string
-  userRole: string
-  initialConversations: ConversationMeta[]
+  initialConversation?: Conversation
 }
 
-export function ChatPageClient({ userName, userRole, initialConversations }: ChatPageClientProps) {
+export function ChatPageClient({ initialConversation }: ChatPageClientProps) {
   const router = useRouter()
+  const { userName, userRole, initialConversations } = useChatLayout()
 
   const handleLogout = () => {
-    // In dev with bypass, just navigate back
     if (process.env.NEXT_PUBLIC_DEV_AUTH_BYPASS === 'true') {
       router.push('/')
       return
@@ -29,6 +28,7 @@ export function ChatPageClient({ userName, userRole, initialConversations }: Cha
       userName={userName}
       userRole={userRole}
       initialConversations={initialConversations}
+      initialConversation={initialConversation}
     />
   )
 }

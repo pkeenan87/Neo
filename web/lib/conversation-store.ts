@@ -118,6 +118,7 @@ export async function appendMessages(
   const container = getContainer();
   const { resource, etag } = await container.item(id, ownerId).read<Conversation>();
   if (!resource) throw new Error(`Conversation ${id} not found`);
+  if (!etag) throw new Error(`Missing ETag for conversation ${id}`);
 
   resource.messages.push(...newMessages);
   resource.messageCount = resource.messages.length;
@@ -125,7 +126,7 @@ export async function appendMessages(
   if (title && !resource.title) resource.title = title;
 
   await container.item(id, ownerId).replace(resource, {
-    accessCondition: { type: "IfMatch", condition: etag! },
+    accessCondition: { type: "IfMatch", condition: etag },
   });
 }
 
@@ -135,12 +136,15 @@ export async function updateTitle(
   title: string,
 ): Promise<void> {
   const container = getContainer();
-  const conv = await getConversation(id, ownerId);
-  if (!conv) throw new Error(`Conversation ${id} not found`);
+  const { resource, etag } = await container.item(id, ownerId).read<Conversation>();
+  if (!resource) throw new Error(`Conversation ${id} not found`);
+  if (!etag) throw new Error(`Missing ETag for conversation ${id}`);
 
-  conv.title = title;
-  conv.updatedAt = new Date().toISOString();
-  await container.item(id, ownerId).replace(conv);
+  resource.title = title;
+  resource.updatedAt = new Date().toISOString();
+  await container.item(id, ownerId).replace(resource, {
+    accessCondition: { type: "IfMatch", condition: etag },
+  });
 }
 
 export async function deleteConversation(
@@ -309,6 +313,39 @@ export class CosmosSessionStore implements SessionStore {
     const ownerId = await this.resolveOwner(id);
     if (!ownerId) return false;
     return isConversationRateLimited(id, ownerId);
+  }
+
+  async saveMessages(id: string, messages: Message[], title?: string): Promise<void> {
+    const ownerId = await this.resolveOwner(id);
+    if (!ownerId) return;
+
+    const attempt = async () => {
+      const container = getContainer();
+      const { resource, etag } = await container.item(id, ownerId).read<Conversation>();
+      if (!resource) return;
+      if (!etag) throw new Error(`Missing ETag for conversation ${id}`);
+
+      resource.messages = messages;
+      resource.messageCount = messages.length;
+      resource.updatedAt = new Date().toISOString();
+      if (title && !resource.title) resource.title = title;
+
+      await container.item(id, ownerId).replace(resource, {
+        accessCondition: { type: "IfMatch", condition: etag },
+      });
+    };
+
+    try {
+      await attempt();
+    } catch (err: unknown) {
+      // Retry once on 412 Precondition Failed (etag conflict)
+      const code = err && typeof err === "object" && "code" in err ? (err as { code: number }).code : 0;
+      if (code === 412) {
+        await attempt();
+      } else {
+        throw err;
+      }
+    }
   }
 
   /**
