@@ -17,7 +17,9 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
       issuer: process.env.AUTH_MICROSOFT_ENTRA_ID_ISSUER,
       authorization: {
         params: {
+          scope: "openid profile email User.Read",
           prompt: "select_account",
+          redirect_uri: `${process.env.AUTH_URL}/api/auth/callback/microsoft-entra-id`,
         },
       },
     }),
