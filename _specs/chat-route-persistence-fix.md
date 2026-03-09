@@ -106,8 +106,8 @@ Currently there is an `appendMessages()` function that accepts an optional `titl
 
 ## Open Questions
 
-1. Should the cache be implemented as a React context provider wrapping the chat routes, or as a custom hook with module-level state? Context is more "React-correct" but adds a provider to the tree; module-level Map is simpler but doesn't trigger re-renders.
-2. Should full message arrays be prefetched for sidebar items, or only metadata? Full prefetch gives instant switching but uses more bandwidth/memory.
-3. When navigating to `/chat/[id]` for a conversation the user doesn't own, should we show a 404 page or redirect to `/chat` with a toast notification?
-4. Should auto-generated conversation titles use a simple truncation of the first message, or call Claude (Haiku) to generate a short summary? The summary is better UX but adds latency and cost.
-5. Should the URL update to `/chat/[id]` happen immediately when the `session` event arrives, or only after the full response completes? Immediate gives correct URL sooner for bookmarking; delayed avoids URL changes for failed requests.
+1. Should the cache be implemented as a React context provider wrapping the chat routes, or as a custom hook with module-level state? Context is more "React-correct" but adds a provider to the tree; module-level Map is simpler but doesn't trigger re-renders. Context
+2. Should full message arrays be prefetched for sidebar items, or only metadata? Full prefetch gives instant switching but uses more bandwidth/memory. Full
+3. When navigating to `/chat/[id]` for a conversation the user doesn't own, should we show a 404 page or redirect to `/chat` with a toast notification? 404
+4. Should auto-generated conversation titles use a simple truncation of the first message, or call Claude (Haiku) to generate a short summary? The summary is better UX but adds latency and cost. Simple truncation.
+5. Should the URL update to `/chat/[id]` happen immediately when the `session` event arrives, or only after the full response completes? Immediate gives correct URL sooner for bookmarking; delayed avoids URL changes for failed requests. immediate
