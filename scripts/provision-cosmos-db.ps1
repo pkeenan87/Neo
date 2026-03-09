@@ -126,7 +126,7 @@ if ($existingContainer) {
         --database-name $DatabaseName `
         --name $ContainerName `
         --partition-key-path "/ownerId" `
-        --default-ttl $DefaultTtl `
+        --ttl $DefaultTtl `
         --output none
     Write-Host "     Container '$ContainerName' created with /ownerId partition key and ${DefaultTtl}s TTL."
 }
