@@ -120,9 +120,12 @@ export function proxy(request: NextRequest) {
   const scriptSrc = isDev
     ? "script-src 'self' 'unsafe-inline' 'unsafe-eval'"
     : `script-src 'self' 'nonce-${nonce}'`;
+  // Next.js injects inline styles that cannot receive nonces.
+  // 'unsafe-inline' is ignored by browsers when a nonce is present for
+  // script-src, but for style-src it acts as the necessary fallback.
   const styleSrc = isDev
     ? "style-src 'self' 'unsafe-inline'"
-    : `style-src 'self' 'nonce-${nonce}'`;
+    : `style-src 'self' 'unsafe-inline'`;
 
   const csp = [
     "default-src 'self'",
