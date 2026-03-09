@@ -21,6 +21,7 @@ import {
   Loader2,
 } from 'lucide-react'
 import { useTheme } from '@/context/ThemeContext'
+import { MarkdownRenderer } from '@/components/MarkdownRenderer'
 import styles from './ChatInterface.module.css'
 import type { ConversationMeta, PendingTool } from '@/lib/types'
 
@@ -612,7 +613,9 @@ export function ChatInterface({
                         : styles.msgBubbleUser
                     }
                   >
-                    {msg.content}
+                    {msg.role === 'assistant'
+                      ? <MarkdownRenderer content={msg.content} />
+                      : msg.content}
                   </div>
                 </div>
               </motion.div>
@@ -632,7 +635,7 @@ export function ChatInterface({
                 <div className={styles.msgContent}>
                   <div className={styles.msgLabel}>Neo Agent</div>
                   <div className={styles.thinkingIndicator}>
-                    <Loader2 className="w-4 h-4 animate-spin" aria-hidden="true" />
+                    <Loader2 className={styles.spinner} aria-hidden="true" />
                     <span>Processing...</span>
                   </div>
                 </div>

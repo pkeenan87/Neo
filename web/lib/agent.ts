@@ -9,6 +9,39 @@ import type { Message, AgentLoopResult, AgentCallbacks, PendingTool } from "./ty
 
 const client = new Anthropic({ apiKey: env.ANTHROPIC_API_KEY });
 
+const MAX_RETRIES = 3;
+const RETRYABLE_STATUS = new Set([429, 529, 500, 502, 503]);
+
+async function createWithRetry(
+  params: Anthropic.Messages.MessageCreateParamsNonStreaming,
+): Promise<Anthropic.Messages.Message> {
+  for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+    try {
+      return await client.messages.create(params);
+    } catch (err: unknown) {
+      const status = (err as { status?: number }).status;
+      const isRetryable = status !== undefined && RETRYABLE_STATUS.has(status);
+
+      if (!isRetryable || attempt === MAX_RETRIES) {
+        // Provide a friendly message for known transient errors
+        if (status === 529) {
+          throw new Error("Claude is temporarily overloaded. Please try again in a moment.");
+        }
+        if (status === 429) {
+          throw new Error("Rate limit reached. Please wait a moment before sending another message.");
+        }
+        throw err;
+      }
+
+      const delay = Math.min(1000 * 2 ** attempt, 8000);
+      logger.warn(`API call failed (${status}), retrying in ${delay}ms (attempt ${attempt + 1}/${MAX_RETRIES})`, "agent");
+      await new Promise((r) => setTimeout(r, delay));
+    }
+  }
+  // Unreachable, but satisfies TypeScript
+  throw new Error("Retry loop exited unexpectedly");
+}
+
 export async function runAgentLoop(
   messages: Message[],
   callbacks: AgentCallbacks = {},
@@ -21,7 +54,7 @@ export async function runAgentLoop(
   while (true) {
     if (callbacks.onThinking) callbacks.onThinking();
 
-    const response = await client.messages.create({
+    const response = await createWithRetry({
       model: "claude-opus-4-5",
       max_tokens: 4096,
       system: getSystemPrompt(role),

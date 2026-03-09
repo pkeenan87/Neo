@@ -118,6 +118,43 @@ function buildConfirmationCard(tool: PendingTool, sessionId: string): Attachment
 //  Send agent result back to the Teams conversation
 // ─────────────────────────────────────────────────────────────
 
+function normalizeText(text: string): string {
+  return text.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+}
+
+/**
+ * Split text on paragraph boundaries (\n\n) so chunks don't break
+ * mid-markdown-element. Falls back to character-level splitting for
+ * single paragraphs that exceed the limit.
+ */
+function chunkByParagraph(text: string, maxLen: number): string[] {
+  const paragraphs = text.split("\n\n");
+  const chunks: string[] = [];
+  let current = "";
+
+  for (const para of paragraphs) {
+    const candidate = current ? `${current}\n\n${para}` : para;
+
+    if (candidate.length <= maxLen) {
+      current = candidate;
+    } else {
+      if (current) chunks.push(current);
+      // Single paragraph exceeds limit — fall back to character splitting
+      if (para.length > maxLen) {
+        for (let i = 0; i < para.length; i += maxLen) {
+          chunks.push(para.slice(i, i + maxLen));
+        }
+        current = "";
+      } else {
+        current = para;
+      }
+    }
+  }
+
+  if (current) chunks.push(current);
+  return chunks;
+}
+
 async function sendAgentResult(
   context: TurnContext,
   result: AgentLoopResult,
@@ -128,15 +165,16 @@ async function sendAgentResult(
     const card = buildConfirmationCard(result.tool, sessionId);
     await context.sendActivity({ attachments: [card] });
   } else {
-    // Split long messages (Teams has a ~28 KB limit per message)
     const MAX_LEN = 20_000;
-    const text = result.text;
-    if (text.length <= MAX_LEN) {
-      await context.sendActivity(text);
-    } else {
-      for (let i = 0; i < text.length; i += MAX_LEN) {
-        await context.sendActivity(text.slice(i, i + MAX_LEN));
-      }
+    const text = normalizeText(result.text);
+    const chunks = chunkByParagraph(text, MAX_LEN);
+
+    for (const chunk of chunks) {
+      await context.sendActivity({
+        type: "message",
+        text: chunk,
+        textFormat: "markdown",
+      });
     }
   }
 }

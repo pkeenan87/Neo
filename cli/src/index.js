@@ -1,6 +1,8 @@
 import readline from "readline";
 import chalk from "chalk";
 import os from "os";
+import { Marked } from "marked";
+import { markedTerminal } from "marked-terminal";
 import { resolveServerConfig, parseFlag, validateServerUrl } from "./config.js";
 import { runAgentLoop, confirmTool } from "./agent.js";
 import { login, logout, status, getAccessToken } from "./auth-entra.js";
@@ -83,8 +85,19 @@ function printToolCall(name, input) {
   }
 }
 
+const terminalMarkdown = new Marked(
+  markedTerminal({
+    width: process.stdout.columns || 80,
+    reflowText: true,
+    showSectionPrefix: false,
+    tab: 2,
+  })
+);
+
 function printResponse(text) {
-  console.log("\n" + chalk.white(text));
+  const normalized = text.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+  const rendered = terminalMarkdown.parse(normalized);
+  console.log("\n" + rendered);
 }
 
 function printThinking() {
