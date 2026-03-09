@@ -1,4 +1,5 @@
 import type { Metadata } from 'next'
+import { headers } from 'next/headers'
 import { JetBrains_Mono } from 'next/font/google'
 import { Agentation } from 'agentation'
 import { ThemeProvider } from '@/context/ThemeContext'
@@ -30,17 +31,20 @@ const themeScript = `
 })();
 `
 
-export default function RootLayout({
+export default async function RootLayout({
   children,
 }: {
   children: React.ReactNode
 }) {
+  const hdrs = await headers()
+  const nonce = hdrs.get('x-nonce') ?? undefined
+
   return (
     // Light mode is default — ThemeContext adds .dark class when toggled
     <html lang="en" className={jetbrainsMono.variable} suppressHydrationWarning>
       <head>
         {/* suppressHydrationWarning: nonce differs between SSR and client */}
-        <script suppressHydrationWarning dangerouslySetInnerHTML={{ __html: themeScript }} />
+        <script nonce={nonce} suppressHydrationWarning dangerouslySetInnerHTML={{ __html: themeScript }} />
       </head>
       <body className="font-mono">
         <ThemeProvider>{children}</ThemeProvider>
