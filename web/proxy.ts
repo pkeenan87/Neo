@@ -117,9 +117,12 @@ export function proxy(request: NextRequest) {
   // ── CSP headers ──
   const nonce = Buffer.from(crypto.randomUUID()).toString("base64");
 
+  // Next.js emits many inline scripts (hydration, chunk-loading, etc.) that
+  // cannot receive nonces. For this internal SOC tool 'unsafe-inline' is
+  // acceptable and avoids a cascade of CSP violations at page load.
   const scriptSrc = isDev
     ? "script-src 'self' 'unsafe-inline' 'unsafe-eval'"
-    : `script-src 'self' 'nonce-${nonce}'`;
+    : "script-src 'self' 'unsafe-inline'";
   // Next.js injects inline styles that cannot receive nonces.
   // 'unsafe-inline' is ignored by browsers when a nonce is present for
   // script-src, but for style-src it acts as the necessary fallback.
