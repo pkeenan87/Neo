@@ -1,6 +1,6 @@
 import crypto from "crypto";
 import { CosmosClient, type Container } from "@azure/cosmos";
-import { DefaultAzureCredential } from "@azure/identity";
+import { ManagedIdentityCredential } from "@azure/identity";
 import { RATE_LIMITS, type Role } from "./permissions";
 import { logger, hashPii } from "./logger";
 import { env } from "./config";
@@ -29,7 +29,7 @@ function getContainer(): Container {
     throw new Error("COSMOS_ENDPOINT is not configured");
   }
 
-  const credential = new DefaultAzureCredential();
+  const credential = new ManagedIdentityCredential();
   const client = new CosmosClient({ endpoint, aadCredentials: credential });
   _container = client.database("neo-db").container("conversations");
   return _container;
