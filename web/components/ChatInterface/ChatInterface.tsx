@@ -34,6 +34,7 @@ interface ChatMessage {
   id: string
   role: 'user' | 'assistant'
   content: string
+  toolsUsed?: string[]
 }
 
 interface SessionEvent { type: 'session'; sessionId: string }
@@ -155,6 +156,7 @@ export function ChatInterface({
   const [pendingConfirmation, setPendingConfirmation] = useState<PendingTool | null>(
     initialConversation?.pendingConfirmation ?? null
   )
+  const [currentToolName, setCurrentToolName] = useState<string | null>(null)
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const editInputRef = useRef<HTMLInputElement>(null)
@@ -360,6 +362,8 @@ export function ChatInterface({
   const processNDJSONStream = async (reader: ReadableStreamDefaultReader<Uint8Array>) => {
     const decoder = new TextDecoder()
     let buffer = ''
+    const MAX_TOOLS = 50
+    const toolsUsed: string[] = []
 
     while (true) {
       const { done, value } = await reader.read()
@@ -386,14 +390,10 @@ export function ChatInterface({
             case 'thinking':
               break
             case 'tool_call':
-              setMessages(prev => [
-                ...prev,
-                {
-                  id: crypto.randomUUID(),
-                  role: 'assistant',
-                  content: `Running tool: ${event.tool}`,
-                },
-              ])
+              if (toolsUsed.length < MAX_TOOLS) {
+                toolsUsed.push(event.tool)
+              }
+              setCurrentToolName(event.tool)
               break
             case 'confirmation_required':
               setPendingConfirmation(event.tool)
@@ -409,13 +409,23 @@ export function ChatInterface({
             case 'response':
               setMessages(prev => [
                 ...prev,
-                { id: crypto.randomUUID(), role: 'assistant', content: event.text },
+                {
+                  id: crypto.randomUUID(),
+                  role: 'assistant',
+                  content: event.text,
+                  toolsUsed: toolsUsed.length > 0 ? [...toolsUsed] : undefined,
+                },
               ])
               break
             case 'error':
               setMessages(prev => [
                 ...prev,
-                { id: crypto.randomUUID(), role: 'assistant', content: `Error: ${event.message}` },
+                {
+                  id: crypto.randomUUID(),
+                  role: 'assistant',
+                  content: `Error: ${event.message}`,
+                  toolsUsed: toolsUsed.length > 0 ? [...toolsUsed] : undefined,
+                },
               ])
               break
           }
@@ -424,6 +434,8 @@ export function ChatInterface({
         }
       }
     }
+
+    setCurrentToolName(null)
   }
 
   const handleSendMessage = async () => {
@@ -696,6 +708,19 @@ export function ChatInterface({
                     {msg.role === 'assistant'
                       ? <MarkdownRenderer content={msg.content} />
                       : msg.content}
+                    {msg.toolsUsed && msg.toolsUsed.length > 0 && (
+                      <div className={styles.toolSummary}>
+                        <div id={`tools-label-${msg.id}`} className={styles.toolSummaryLabel}>Tools used:</div>
+                        <ul role="list" aria-labelledby={`tools-label-${msg.id}`} className={styles.toolSummaryList}>
+                          {msg.toolsUsed.map((tool, i) => (
+                            <li key={`${i}-${tool}`} className={styles.toolSummaryItem}>
+                              <span aria-hidden="true" className={styles.toolSummaryBullet}>&bull;</span>
+                              <span className={styles.toolSummaryItemName}>{tool}</span>
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
                   </div>
                 </div>
               </motion.div>
@@ -708,6 +733,7 @@ export function ChatInterface({
                 className={styles.messageRow}
                 role="status"
                 aria-live="polite"
+                aria-atomic="true"
               >
                 <div className={styles.msgAvatarAssistant}>
                   <Image src="/neo-icon.png" alt="" width={32} height={32} className="rounded" />
@@ -716,7 +742,7 @@ export function ChatInterface({
                   <div className={styles.msgLabel}>Neo Agent</div>
                   <div className={styles.thinkingIndicator}>
                     <Loader2 className={styles.spinner} aria-hidden="true" />
-                    <span>Processing...</span>
+                    <span>{currentToolName ? `Running ${currentToolName}...` : 'Processing...'}</span>
                   </div>
                 </div>
               </motion.div>

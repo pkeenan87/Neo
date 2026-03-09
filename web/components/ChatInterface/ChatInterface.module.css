@@ -812,3 +812,47 @@
   background: rgba(34, 197, 94, 0.1);
   color: #4ade80;
 }
+
+/* ─── Tool summary (bottom of response) ─── */
+.toolSummary {
+  border-top: 1px solid #e2e8f0;
+  margin-top: 0.75rem;
+  padding-top: 0.75rem;
+  font-size: 0.75rem;
+  color: #94a3b8;
+}
+
+:global(html.dark) .toolSummary {
+  border-top-color: rgba(34, 197, 94, 0.2);
+  color: rgba(34, 197, 94, 0.4);
+}
+
+.toolSummaryLabel {
+  font-weight: 500;
+  margin-bottom: 0.25rem;
+}
+
+.toolSummaryList {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.125rem;
+}
+
+.toolSummaryItem {
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
+}
+
+.toolSummaryBullet {
+  font-size: 0.625rem;
+  line-height: 1;
+}
+
+.toolSummaryItemName {
+  font-family: var(--font-mono), monospace;
+  font-size: 0.6875rem;
+}

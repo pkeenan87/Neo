@@ -123,6 +123,53 @@ function normalizeText(text: string): string {
 }
 
 /**
+ * Reformat markdown for Teams' limited renderer.
+ *
+ * Teams requires a blank line before the first list item and does not
+ * handle nested indentation deeper than one level. This function:
+ *  1. Ensures a blank line precedes every list block (bulleted or numbered)
+ *  2. Flattens nested lists beyond 1 indent level (Teams ignores deeper nesting)
+ *  3. Normalises bullet markers to `- ` (Teams handles this most consistently)
+ */
+function formatForTeams(text: string): string {
+  const lines = text.split("\n");
+  const result: string[] = [];
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const isListItem = /^\s*[-*+]\s/.test(line) || /^\s*\d+[.)]\s/.test(line);
+
+    if (isListItem) {
+      // Ensure a blank line before the first item of a list block
+      const prev = result[result.length - 1];
+      const prevIsListItem =
+        prev !== undefined &&
+        (/^\s*[-*+]\s/.test(prev) || /^\s*\d+[.)]\s/.test(prev));
+      const prevIsBlank = prev === undefined || prev.trim() === "";
+
+      if (!prevIsBlank && !prevIsListItem) {
+        result.push("");
+      }
+
+      // Flatten deep nesting: keep at most 1 indent level (3 spaces)
+      const stripped = line.replace(/^(\s*)/, (_, ws: string) => {
+        const spaces = ws.replace(/\t/g, "    ").length;
+        if (spaces <= 2) return "";
+        return "   "; // single indent
+      });
+
+      // Normalise bullet marker to dash
+      const normalised = stripped.replace(/^(\s*)[*+]\s/, "$1- ");
+      result.push(normalised);
+    } else {
+      result.push(line);
+    }
+  }
+
+  return result.join("\n");
+}
+
+/**
  * Split text on paragraph boundaries (\n\n) so chunks don't break
  * mid-markdown-element. Falls back to character-level splitting for
  * single paragraphs that exceed the limit.
@@ -166,7 +213,7 @@ async function sendAgentResult(
     await context.sendActivity({ attachments: [card] });
   } else {
     const MAX_LEN = 20_000;
-    const text = normalizeText(result.text);
+    const text = formatForTeams(normalizeText(result.text));
     const chunks = chunkByParagraph(text, MAX_LEN);
 
     for (const chunk of chunks) {

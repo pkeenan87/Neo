@@ -3,6 +3,7 @@ import MicrosoftEntraID from "next-auth/providers/microsoft-entra-id";
 import Credentials from "next-auth/providers/credentials";
 import type { Role } from "@/lib/permissions";
 import { findApiKey } from "@/lib/api-key-store";
+import { logger } from "@/lib/logger";
 
 // ─────────────────────────────────────────────────────────────
 //  Auth.js Config
@@ -63,15 +64,20 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
       // On initial sign-in, persist role, provider, and AAD object ID into the JWT
       if (account && user) {
         if (account.provider === "microsoft-entra-id") {
-          // Entra ID app roles come as a "roles" array in the ID token
-          const idTokenRoles = (account as Record<string, unknown>).roles as
-            | string[]
-            | undefined;
-          if (idTokenRoles?.includes("Admin")) {
+          // Entra ID app roles come as a "roles" array in the decoded ID token (profile)
+          const rawRoles = (profile as Record<string, unknown> | undefined)?.roles;
+          if (!profile) {
+            logger.warn("Entra ID profile absent — defaulting to reader", "auth", { provider: "entra-id" });
+          }
+          const idTokenRoles = Array.isArray(rawRoles)
+            ? rawRoles.filter((r): r is string => typeof r === "string")
+            : [];
+          if (idTokenRoles.includes("Admin")) {
             token.role = "admin";
           } else {
             token.role = "reader";
           }
+          logger.debug("Entra ID role resolved", "auth", { provider: "entra-id", role: token.role });
           token.authProvider = "entra-id";
           // Persist immutable AAD object ID for use as Cosmos partition key
           const entraProfile = profile as Record<string, unknown> | undefined;
