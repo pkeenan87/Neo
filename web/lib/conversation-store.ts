@@ -250,6 +250,17 @@ export class CosmosSessionStore implements SessionStore {
     return conversationToSession(conv);
   }
 
+  async getExpired(id: string): Promise<Session | undefined> {
+    const ownerId = await this.resolveOwner(id);
+    if (!ownerId) return undefined;
+
+    const conv = await getConversation(id, ownerId);
+    if (!conv) return undefined;
+
+    // Return session regardless of idle timeout
+    return conversationToSession(conv);
+  }
+
   async delete(id: string): Promise<boolean> {
     const ownerId = await this.resolveOwner(id);
     if (!ownerId) return false;

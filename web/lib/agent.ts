@@ -126,6 +126,64 @@ export async function runAgentLoop(
   }
 }
 
+const MAX_SUMMARY_MESSAGES = 50;
+
+/**
+ * Summarize an expired conversation's messages into a compact context
+ * suitable for seeding a new session. Returns a single-element message
+ * array with the summary as a user message.
+ */
+export async function summarizeConversation(
+  messages: Message[],
+): Promise<Message[]> {
+  // Cap input to avoid excessive token usage
+  const recent = messages.slice(-MAX_SUMMARY_MESSAGES);
+
+  try {
+    const response = await createWithRetry({
+      model: "claude-sonnet-4-5-20250514",
+      max_tokens: 1024,
+      system:
+        "Summarize the following security investigation conversation in 3-5 bullet points. " +
+        "Focus on: what was investigated, key findings, tools that were used, and any actions taken or recommended. " +
+        "Be concise and factual. Output only the bullet points.",
+      messages: [
+        ...recent,
+        {
+          role: "user",
+          content: "Please summarize our conversation so far.",
+        },
+      ],
+    });
+
+    const summaryText = response.content
+      .filter((b): b is Anthropic.Messages.TextBlock => b.type === "text")
+      .map((b) => b.text)
+      .join("\n");
+
+    return [
+      {
+        role: "user",
+        content:
+          "Conversation resumed. Summary of previous session:\n" + summaryText,
+      },
+    ];
+  } catch (err) {
+    logger.error("Failed to summarize conversation", "agent", {
+      errorMessage: (err as Error).message,
+    });
+    // Fallback: return a minimal context note
+    return [
+      {
+        role: "user",
+        content:
+          "Conversation resumed. A previous session existed but could not be summarized. " +
+          "The user is continuing a prior security investigation.",
+      },
+    ];
+  }
+}
+
 export async function resumeAfterConfirmation(
   messages: Message[],
   pendingTool: PendingTool,

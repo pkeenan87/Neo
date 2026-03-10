@@ -13,6 +13,10 @@ const SWEEP_INTERVAL_MS = 60 * 1000; // 1 minute
 export interface SessionStore {
   create(role: Role, ownerId: string, channel?: Channel): Promise<string>;
   get(id: string): Promise<Session | undefined>;
+  /** Return the session even if idle-expired (for resume scenarios).
+   *  Note: InMemorySessionStore may return undefined if the periodic
+   *  sweep has already removed the entry from the map. */
+  getExpired(id: string): Promise<Session | undefined>;
   delete(id: string): Promise<boolean>;
   list(): Promise<SessionMeta[]>;
   listForOwner(ownerId: string): Promise<SessionMeta[]>;
@@ -62,6 +66,13 @@ export class InMemorySessionStore implements SessionStore {
 
     session.lastActivityAt = new Date();
     return session;
+  }
+
+  async getExpired(id: string): Promise<Session | undefined> {
+    // Returns raw map entry regardless of TTL. The periodic sweep may
+    // have already removed it, in which case the caller treats this
+    // as a fresh start (acceptable for mock/dev use).
+    return this.sessions.get(id);
   }
 
   async delete(id: string): Promise<boolean> {

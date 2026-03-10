@@ -5,6 +5,7 @@ import { Marked } from "marked";
 import { markedTerminal } from "marked-terminal";
 import { resolveServerConfig, parseFlag, validateServerUrl } from "./config.js";
 import { runAgentLoop, confirmTool } from "./agent.js";
+import { fetchConversations } from "./server-client.js";
 import { login, logout, status, getAccessToken } from "./auth-entra.js";
 import { readConfig, writeConfig } from "./config-store.js";
 
@@ -36,6 +37,17 @@ const TOOL_COLORS = {
 
 const username = os.userInfo().username;
 
+function formatTimeAgo(date) {
+  const seconds = Math.floor((Date.now() - date.getTime()) / 1000);
+  if (seconds < 60) return "just now";
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes}m ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h ago`;
+  const days = Math.floor(hours / 24);
+  return `${days}d ago`;
+}
+
 const MATRIX_QUOTES = [
   `Wake up, ${username}...`,
   "The Matrix has you...",
@@ -62,7 +74,7 @@ function printBanner() {
   `));
   console.log(chalk.green("    [ S E C U R I T Y  A G E N T  v2.0 ]"));
   console.log(chalk.gray(`    [ ${quote.padEnd(38)} ]`));
-  console.log(chalk.gray("\n    'exit' to quit  |  'clear' to reset context\n"));
+  console.log(chalk.gray("\n    exit \u2014 quit  |  clear \u2014 reset context  |  history \u2014 list sessions  |  resume N \u2014 continue one\n"));
 }
 
 function printToolCall(name, input) {
@@ -277,6 +289,7 @@ async function main() {
     new Promise(resolve => rl.question(prompt, resolve));
 
   let sessionId = null;
+  let lastHistory = [];
 
   const callbacks = {
     onToolCall:  printToolCall,
@@ -298,6 +311,47 @@ async function main() {
     if (userInput.trim().toLowerCase() === "clear") {
       sessionId = null;
       console.log(chalk.gray("  Conversation history cleared.\n"));
+      continue;
+    }
+
+    if (userInput.trim().toLowerCase() === "history") {
+      try {
+        const conversations = await fetchConversations(serverUrl, getAuthHeader);
+        lastHistory = conversations;
+        if (conversations.length === 0) {
+          console.log(chalk.gray("  No previous conversations found.\n"));
+        } else {
+          console.log(chalk.bold("\n  Recent Conversations:\n"));
+          conversations.forEach((c, i) => {
+            const title = c.title || "Untitled";
+            const channel = c.channel || "web";
+            const msgs = c.messageCount || 0;
+            const date = c.updatedAt ? new Date(c.updatedAt) : new Date(c.createdAt);
+            const ago = formatTimeAgo(date);
+            const num = chalk.bold(`  ${String(i + 1).padStart(2)}.`);
+            console.log(`${num} ${title}  |  ${chalk.gray(`[${channel}] ${msgs} msgs, ${ago}`)}`);
+          });
+          console.log(chalk.gray("\n  Use 'resume N' to continue a conversation.\n"));
+        }
+      } catch (err) {
+        console.error(chalk.red(`\n  Error fetching history: ${err.message}\n`));
+      }
+      continue;
+    }
+
+    const resumeMatch = userInput.trim().match(/^resume\s+(\d+)$/i);
+    if (resumeMatch) {
+      const idx = parseInt(resumeMatch[1], 10) - 1;
+      if (lastHistory.length === 0) {
+        console.error(chalk.yellow("  Warning: Run 'history' first to load the conversation list.\n"));
+      } else if (idx < 0 || idx >= lastHistory.length) {
+        console.error(chalk.yellow(`  Error: Invalid index. Choose 1\u2013${lastHistory.length}.\n`));
+      } else {
+        const conv = lastHistory[idx];
+        sessionId = conv.id;
+        const title = conv.title || "Untitled";
+        console.log(chalk.green(`  Resumed conversation: ${title}\n`));
+      }
       continue;
     }
 

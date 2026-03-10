@@ -9,15 +9,17 @@ import {
 } from "botbuilder";
 import { env } from "@/lib/config";
 import { sessionStore } from "@/lib/session-factory";
-import { runAgentLoop, resumeAfterConfirmation } from "@/lib/agent";
+import { runAgentLoop, resumeAfterConfirmation, summarizeConversation } from "@/lib/agent";
 import { canUseTool } from "@/lib/permissions";
 import { scanUserInput, shouldBlock } from "@/lib/injection-guard";
 import { logger, hashPii } from "@/lib/logger";
 import {
   getSessionId,
   setSessionId,
+  updateSessionId,
+  refreshMapping,
 } from "@/lib/teams-session-map";
-import type { PendingTool, AgentLoopResult } from "@/lib/types";
+import type { PendingTool, AgentLoopResult, TeamsChannelType } from "@/lib/types";
 
 // ─────────────────────────────────────────────────────────────
 //  Bot Framework adapter (lazy singleton — avoids assertions
@@ -255,14 +257,29 @@ async function handleTurn(context: TurnContext): Promise<void> {
       return;
     }
 
+    // Validate conversation-origin binding: the card-submit must come from
+    // a conversation that owns this session (prevents cross-conversation replay).
+    const cardConversationId = context.activity.conversation.id;
+    const mappedSessionId = await getSessionId(cardConversationId);
+    if (mappedSessionId !== neoSessionId) {
+      logger.warn("Card submit conversation-origin mismatch", "teams", {
+        sessionId: neoSessionId,
+        conversationId: cardConversationId,
+      });
+      await context.sendActivity("This confirmation does not belong to this conversation.");
+      return;
+    }
+
     const session = await sessionStore.get(neoSessionId);
     if (!session) {
       await context.sendActivity("Session expired. Please start a new conversation.");
       return;
     }
 
-    // Only the session owner may confirm/cancel actions (mirrors confirm/route.ts)
-    if (session.ownerId !== submitterAadId) {
+    // For channel threads (synthetic owner), RBAC is enforced at the Teams
+    // channel level — any channel member with the configured role can confirm.
+    // For DMs, verify the submitter owns the session.
+    if (!session.ownerId.startsWith("teams-thread:") && session.ownerId !== submitterAadId) {
       logger.warn("Teams confirm ownership mismatch", "teams", { sessionId: neoSessionId });
       await context.sendActivity("You are not authorized to confirm actions on this session.");
       return;
@@ -280,7 +297,8 @@ async function handleTurn(context: TurnContext): Promise<void> {
       return;
     }
 
-    if (!canUseTool(session.role, pendingTool.name)) {
+    // Check role against the actual tool name (not the UUID toolId)
+    if (!canUseTool(env.TEAMS_BOT_ROLE, pendingTool.name)) {
       await sessionStore.setPendingConfirmation(neoSessionId, pendingTool);
       await context.sendActivity("Your role does not permit this action.");
       return;
@@ -318,21 +336,82 @@ async function handleTurn(context: TurnContext): Promise<void> {
 
   const role = env.TEAMS_BOT_ROLE;
   const conversationId = context.activity.conversation.id;
-  logger.info("Teams message received", "teams", { aadObjectIdHash: hashPii(aadObjectId), conversationId });
+  const conversationType = context.activity.conversation.conversationType ?? "";
 
-  // Resolve or create session
-  let resolvedSessionId: string;
-  const existingId = getSessionId(conversationId);
-  const existingSession = existingId ? await sessionStore.get(existingId) : undefined;
+  // Derive thread detection from conversationId structure (`;messageid=` is
+  // present in channel thread IDs) rather than relying solely on the
+  // conversationType field from the activity payload.
+  const isThread =
+    conversationType === "channel" || conversationId.includes(";messageid=");
+  const channelType: TeamsChannelType = isThread ? "thread" : "dm";
+  const teamId = (context.activity.channelData as { team?: { id?: string } })?.team?.id ?? null;
 
-  if (existingSession && existingId) {
-    resolvedSessionId = existingId;
-  } else {
-    resolvedSessionId = await sessionStore.create(role, aadObjectId, "teams");
-    setSessionId(conversationId, resolvedSessionId);
+  if (!["channel", "personal", "groupChat"].includes(conversationType)) {
+    logger.warn("Unexpected Teams conversation type", "teams", { conversationType });
   }
 
-  const session = (await sessionStore.get(resolvedSessionId))!;
+  logger.info("Teams message received", "teams", {
+    aadObjectIdHash: hashPii(aadObjectId),
+    conversationId,
+    channelType,
+  });
+
+  // ── Resolve or create session ──────────────────────────────
+  // Owner: for DMs use the user's AAD ID; for threads use a synthetic ID
+  const ownerId = isThread
+    ? `teams-thread:${conversationId}`
+    : aadObjectId;
+
+  let resolvedSessionId: string;
+  const existingId = await getSessionId(conversationId);
+
+  if (existingId) {
+    // Check if the session is still active
+    const activeSession = await sessionStore.get(existingId);
+    if (activeSession) {
+      resolvedSessionId = existingId;
+      refreshMapping(conversationId).catch((err) => {
+        logger.warn("refreshMapping failed", "teams", {
+          conversationId,
+          errorMessage: (err as Error).message,
+        });
+      });
+    } else {
+      // Session idle-expired — try to resume with summary
+      const expiredSession = await sessionStore.getExpired(existingId);
+      if (expiredSession && expiredSession.messages.length > 0) {
+        logger.info("Resuming expired Teams session with summary", "teams", {
+          expiredSessionId: existingId,
+        });
+        const summaryMessages = await summarizeConversation(expiredSession.messages);
+        resolvedSessionId = await sessionStore.create(role, ownerId, "teams");
+        const newSession = await sessionStore.get(resolvedSessionId);
+        if (!newSession) {
+          logger.error("Session missing immediately after create", "teams", { resolvedSessionId });
+          await context.sendActivity("An internal error occurred. Please try again.");
+          return;
+        }
+        newSession.messages.push(...summaryMessages);
+        await sessionStore.saveMessages(resolvedSessionId, newSession.messages);
+        await updateSessionId(conversationId, resolvedSessionId);
+      } else {
+        // Document TTL-deleted or empty — start fresh
+        resolvedSessionId = await sessionStore.create(role, ownerId, "teams");
+        await updateSessionId(conversationId, resolvedSessionId);
+      }
+    }
+  } else {
+    // No mapping exists — create new session and mapping
+    resolvedSessionId = await sessionStore.create(role, ownerId, "teams");
+    await setSessionId(conversationId, resolvedSessionId, channelType, teamId);
+  }
+
+  const session = await sessionStore.get(resolvedSessionId);
+  if (!session) {
+    logger.error("Session missing after resolution", "teams", { resolvedSessionId });
+    await context.sendActivity("An internal error occurred. Please try again.");
+    return;
+  }
 
   // Injection scan — mirrors the check in api/agent/route.ts
   const scanResult = scanUserInput(messageText, {
@@ -358,6 +437,16 @@ async function handleTurn(context: TurnContext): Promise<void> {
 
   session.messages.push({ role: "user", content: messageText });
   session.messageCount++;
+
+  // Persist user message immediately (before agent loop)
+  try {
+    await sessionStore.saveMessages(resolvedSessionId, session.messages);
+  } catch (err) {
+    logger.warn("Failed to persist Teams message on receipt", "teams", {
+      sessionId: resolvedSessionId,
+      errorMessage: (err as Error).message,
+    });
+  }
 
   await context.sendActivities([{ type: ActivityTypes.Typing }]);
 

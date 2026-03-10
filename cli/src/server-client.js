@@ -157,3 +157,32 @@ export async function streamConfirm(serverUrl, getAuthHeader, sessionId, toolId,
 
   return processStream(res, callbacks);
 }
+
+/**
+ * Fetch the authenticated user's conversation history.
+ * Returns an array of conversation metadata objects.
+ */
+export async function fetchConversations(serverUrl, getAuthHeader) {
+  let authHeader;
+  try {
+    authHeader = await getAuthHeader();
+  } catch (err) {
+    err.code = "AUTH_ERROR";
+    throw err;
+  }
+
+  const res = await fetch(`${serverUrl}/api/conversations`, {
+    headers: { Authorization: authHeader },
+  });
+
+  if (res.status === 401) {
+    throw new Error("Unauthorized — check your API key or run: node src/index.js auth login");
+  }
+  if (!res.ok) {
+    const raw = await res.text().catch(() => "");
+    throw new Error(`Server error (${res.status})${raw ? `: ${raw.slice(0, 120)}` : ""}`);
+  }
+
+  const data = await res.json();
+  return data.conversations || [];
+}

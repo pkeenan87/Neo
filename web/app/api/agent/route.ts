@@ -87,6 +87,17 @@ export async function POST(request: NextRequest) {
   session.messages.push({ role: "user", content: body.message });
   session.messageCount++;
 
+  // Persist user message immediately (before agent loop) so prompts
+  // from web/CLI are written to the database on receipt.
+  try {
+    await sessionStore.saveMessages(sessionId, session.messages);
+  } catch (err) {
+    logger.warn("Failed to persist message on receipt", "api/agent", {
+      sessionId,
+      errorMessage: (err as Error).message,
+    });
+  }
+
   const { readable, writer } = createNDJSONStream();
 
   // Kick off agent loop asynchronously

@@ -114,6 +114,22 @@ export interface Conversation {
 export type ConversationMeta = Omit<Conversation, "messages" | "pendingConfirmation">;
 
 // ─────────────────────────────────────────────────────────────
+//  Teams Mapping (Cosmos DB persistence)
+// ─────────────────────────────────────────────────────────────
+
+export type TeamsChannelType = "thread" | "dm";
+
+export interface TeamsMapping {
+  id: string;
+  sessionId: string;
+  channelType: TeamsChannelType;
+  teamId: string | null;
+  createdAt: string;
+  lastActivityAt: string;
+  ttl?: number;
+}
+
+// ─────────────────────────────────────────────────────────────
 //  Request / Response
 // ─────────────────────────────────────────────────────────────
 
