@@ -10,6 +10,8 @@ import type {
   ResetPasswordInput,
   IsolateMachineInput,
   UnisolateMachineInput,
+  GetFullToolResultInput,
+  Message,
 } from "./types";
 
 // ── Input Validation Helpers ──────────────────────────────────
@@ -300,6 +302,42 @@ async function unisolate_machine({ hostname, platform, justification }: Unisolat
   return await res.json();
 }
 
+// ── Context Retrieval ─────────────────────────────────────────
+
+// Anthropic tool_use_id format: "toolu_" followed by alphanumerics
+const TOOL_USE_ID_RE = /^toolu_[A-Za-z0-9]{10,64}$/;
+
+function get_full_tool_result(
+  { tool_use_id }: GetFullToolResultInput,
+  sessionMessages?: Message[],
+): unknown {
+  if (!TOOL_USE_ID_RE.test(tool_use_id)) {
+    return { error: "Invalid tool_use_id format." };
+  }
+
+  if (!sessionMessages) {
+    return { error: "Session context not available for tool result retrieval." };
+  }
+
+  // Search backward through messages for the matching tool_result
+  for (let i = sessionMessages.length - 1; i >= 0; i--) {
+    const msg = sessionMessages[i];
+    if (!Array.isArray(msg.content)) continue;
+
+    for (const block of msg.content) {
+      if (
+        block.type === "tool_result" &&
+        (block as { tool_use_id: string }).tool_use_id === tool_use_id
+      ) {
+        const content = (block as { content?: string | unknown[] }).content;
+        return { tool_use_id, content: content ?? null };
+      }
+    }
+  }
+
+  return { error: `No tool result found with tool_use_id: ${tool_use_id}` };
+}
+
 // ── Router ────────────────────────────────────────────────────
 
 const executors: Record<string, (input: Record<string, unknown>) => Promise<unknown>> = {
@@ -313,8 +351,21 @@ const executors: Record<string, (input: Record<string, unknown>) => Promise<unkn
   unisolate_machine: (input) => unisolate_machine(input as unknown as UnisolateMachineInput),
 };
 
-export async function executeTool(toolName: string, toolInput: Record<string, unknown>): Promise<unknown> {
+export interface ExecuteToolContext {
+  sessionMessages?: Message[];
+}
+
+export async function executeTool(
+  toolName: string,
+  toolInput: Record<string, unknown>,
+  context?: ExecuteToolContext,
+): Promise<unknown> {
   logger.debug(`Executing tool: ${toolName}`, "executors", { toolName });
+
+  if (toolName === "get_full_tool_result") {
+    return get_full_tool_result(toolInput as unknown as GetFullToolResultInput, context?.sessionMessages);
+  }
+
   const fn = executors[toolName];
   if (!fn) {
     logger.error(`Unknown tool: ${toolName}`, "executors", { toolName });

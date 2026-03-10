@@ -5,6 +5,7 @@ import { executeTool } from "./executors";
 import { getToolsForRole, type Role } from "./permissions";
 import { logger } from "./logger";
 import { wrapToolResult } from "./injection-guard";
+import { prepareMessages } from "./context-manager";
 import type { Message, AgentLoopResult, AgentCallbacks, PendingTool } from "./types";
 
 const client = new Anthropic({ apiKey: env.ANTHROPIC_API_KEY });
@@ -20,6 +21,19 @@ async function createWithRetry(
       return await client.messages.create(params);
     } catch (err: unknown) {
       const status = (err as { status?: number }).status;
+
+      // 400 errors are deterministic — never retry them
+      if (status === 400) {
+        const msg = (err as { message?: string }).message ?? "";
+        if (msg.includes("prompt is too long")) {
+          logger.warn("Prompt exceeded token limit despite context management", "agent", { message: msg });
+          throw new Error(
+            "The conversation has grown too large for the model's context window. Please start a new session."
+          );
+        }
+        throw new Error(`Request error: ${msg || "invalid request"}`);
+      }
+
       const isRetryable = status !== undefined && RETRYABLE_STATUS.has(status);
 
       if (!isRetryable || attempt === MAX_RETRIES) {
@@ -51,16 +65,29 @@ export async function runAgentLoop(
   const localMessages: Message[] = [...messages];
   logger.info("Agent loop started", "agent", { role });
 
+  const systemPrompt = getSystemPrompt(role);
+  const systemPromptTokenEstimate = Math.ceil(systemPrompt.length / 4);
+  let lastInputTokens: number | null = null;
+
   while (true) {
     if (callbacks.onThinking) callbacks.onThinking();
+
+    // Prepare messages: truncate oversized tool results, compress if near limit
+    const prepared = await prepareMessages(localMessages, lastInputTokens, systemPromptTokenEstimate);
+
+    if (prepared.trimmed && callbacks.onContextTrimmed) {
+      callbacks.onContextTrimmed(prepared.originalTokens, prepared.newTokens, prepared.method!);
+    }
 
     const response = await createWithRetry({
       model: "claude-opus-4-5",
       max_tokens: 4096,
-      system: getSystemPrompt(role),
+      system: systemPrompt,
       tools: getToolsForRole(role),
-      messages: localMessages,
+      messages: prepared.messages,
     });
+
+    lastInputTokens = response.usage.input_tokens;
 
     localMessages.push({ role: "assistant", content: response.content });
 
@@ -101,7 +128,9 @@ export async function runAgentLoop(
 
         // Execute the tool
         try {
-          const result = await executeTool(name, input as Record<string, unknown>);
+          const result = await executeTool(name, input as Record<string, unknown>, {
+            sessionMessages: localMessages,
+          });
           toolResults.push({
             type: "tool_result",
             tool_use_id: id,
@@ -201,7 +230,7 @@ export async function resumeAfterConfirmation(
     logger.info("Tool confirmed", "agent", { toolName: name, toolId: id });
     if (callbacks.onToolCall) callbacks.onToolCall(name, input);
     try {
-      const result = await executeTool(name, input);
+      const result = await executeTool(name, input, { sessionMessages: localMessages });
       toolResult = {
         type: "tool_result",
         tool_use_id: id,

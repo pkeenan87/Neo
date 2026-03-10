@@ -8,6 +8,13 @@ import { getSkillsForRole } from "./skill-store";
 const __dirname = dirname(fileURLToPath(import.meta.url));
 dotenv.config({ path: resolve(__dirname, "../../.env") });
 
+// ── Context Window Management ────────────────────────────────
+// All values are in estimated tokens (not characters).
+export const CONTEXT_TOKEN_LIMIT = 180_000;
+export const TRIM_TRIGGER_THRESHOLD = 160_000;
+export const PER_TOOL_RESULT_TOKEN_CAP = 50_000;
+export const PRESERVED_RECENT_MESSAGES = 10;
+
 export const env: EnvConfig = {
   ANTHROPIC_API_KEY:       process.env.ANTHROPIC_API_KEY,
   AZURE_TENANT_ID:         process.env.AZURE_TENANT_ID,

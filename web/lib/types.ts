@@ -50,7 +50,8 @@ export type AgentEventType =
   | "tool_call"
   | "confirmation_required"
   | "response"
-  | "error";
+  | "error"
+  | "context_trimmed";
 
 export type AgentEvent =
   | { type: "session"; sessionId: string }
@@ -58,7 +59,8 @@ export type AgentEvent =
   | { type: "tool_call"; tool: string; input: Record<string, unknown> }
   | { type: "confirmation_required"; tool: PendingTool }
   | { type: "response"; text: string }
-  | { type: "error"; message: string; code?: string };
+  | { type: "error"; message: string; code?: string }
+  | { type: "context_trimmed"; originalTokens: number; newTokens: number; method: "truncation" | "summary" };
 
 // ─────────────────────────────────────────────────────────────
 //  Session
@@ -155,6 +157,11 @@ export type AgentLoopResult =
 export interface AgentCallbacks {
   onThinking?: () => void;
   onToolCall?: (name: string, input: Record<string, unknown>) => void;
+  /**
+   * Fired each time context is trimmed within a single agent loop run.
+   * May fire multiple times if truncation recurs on subsequent turns.
+   */
+  onContextTrimmed?: (originalTokens: number, newTokens: number, method: "truncation" | "summary") => void;
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -206,4 +213,8 @@ export interface UnisolateMachineInput {
   hostname: string;
   platform: "defender" | "crowdstrike";
   justification: string;
+}
+
+export interface GetFullToolResultInput {
+  tool_use_id: string;
 }

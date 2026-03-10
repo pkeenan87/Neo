@@ -114,6 +114,9 @@ export async function POST(request: NextRequest) {
           onToolCall: (name, input) => {
             void writer.write(encodeNDJSON({ type: "tool_call", tool: name, input })).catch(() => {});
           },
+          onContextTrimmed: (originalTokens, newTokens, method) => {
+            void writer.write(encodeNDJSON({ type: "context_trimmed", originalTokens, newTokens, method })).catch(() => {});
+          },
         },
         session.role,
         sessionId

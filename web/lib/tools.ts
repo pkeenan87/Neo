@@ -184,6 +184,24 @@ AuditLogs, CommonSecurityLog, DeviceEvents, IdentityLogonEvents, etc.`,
       required: ["hostname", "platform", "justification"],
     },
   },
+  // Read-only but returns sensitive data that was intentionally truncated from
+  // context. Available to all roles since it only accesses the current session.
+  {
+    name: "get_full_tool_result",
+    description:
+      "Retrieve the full, untruncated content of a previous tool result that was truncated to fit the context window. " +
+      "Use this when a tool result was cut short and you need the complete data.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        tool_use_id: {
+          type: "string",
+          description: "The tool_use_id of the truncated tool result to retrieve in full",
+        },
+      },
+      required: ["tool_use_id"],
+    },
+  },
 ];
 
 export const DESTRUCTIVE_TOOLS = new Set([
