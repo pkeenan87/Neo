@@ -49,6 +49,7 @@ neo/
 │       ├── stream.ts       # NDJSON streaming helpers
 │       ├── auth-helpers.ts # Request authentication resolver
 │       ├── api-key-store.ts # API key lookup with hot-reload
+│       ├── context-manager.ts # Context window management (truncation + compression)
 │       ├── injection-guard.ts # Prompt injection scanner + trust boundary wrapper
 │       ├── logger.ts       # Structured logger (console + Azure Event Hub)
 │       └── config.ts       # Server environment config
@@ -115,11 +116,20 @@ See [docs/configuration.md](docs/configuration.md) for Entra ID setup and all co
 | `get_xdr_alert` | Read-only | Get full alert details from Defender/CrowdStrike |
 | `search_xdr_by_host` | Read-only | Search alerts by hostname |
 | `get_user_info` | Read-only | Look up Entra ID user details and risk |
+| `get_full_tool_result` | Read-only | Retrieve full content of a previously truncated tool result |
 | `reset_user_password` | Destructive | Force password reset + session revocation |
 | `isolate_machine` | Destructive | Network-isolate an endpoint |
 | `unisolate_machine` | Destructive | Release an isolated machine |
 
 Read-only tools execute automatically. Destructive tools pause for human confirmation before executing.
+
+## Context Window Management
+
+Neo automatically manages the Claude API's 200K token context window to prevent failures during long investigations:
+
+- **Per-tool-result cap**: Individual tool results exceeding 50K tokens are truncated with a notice. The agent can retrieve the full result via `get_full_tool_result`.
+- **Rolling compression**: When the conversation approaches 160K tokens, older messages are summarized by Claude Haiku and replaced with a compact summary, preserving the most recent messages.
+- **Token tracking**: Uses the API's `usage.input_tokens` field for accurate context size tracking after each turn, with a character-count heuristic as fallback for the first call.
 
 ## Roles
 

@@ -113,6 +113,15 @@ INJECTION_GUARD_MODE=monitor
 | `LOG_LEVEL` | No | Minimum log level: `debug`, `info` (default), `warn`, `error` |
 | `INJECTION_GUARD_MODE` | No | `monitor` (default) or `block`. Controls prompt injection response |
 
+**Context window thresholds** (hardcoded in `web/lib/config.ts`, not environment variables):
+
+| Constant | Value | Description |
+|----------|-------|-------------|
+| `CONTEXT_TOKEN_LIMIT` | 180,000 | Maximum token budget for API calls |
+| `TRIM_TRIGGER_THRESHOLD` | 160,000 | Token count that triggers conversation compression |
+| `PER_TOOL_RESULT_TOKEN_CAP` | 50,000 | Maximum tokens per individual tool result before truncation |
+| `PRESERVED_RECENT_MESSAGES` | 10 | Number of recent messages always preserved during compression |
+
 ### API Key Management
 
 API keys are stored in `web/api-keys.json`:
@@ -455,10 +464,33 @@ Use the provisioning script to create the Cosmos DB infrastructure:
 | `-AccountName` | `neo-cosmos-db` | Cosmos DB account name (globally unique) |
 | `-DatabaseName` | `neo-db` | Database name |
 | `-ContainerName` | `conversations` | Container name |
+| `-MappingsContainerName` | `teams-mappings` | Teams mapping container name |
 | `-Location` | `eastus` | Azure region |
 | `-PartitionKeyPath` | `/ownerId` | Partition key path |
 
-The script creates the account in serverless capacity mode (pay-per-request), enables the TTL policy on the container, and assigns the **Cosmos DB Built-in Data Contributor** role to the currently logged-in Azure CLI user.
+The script creates the account in serverless capacity mode (pay-per-request), creates both the `conversations` container (partition key `/ownerId`) and the `teams-mappings` container (partition key `/id`) with 90-day TTL, and assigns the **Cosmos DB Built-in Data Contributor** role to the currently logged-in Azure CLI user.
+
+### Adding the Teams Mappings Container to an Existing Cosmos DB
+
+If your Cosmos DB was provisioned before the Teams integration was added, the `teams-mappings` container will be missing. Use the migration script to add it:
+
+```powershell
+# Default — adds teams-mappings to neo-cosmos / neo-db
+./scripts/add-teams-mappings-container.ps1
+
+# Custom account name
+./scripts/add-teams-mappings-container.ps1 -AccountName "neo-cosmos-prod"
+```
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `-ResourceGroupName` | `neo-rg` | Azure Resource Group name |
+| `-AccountName` | `neo-cosmos` | Existing Cosmos DB account name |
+| `-DatabaseName` | `neo-db` | Existing database name |
+| `-ContainerName` | `teams-mappings` | Container name to create |
+| `-DefaultTtl` | `7776000` (90 days) | Document TTL in seconds |
+
+The script verifies the account and database exist before creating the container. It is idempotent — safe to re-run if the container already exists. No `.env` changes are needed since the Teams mappings container uses the same `COSMOS_ENDPOINT` as conversations.
 
 After provisioning, set the endpoint in your `.env`:
 

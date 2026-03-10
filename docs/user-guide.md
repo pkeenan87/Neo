@@ -164,7 +164,7 @@ The agent will:
 2. Analyze the results.
 3. Return a summary with recommendations.
 
-You can ask follow-up questions in the same session — the agent remembers the full conversation context.
+You can ask follow-up questions in the same session — the agent remembers the full conversation context. For long investigations with many tool calls, the agent automatically compresses older context to stay within the model's token limit while preserving key findings.
 
 ### Understanding Tool Calls
 
@@ -640,6 +640,7 @@ Neo includes built-in protection against prompt injection attacks. This is trans
 | `get_xdr_alert` | Retrieve full alert details from Defender for Endpoint or CrowdStrike. Includes process tree, file hashes, network connections. | All |
 | `search_xdr_by_host` | Search for all recent alerts on a hostname or IP. Useful for host-based investigations. | All |
 | `get_user_info` | Look up an Entra ID user: account status, MFA, groups, devices, risk level. | All |
+| `get_full_tool_result` | Retrieve the full, untruncated content of a previous tool result that was truncated to fit the context window. | All |
 | `reset_user_password` | Force password reset. Optionally revokes all sessions and refresh tokens. Requires confirmation and justification. | Admin |
 | `isolate_machine` | Network-isolate a machine via Defender or CrowdStrike. Requires confirmation and justification. | Admin |
 | `unisolate_machine` | Release a previously isolated machine. Requires confirmation and justification. | Admin |
@@ -700,4 +701,5 @@ All endpoints require authentication via `Authorization: Bearer <api-key>` heade
 | `tool_call` | `tool`, `input` | Agent is calling a tool |
 | `confirmation_required` | `tool: { id, name, input }` | Destructive tool needs user confirmation |
 | `response` | `text` | Final agent response |
+| `context_trimmed` | `originalTokens`, `newTokens`, `method` | Context window was trimmed to stay within token limits. `method` is `"truncation"` (per-result cap) or `"summary"` (conversation compression). |
 | `error` | `message`, `code` | An error occurred |

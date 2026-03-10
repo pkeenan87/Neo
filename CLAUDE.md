@@ -58,6 +58,7 @@ Next.js app with server-side Claude API integration.
 
 - **`app/`** — Next.js app router pages and API routes
 - **`lib/`** — Shared server-side logic (agent, tools, executors, auth, config, types)
+- **`lib/context-manager.ts`** — Context window management: token estimation, per-tool-result truncation, Haiku-powered rolling conversation compression
 
 ## Key Design Patterns
 
@@ -66,6 +67,8 @@ Next.js app with server-side Claude API integration.
 **Tool classification**: Tools are either read-only (executed autonomously) or destructive (require confirmation). This is controlled by the `DESTRUCTIVE_TOOLS` Set in `tools.js`.
 
 **Mock/Live dual-path**: Every executor function checks `env.MOCK_MODE` and branches to either mock data or real API calls. When adding new tools, follow this same pattern.
+
+**Context window management**: The `context-manager.ts` module sits between the session's full message history and the Claude API call. Before each API call, `prepareMessages()` truncates oversized tool results (50K token cap), and compresses older messages via Haiku when context exceeds 160K tokens. Full untrimmed messages remain in session storage. The `get_full_tool_result` tool lets the agent re-fetch truncated results.
 
 ## Adding a New Tool (CLI)
 
