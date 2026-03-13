@@ -36,9 +36,9 @@ The web UI currently displays a generic Lucide `<User />` icon as the user's ava
 
 ## Open Questions
 
-- Should the photo be stored as a base64 data URL in the JWT session token, or fetched server-side and served via an API route (e.g., `/api/me/photo`)? The JWT approach is simpler but may hit size limits for large photos.
-- Should we request additional Microsoft Graph scopes (e.g., `User.Read` already covers `/me/photo`), or is the current scope sufficient?
-- Should the avatar also appear in the chat message bubbles next to user messages, or only in the sidebar footer?
+- Should the photo be stored as a base64 data URL in the JWT session token, or fetched server-side and served via an API route (e.g., `/api/me/photo`)? The JWT approach is simpler but may hit size limits for large photos. JWT
+- Should we request additional Microsoft Graph scopes (e.g., `User.Read` already covers `/me/photo`), or is the current scope sufficient? thats sufficient
+- Should the avatar also appear in the chat message bubbles next to user messages, or only in the sidebar footer? also in chat message bubbles, good idea
 
 ## Testing Guidelines
 
