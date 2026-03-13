@@ -36,9 +36,9 @@ CLI and Teams conversations are stored in Cosmos DB without titles, showing as "
 
 ## Open Questions
 
-- Should we wire up the existing `title-generator.ts` (Haiku-based) for richer titles, or is the simple first-message extraction sufficient?
-- If using Haiku-based titles, should it apply to all channels or just Teams (where the first message may be more conversational and less suitable as a title)?
-- Should `title-generator.ts` be deleted if we decide not to use it, to avoid dead code?
+- Should we wire up the existing `title-generator.ts` (Haiku-based) for richer titles, or is the simple first-message extraction sufficient? yes use the existing
+- If using Haiku-based titles, should it apply to all channels or just Teams (where the first message may be more conversational and less suitable as a title)? all channels
+- Should `title-generator.ts` be deleted if we decide not to use it, to avoid dead code? keep it.
 
 ## Testing Guidelines
 
