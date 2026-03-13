@@ -8,6 +8,7 @@ import { runAgentLoop, confirmTool } from "./agent.js";
 import { fetchConversations } from "./server-client.js";
 import { login, logout, status, getAccessToken } from "./auth-entra.js";
 import { readConfig, writeConfig } from "./config-store.js";
+import { formatForTerminal } from "./format-terminal.js";
 
 const REFRESH_INTERVAL_MS = 4 * 60 * 1000; // 4 minutes — must be shorter than the 5-minute buffer in getAccessToken()
 
@@ -98,18 +99,23 @@ function printToolCall(name, input) {
   }
 }
 
-const terminalMarkdown = new Marked(
-  markedTerminal({
-    width: process.stdout.columns || 80,
-    reflowText: true,
-    showSectionPrefix: false,
-    tab: 2,
-  })
-);
+function createTerminalMarkdown() {
+  return new Marked(
+    markedTerminal({
+      width: process.stdout.columns || 80,
+      reflowText: true,
+      showSectionPrefix: false,
+      tab: 2,
+      emoji: false,
+    })
+  );
+}
 
 function printResponse(text) {
   const normalized = text.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
-  const rendered = terminalMarkdown.parse(normalized);
+  const formatted = formatForTerminal(normalized);
+  const md = createTerminalMarkdown();
+  const rendered = md.parse(formatted);
   console.log("\n" + rendered);
 }
 
