@@ -25,13 +25,14 @@ export default async function ChatLayout({
     redirect('/')
   }
 
-  const { userName, userRole, ownerId } = authCtx
+  const { userName, userRole, ownerId, userImage } = authCtx
   const initialConversations = ownerId ? await fetchConversations(ownerId) : []
 
   return (
     <ChatLayoutClient
       userName={userName}
       userRole={userRole}
+      userImage={userImage}
       initialConversations={initialConversations}
     >
       {children}

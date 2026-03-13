@@ -60,7 +60,7 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
       if (isOnChat) return isLoggedIn;
       return true;
     },
-    jwt({ token, user, account, profile }) {
+    async jwt({ token, user, account, profile }) {
       // On initial sign-in, persist role, provider, and AAD object ID into the JWT
       if (account && user) {
         if (account.provider === "microsoft-entra-id") {
@@ -85,6 +85,26 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
             (entraProfile?.oid as string) ??
             (entraProfile?.sub as string) ??
             user.id;
+
+          // Fetch profile photo from Microsoft Graph (fire-and-forget on failure)
+          if (account.access_token) {
+            try {
+              const photoRes = await fetch(
+                "https://graph.microsoft.com/v1.0/me/photos/48x48/$value",
+                { headers: { Authorization: `Bearer ${account.access_token}` } },
+              );
+              if (photoRes.ok) {
+                const buf = await photoRes.arrayBuffer();
+                const base64 = Buffer.from(buf).toString("base64");
+                const contentType = photoRes.headers.get("content-type") ?? "image/jpeg";
+                token.picture = `data:${contentType};base64,${base64}`;
+              }
+            } catch (err) {
+              logger.warn("Failed to fetch Entra ID profile photo", "auth", {
+                errorMessage: err instanceof Error ? err.message : String(err),
+              });
+            }
+          }
         } else if (account.provider === "api-key") {
           token.role = (user as Record<string, unknown>).role as Role;
           token.authProvider = "api-key";
@@ -98,6 +118,7 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
         user.role = token.role;
         user.authProvider = token.authProvider;
         user.oid = token.oid;
+        user.image = token.picture;
       }
       return session;
     },

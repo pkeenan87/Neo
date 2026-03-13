@@ -6,6 +6,7 @@ import type { ConversationMeta } from '@/lib/types'
 interface ChatLayoutValue {
   userName: string
   userRole: string
+  userImage?: string
   initialConversations: ConversationMeta[]
 }
 

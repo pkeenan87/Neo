@@ -4,7 +4,6 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import Image from 'next/image'
 import { AnimatePresence, motion } from 'motion/react'
 import {
-  User,
   Plus,
   MessageSquare,
   Settings,
@@ -24,6 +23,7 @@ import { useTheme } from '@/context/ThemeContext'
 import { useConversationCache } from '@/context/ConversationCacheContext'
 import { MarkdownRenderer } from '@/components/MarkdownRenderer'
 import { ThinkingBubble } from '@/components/ThinkingBubble'
+import { UserAvatar } from '@/components/UserAvatar'
 import styles from './ChatInterface.module.css'
 import type { Conversation, ConversationMeta, PendingTool } from '@/lib/types'
 
@@ -76,6 +76,7 @@ export interface ChatInterfaceProps {
   onLogout: () => void
   userName?: string
   userRole?: string
+  userImage?: string
   initialConversations?: ConversationMeta[]
   initialConversation?: Conversation
   className?: string
@@ -132,6 +133,7 @@ export function ChatInterface({
   onLogout,
   userName = 'Operator',
   userRole = 'Reader',
+  userImage,
   initialConversations = [],
   initialConversation,
   className,
@@ -626,9 +628,7 @@ export function ChatInterface({
         {/* User profile + logout */}
         <div className={styles.sidebarFooter}>
           <div className={styles.userRow}>
-            <div className={styles.avatar}>
-              <User className="w-5 h-5" aria-hidden="true" />
-            </div>
+            <UserAvatar src={userImage} userName={userName} size={32} className={styles.avatar} />
             <div className={styles.userInfo}>
               <div className={styles.userName}>{userName}</div>
               <div className={styles.clearance}>
@@ -697,6 +697,11 @@ export function ChatInterface({
                 {msg.role === 'assistant' && (
                   <div className={styles.msgAvatarAssistant}>
                     <Image src="/neo-icon.png" alt="" width={32} height={32} className="rounded" />
+                  </div>
+                )}
+                {msg.role === 'user' && (
+                  <div className={styles.msgAvatarUser}>
+                    <UserAvatar src={userImage} userName={userName} size={32} decorative />
                   </div>
                 )}
 

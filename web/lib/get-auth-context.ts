@@ -5,6 +5,7 @@ interface AuthContext {
   userName: string;
   userRole: string;
   ownerId: string;
+  userImage?: string;
 }
 
 /**
@@ -29,5 +30,6 @@ export const getAuthContext = cache(async (): Promise<AuthContext | null> => {
     userRole: (user.role as string) ?? "admin",
     ownerId:
       (user.oid as string) ?? (user.id as string) ?? (user.name as string) ?? "",
+    userImage: (user.image as string) ?? undefined,
   };
 });
