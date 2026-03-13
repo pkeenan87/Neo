@@ -19,6 +19,7 @@ import {
   updateSessionId,
   refreshMapping,
 } from "@/lib/teams-session-map";
+import { extractAutoTitle, generateAndSetTitle } from "@/lib/title-utils";
 import type { PendingTool, AgentLoopResult, TeamsChannelType } from "@/lib/types";
 
 // ─────────────────────────────────────────────────────────────
@@ -336,7 +337,9 @@ async function handleTurn(context: TurnContext): Promise<void> {
 
     session.messages = result.messages;
     try {
-      await sessionStore.saveMessages(neoSessionId, result.messages);
+      // Haiku title upgrade is skipped here — the initial turn in Branch B
+      // already fired generateAndSetTitle; confirmations are mid-conversation.
+      await sessionStore.saveMessages(neoSessionId, result.messages, extractAutoTitle(result.messages));
     } catch (err) {
       logger.warn("Failed to persist Teams confirmation result", "teams", {
         sessionId: neoSessionId,
@@ -480,13 +483,17 @@ async function handleTurn(context: TurnContext): Promise<void> {
 
   session.messages = result.messages;
   try {
-    await sessionStore.saveMessages(resolvedSessionId, result.messages);
+    await sessionStore.saveMessages(resolvedSessionId, result.messages, extractAutoTitle(result.messages));
   } catch (err) {
     logger.warn("Failed to persist Teams agent response", "teams", {
       sessionId: resolvedSessionId,
       errorMessage: err instanceof Error ? err.message : String(err),
     });
   }
+
+  // Fire-and-forget: generate a richer Haiku title asynchronously
+  void generateAndSetTitle(resolvedSessionId, result.messages);
+
   await sendAgentResult(context, result, resolvedSessionId);
 }
 

@@ -24,6 +24,7 @@ export interface SessionStore {
   clearPendingConfirmation(id: string): Promise<PendingTool | null>;
   isRateLimited(id: string): Promise<boolean>;
   saveMessages(id: string, messages: Message[], title?: string): Promise<void>;
+  updateTitle(id: string, title: string): Promise<void>;
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -126,6 +127,10 @@ export class InMemorySessionStore implements SessionStore {
 
   async saveMessages(_id: string, _messages: Message[], _title?: string): Promise<void> {
     // No-op — in-memory store is already mutated via direct object reference
+  }
+
+  async updateTitle(_id: string, _title: string): Promise<void> {
+    // No-op — in-memory sessions don't persist titles
   }
 
   private sweep(): void {

@@ -1,13 +1,9 @@
 import { sessionStore } from "./session-factory";
 import { logger, hashPii } from "./logger";
-import type { AgentEvent, AgentLoopResult, Message, Session } from "./types";
+import { extractAutoTitle, generateAndSetTitle } from "./title-utils";
+import type { AgentEvent, AgentLoopResult, Session } from "./types";
 
 const encoder = new TextEncoder();
-
-const MAX_TITLE_LENGTH = 200;
-
-// Strip control characters (C0/C1) except common whitespace
-const CONTROL_CHAR_RE = /[\x00-\x08\x0B\x0C\x0E-\x1F\x7F-\x9F]/g;
 
 export function encodeNDJSON(event: AgentEvent): Uint8Array {
   return encoder.encode(JSON.stringify(event) + "\n");
@@ -22,28 +18,6 @@ export function createNDJSONStream(): {
     readable: transform.readable,
     writer: transform.writable.getWriter(),
   };
-}
-
-function extractAutoTitle(messages: Message[]): string | undefined {
-  const firstUser = messages.find((m) => m.role === "user");
-  if (!firstUser) return undefined;
-
-  let text: string;
-  if (typeof firstUser.content === "string") {
-    text = firstUser.content;
-  } else if (Array.isArray(firstUser.content)) {
-    text = firstUser.content
-      .filter((b): b is { type: "text"; text: string } => b.type === "text")
-      .map((b) => b.text)
-      .join(" ");
-  } else {
-    return undefined;
-  }
-
-  text = text.replace(CONTROL_CHAR_RE, "").trim();
-  if (!text) return undefined;
-  if (text.length <= MAX_TITLE_LENGTH) return text;
-  return text.slice(0, MAX_TITLE_LENGTH) + "...";
 }
 
 export async function writeAgentResult(
@@ -70,5 +44,10 @@ export async function writeAgentResult(
       sessionId: hashPii(sessionId),
       errorMessage: (err as Error).message,
     });
+  }
+
+  // Fire-and-forget: generate a richer Haiku title asynchronously
+  if (result.type !== "confirmation_required") {
+    void generateAndSetTitle(sessionId, result.messages);
   }
 }

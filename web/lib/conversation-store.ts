@@ -372,6 +372,12 @@ export class CosmosSessionStore implements SessionStore {
     }
   }
 
+  async updateTitle(id: string, title: string): Promise<void> {
+    const ownerId = await this.resolveOwner(id);
+    if (!ownerId) return;
+    await updateTitle(id, ownerId, title);
+  }
+
   /**
    * Resolve ownerId for a conversation id.
    * Checks the in-memory cache first, then falls back to a cross-partition query.
