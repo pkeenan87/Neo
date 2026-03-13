@@ -87,7 +87,7 @@ async function processStream(response, callbacks) {
  * Send a message to the agent and stream the response.
  */
 export async function streamMessage(serverUrl, getAuthHeader, sessionId, message, callbacks) {
-  const body = { message };
+  const body = { message, channel: "cli" };
   if (sessionId) body.sessionId = sessionId;
 
   let authHeader;
@@ -171,7 +171,7 @@ export async function fetchConversations(serverUrl, getAuthHeader) {
     throw err;
   }
 
-  const res = await fetch(`${serverUrl}/api/conversations`, {
+  const res = await fetch(`${serverUrl}/api/conversations?channel=cli`, {
     headers: { Authorization: authHeader },
   });
 

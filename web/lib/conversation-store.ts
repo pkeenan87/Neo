@@ -91,20 +91,33 @@ export async function getConversation(
 
 export async function listConversations(
   ownerId: string,
+  channel?: Channel,
 ): Promise<ConversationMeta[]> {
   const container = getContainer();
+
+  const query = channel
+    ? `SELECT c.id, c.ownerId, c.title, c.createdAt, c.updatedAt,
+              c.messageCount, c.role, c.channel
+       FROM c
+       WHERE c.ownerId = @ownerId AND c.channel = @channel
+       ORDER BY c.updatedAt DESC
+       OFFSET 0 LIMIT 50`
+    : `SELECT c.id, c.ownerId, c.title, c.createdAt, c.updatedAt,
+              c.messageCount, c.role, c.channel
+       FROM c
+       WHERE c.ownerId = @ownerId
+       ORDER BY c.updatedAt DESC
+       OFFSET 0 LIMIT 50`;
+
+  const parameters: { name: string; value: string }[] = [
+    { name: "@ownerId", value: ownerId },
+  ];
+  if (channel) {
+    parameters.push({ name: "@channel", value: channel });
+  }
+
   const { resources } = await container.items
-    .query<ConversationMeta>({
-      query: `
-        SELECT c.id, c.ownerId, c.title, c.createdAt, c.updatedAt,
-               c.messageCount, c.role, c.channel
-        FROM c
-        WHERE c.ownerId = @ownerId
-        ORDER BY c.updatedAt DESC
-        OFFSET 0 LIMIT 50
-      `,
-      parameters: [{ name: "@ownerId", value: ownerId }],
-    })
+    .query<ConversationMeta>({ query, parameters })
     .fetchAll();
   return resources;
 }

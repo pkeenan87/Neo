@@ -97,7 +97,12 @@ export interface SessionMeta {
 //  Conversation (Cosmos DB persistence)
 // ─────────────────────────────────────────────────────────────
 
-export type Channel = "web" | "cli" | "teams";
+export const CHANNELS = ["web", "cli", "teams"] as const;
+export type Channel = (typeof CHANNELS)[number];
+
+export function isChannel(value: string | null | undefined): value is Channel {
+  return typeof value === "string" && (CHANNELS as readonly string[]).includes(value);
+}
 
 export interface Conversation {
   id: string;
@@ -138,6 +143,7 @@ export interface TeamsMapping {
 export interface AgentRequest {
   sessionId?: string;
   message: string;
+  channel?: Channel;
 }
 
 export interface ConfirmRequest {

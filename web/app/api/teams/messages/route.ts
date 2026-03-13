@@ -229,6 +229,24 @@ async function sendAgentResult(
 }
 
 // ─────────────────────────────────────────────────────────────
+//  Per-conversation turn serialization
+//
+//  The Bot Framework adapter does not serialize concurrent turns
+//  for the same conversation. Without this lock, two messages
+//  arriving in quick succession can race on session state and
+//  cause one turn's saveMessages to overwrite the other's result.
+// ─────────────────────────────────────────────────────────────
+
+const turnLocks = new Map<string, Promise<void>>();
+
+function serializeTurn(conversationId: string, fn: () => Promise<void>): Promise<void> {
+  const prev = turnLocks.get(conversationId) ?? Promise.resolve();
+  const next = prev.then(fn, fn); // run even if the previous turn failed
+  turnLocks.set(conversationId, next.catch(() => {})); // never let the chain reject
+  return next;
+}
+
+// ─────────────────────────────────────────────────────────────
 //  Turn handler
 // ─────────────────────────────────────────────────────────────
 
@@ -317,6 +335,14 @@ async function handleTurn(context: TurnContext): Promise<void> {
     );
 
     session.messages = result.messages;
+    try {
+      await sessionStore.saveMessages(neoSessionId, result.messages);
+    } catch (err) {
+      logger.warn("Failed to persist Teams confirmation result", "teams", {
+        sessionId: neoSessionId,
+        errorMessage: err instanceof Error ? err.message : String(err),
+      });
+    }
     await sendAgentResult(context, result, neoSessionId);
     return;
   }
@@ -453,6 +479,14 @@ async function handleTurn(context: TurnContext): Promise<void> {
   const result = await runAgentLoop(session.messages, {}, session.role, resolvedSessionId);
 
   session.messages = result.messages;
+  try {
+    await sessionStore.saveMessages(resolvedSessionId, result.messages);
+  } catch (err) {
+    logger.warn("Failed to persist Teams agent response", "teams", {
+      sessionId: resolvedSessionId,
+      errorMessage: err instanceof Error ? err.message : String(err),
+    });
+  }
   await sendAgentResult(context, result, resolvedSessionId);
 }
 
@@ -513,7 +547,10 @@ export async function POST(request: Request): Promise<Response> {
   };
 
   try {
-    await getAdapter().process(fakeReq as never, fakeRes as never, handleTurn);
+    await getAdapter().process(fakeReq as never, fakeRes as never, (ctx) => {
+      const conversationId = ctx.activity?.conversation?.id ?? "unknown";
+      return serializeTurn(conversationId, () => handleTurn(ctx));
+    });
   } catch (err) {
     logger.error("Adapter process error", "teams", {
       errorMessage: (err as Error).message,

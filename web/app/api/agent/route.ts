@@ -5,6 +5,7 @@ import { createNDJSONStream, encodeNDJSON, writeAgentResult } from "@/lib/stream
 import { resolveAuth } from "@/lib/auth-helpers";
 import { scanUserInput, shouldBlock } from "@/lib/injection-guard";
 import { logger } from "@/lib/logger";
+import { isChannel } from "@/lib/types";
 import type { AgentRequest } from "@/lib/types";
 
 export async function POST(request: NextRequest) {
@@ -68,7 +69,8 @@ export async function POST(request: NextRequest) {
     }
     sessionId = body.sessionId;
   } else {
-    sessionId = await sessionStore.create(identity.role, identity.ownerId);
+    const channel = isChannel(body.channel) ? body.channel : "web";
+    sessionId = await sessionStore.create(identity.role, identity.ownerId, channel);
   }
 
   const session = (await sessionStore.get(sessionId))!;

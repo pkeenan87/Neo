@@ -9,7 +9,7 @@ async function fetchConversations(ownerId: string): Promise<ConversationMeta[]> 
     if (!env.COSMOS_ENDPOINT || env.MOCK_MODE) return []
 
     const { listConversations } = await import('@/lib/conversation-store')
-    return await listConversations(ownerId)
+    return await listConversations(ownerId, 'web')
   } catch {
     return []
   }

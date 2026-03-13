@@ -78,6 +78,7 @@ function printBanner() {
 }
 
 function printToolCall(name, input) {
+  clearThinking();
   const color = TOOL_COLORS[name] || chalk.white;
   const prefix = DESTRUCTIVE_TOOLS.has(name) ? "[DESTRUCTIVE] " : "[tool] ";
 
@@ -112,8 +113,27 @@ function printResponse(text) {
   console.log("\n" + rendered);
 }
 
+const SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+let spinnerInterval = null;
+let spinnerFrame = 0;
+
 function printThinking() {
-  process.stdout.write(chalk.gray("\n⏳ Thinking...\r"));
+  clearThinking();
+  process.stdout.write("\n");
+  spinnerFrame = 0;
+  spinnerInterval = setInterval(() => {
+    const frame = SPINNER_FRAMES[spinnerFrame % SPINNER_FRAMES.length];
+    process.stdout.write(chalk.gray(`\r  ${frame} Thinking...`));
+    spinnerFrame++;
+  }, 80);
+}
+
+function clearThinking() {
+  if (spinnerInterval) {
+    clearInterval(spinnerInterval);
+    spinnerInterval = null;
+    process.stdout.write("\r\x1b[2K");
+  }
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -390,12 +410,13 @@ async function main() {
 
       // Final response
       if (result.type === "response") {
-        process.stdout.write("                    \r"); // clear "Thinking..." line
+        clearThinking();
         console.log(chalk.bold.green("\n🤖 Agent:"));
         printResponse(result.text);
       }
 
     } catch (err) {
+      clearThinking();
       console.error(chalk.red(`\n❌ Error: ${err.message}`));
       if (err.code) {
         console.error(chalk.gray(`   Code: ${err.code}`));

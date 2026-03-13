@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react'
 import Image from 'next/image'
-import { motion } from 'motion/react'
+import { AnimatePresence, motion } from 'motion/react'
 import {
   User,
   Plus,
@@ -23,6 +23,7 @@ import {
 import { useTheme } from '@/context/ThemeContext'
 import { useConversationCache } from '@/context/ConversationCacheContext'
 import { MarkdownRenderer } from '@/components/MarkdownRenderer'
+import { ThinkingBubble } from '@/components/ThinkingBubble'
 import styles from './ChatInterface.module.css'
 import type { Conversation, ConversationMeta, PendingTool } from '@/lib/types'
 
@@ -157,6 +158,7 @@ export function ChatInterface({
     initialConversation?.pendingConfirmation ?? null
   )
   const [currentToolName, setCurrentToolName] = useState<string | null>(null)
+  const [isThinking, setIsThinking] = useState(false)
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const editInputRef = useRef<HTMLInputElement>(null)
@@ -205,7 +207,7 @@ export function ChatInterface({
 
   const refreshConversations = useCallback(async () => {
     try {
-      const res = await fetch('/api/conversations')
+      const res = await fetch('/api/conversations?channel=web')
       if (res.ok) {
         const data = await res.json()
         setConversations(data.conversations ?? [])
@@ -388,14 +390,17 @@ export function ChatInterface({
               }
               break
             case 'thinking':
+              setIsThinking(true)
               break
             case 'tool_call':
+              setIsThinking(false)
               if (toolsUsed.length < MAX_TOOLS) {
                 toolsUsed.push(event.tool)
               }
               setCurrentToolName(event.tool)
               break
             case 'confirmation_required':
+              setIsThinking(false)
               setPendingConfirmation(event.tool)
               setMessages(prev => [
                 ...prev,
@@ -407,6 +412,7 @@ export function ChatInterface({
               ])
               break
             case 'response':
+              setIsThinking(false)
               setMessages(prev => [
                 ...prev,
                 {
@@ -418,6 +424,7 @@ export function ChatInterface({
               ])
               break
             case 'error':
+              setIsThinking(false)
               setMessages(prev => [
                 ...prev,
                 {
@@ -436,6 +443,7 @@ export function ChatInterface({
     }
 
     setCurrentToolName(null)
+    setIsThinking(false)
   }
 
   const handleSendMessage = async () => {
@@ -726,27 +734,47 @@ export function ChatInterface({
               </motion.div>
             ))}
 
-            {isLoading && (
-              <motion.div
-                initial={{ opacity: 0 }}
-                animate={{ opacity: 1 }}
-                className={styles.messageRow}
-                role="status"
-                aria-live="polite"
-                aria-atomic="true"
-              >
-                <div className={styles.msgAvatarAssistant}>
-                  <Image src="/neo-icon.png" alt="" width={32} height={32} className="rounded" />
-                </div>
-                <div className={styles.msgContent}>
-                  <div className={styles.msgLabel}>Neo Agent</div>
-                  <div className={styles.thinkingIndicator}>
-                    <Loader2 className={styles.spinner} aria-hidden="true" />
-                    <span>{currentToolName ? `Running ${currentToolName}...` : 'Processing...'}</span>
+            {/* Persistent live region for screen readers — always mounted, never animated */}
+            <div
+              role="status"
+              aria-live="polite"
+              aria-atomic="true"
+              className="sr-only"
+            >
+              {isThinking
+                ? 'Neo is thinking'
+                : currentToolName
+                  ? `Running ${currentToolName}`
+                  : ''}
+            </div>
+
+            <AnimatePresence>
+              {(isThinking || currentToolName) && (
+                <motion.div
+                  key="loading-indicator"
+                  initial={{ opacity: 0, y: 10 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0, transition: { duration: 0.15 } }}
+                  className={styles.messageRow}
+                  aria-hidden="true"
+                >
+                  <div className={styles.msgAvatarAssistant}>
+                    <Image src="/neo-icon.png" alt="" width={32} height={32} className="rounded" />
                   </div>
-                </div>
-              </motion.div>
-            )}
+                  <div className={styles.msgContent}>
+                    <div className={styles.msgLabel}>Neo Agent</div>
+                    {currentToolName ? (
+                      <div className={styles.thinkingIndicator}>
+                        <Loader2 className={styles.spinner} aria-hidden="true" />
+                        <span>Running {currentToolName}...</span>
+                      </div>
+                    ) : (
+                      <ThinkingBubble />
+                    )}
+                  </div>
+                </motion.div>
+              )}
+            </AnimatePresence>
 
             <div ref={messagesEndRef} />
           </div>
