@@ -14,7 +14,9 @@ The repo is split into two independent projects with no cross-imports:
 neo/
 ├── cli/          # Terminal REPL agent
 │   ├── package.json
-│   └── src/
+│   ├── src/
+│   ├── build/    # Windows installer build scripts (PowerShell + Inno Setup)
+│   └── sea-config.json
 ├── web/          # Next.js web interface
 │   ├── package.json
 │   ├── app/
@@ -30,6 +32,13 @@ neo/
 cd cli && npm install    # Install CLI dependencies
 cd cli && npm start      # Run the CLI (node --no-deprecation src/index.js)
 cd cli && npm run dev    # Run with --watch for auto-reload during development
+
+# CLI — Windows installer build (run on Windows)
+cd cli && npm run release       # Full pipeline: bundle → SEA → sign → installer
+cd cli && npm run build:bundle  # esbuild ES modules → single CJS file
+cd cli && npm run build:sea     # Generate SEA blob and inject into node.exe
+cd cli && npm run build:sign    # Authenticode-sign dist/neo.exe
+cd cli && npm run build:installer  # Compile Inno Setup installer and sign it
 
 # Web
 cd web && npm install    # Install web dependencies
@@ -97,6 +106,7 @@ Next.js app with server-side Claude API integration.
 Configured via `.env` file (see `.env.example`):
 - `ANTHROPIC_API_KEY` (required)
 - `MOCK_MODE` (default: true)
+- `NEO_SERVER_URL` — Default server URL for the CLI (falls back to `http://localhost:3000`)
 - Azure credentials: `AZURE_TENANT_ID`, `AZURE_CLIENT_ID`, `AZURE_CLIENT_SECRET`, `AZURE_SUBSCRIPTION_ID`
 - Sentinel: `SENTINEL_WORKSPACE_ID`, `SENTINEL_WORKSPACE_NAME`, `SENTINEL_RESOURCE_GROUP`
 

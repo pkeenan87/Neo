@@ -49,11 +49,20 @@ This guide covers day-to-day usage of Neo for both regular users (readers) and a
 
 ### Prerequisites
 
-- Node.js 18 or later
 - Access to the Neo web server (URL and API key or Entra ID credentials)
 - For admins: access to the server filesystem or deployment pipeline
+- **Windows installer**: No prerequisites — just run the MSI installer
+- **From source**: Node.js 18 or later
 
 ### First-Time Setup (CLI)
+
+**Option A — Windows Installer (recommended)**:
+
+1. Download and run `NeoSetup-<version>.exe`.
+2. The installer places `neo.exe` in `Program Files\Neo` and adds it to your system PATH.
+3. Open a new terminal and proceed to step 2 below (authentication), replacing `node src/index.js` with `neo`.
+
+**Option B — From source**:
 
 1. **Install dependencies**:
    ```bash
@@ -610,12 +619,13 @@ Neo includes built-in protection against prompt injection attacks. This is trans
 
 | Command | Description |
 |---------|-------------|
-| `npm start` | Start the CLI REPL |
+| `npm start` | Start the CLI REPL (from source) |
 | `npm run dev` | Start with auto-reload (development) |
-| `node src/index.js auth login --api-key <key>` | Save an API key |
-| `node src/index.js auth login` | Browser-based Entra ID login (auto-discovers config from server) |
-| `node src/index.js auth logout` | Clear Entra ID credentials |
-| `node src/index.js auth status` | Show connection and auth status |
+| `neo` | Start the CLI REPL (Windows installer) |
+| `neo auth login --api-key <key>` | Save an API key |
+| `neo auth login` | Browser-based Entra ID login (auto-discovers config from server) |
+| `neo auth logout` | Clear Entra ID credentials |
+| `neo auth status` | Show connection and auth status |
 
 **REPL commands**:
 

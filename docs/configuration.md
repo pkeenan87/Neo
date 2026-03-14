@@ -298,15 +298,23 @@ npm start
 npm start -- --server https://neo.example.com
 ```
 
+**Option D — Default via `NEO_SERVER_URL`**:
+
+Set `NEO_SERVER_URL` to change the default server URL for all CLI instances that don't have an explicit `NEO_SERVER` or `--server` override. This is useful for deployed installations where the server URL is fixed:
+```bash
+NEO_SERVER_URL=https://neo.example.com
+```
+
 **Security**: HTTPS is required for non-localhost URLs. The CLI will reject `http://` connections to remote hosts.
 
-Priority: `--server` flag > `NEO_SERVER` env var > config file > `http://localhost:3000`
+Priority: `--server` flag > `NEO_SERVER` env var > config file (`serverUrl`) > `NEO_SERVER_URL` env var > `http://localhost:3000`
 
 ### Environment Variables (CLI)
 
 | Variable | Description |
 |----------|-------------|
-| `NEO_SERVER` | Server URL (default: `http://localhost:3000`) |
+| `NEO_SERVER` | Server URL override (highest env var priority) |
+| `NEO_SERVER_URL` | Default server URL when `NEO_SERVER` is not set (default: `http://localhost:3000`) |
 | `NEO_API_KEY` | API key for authentication |
 | `NEO_TENANT_ID` | Entra ID tenant ID |
 | `NEO_CLIENT_ID` | Entra ID client/application ID |
@@ -813,6 +821,71 @@ az webapp config appsettings set `
 The script packages the Next.js standalone output, `public/` assets, `.next/static/`, and `skills/` into a zip file and deploys via `az webapp deploy`. The `-SkipBuild` flag is useful for redeploying without rebuilding (e.g., after changing only app settings). It warns if the build artifact is more than 24 hours old.
 
 The Web App must already exist — run `provision-azure.ps1` first.
+
+---
+
+## Building the Windows Installer
+
+The CLI can be packaged as a standalone `neo.exe` using Node.js Single Executable Applications (SEA) and distributed as a signed Windows installer. Users do not need Node.js installed.
+
+### Prerequisites
+
+- **Node.js 22+** (SEA support)
+- **Inno Setup 6** — [Download](https://jrsoftware.org/isdl.php) (free)
+- **Code-signing certificate** in `Cert:\CurrentUser\My` (optional — use `-SkipSign` for unsigned dev builds)
+- **Windows SDK** with `signtool.exe` on PATH (for removing Node's embedded signature)
+
+### Build Pipeline
+
+From the `cli/` directory:
+
+```bash
+# Install dev dependencies (esbuild)
+npm install
+
+# Full release build (bundle → SEA → sign exe → installer → sign installer)
+npm run release
+```
+
+This produces:
+- `cli/dist/neo.exe` — Standalone CLI executable
+- `cli/dist/NeoSetup-<version>.exe` — Signed Inno Setup installer
+
+### Individual Build Steps
+
+| Script | Description |
+|--------|-------------|
+| `npm run build:bundle` | Bundle ES modules into a single CJS file via esbuild |
+| `npm run build:sea` | Generate SEA blob and inject into a copy of `node.exe` |
+| `npm run build:sign` | Sign `dist/neo.exe` with Authenticode |
+| `npm run build:installer` | Compile Inno Setup installer and sign it |
+| `npm run release` | Run all steps in sequence |
+
+### Code Signing
+
+The build uses `Set-AuthenticodeSignature` with the first code-signing certificate found in `Cert:\CurrentUser\My` and timestamps via DigiCert (`http://timestamp.digicert.com`). Both `neo.exe` and the installer are signed.
+
+For unsigned dev builds, call the signing script directly with `-SkipSign`:
+```powershell
+powershell -ExecutionPolicy Bypass -File build/sign.ps1 -FilePath dist/neo.exe -SkipSign
+```
+
+### What the Installer Does
+
+- Installs `neo.exe` to `Program Files\Neo`
+- Adds the install directory to the system PATH
+- Registers an uninstaller in Windows Settings
+- Version number is read from `cli/package.json`
+
+### Version Numbering
+
+The installer version is pulled from `cli/package.json`. Update the `version` field there before building a release:
+
+```json
+{
+  "version": "1.1.0"
+}
+```
 
 ---
 
