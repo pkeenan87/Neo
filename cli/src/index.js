@@ -6,6 +6,7 @@ import { markedTerminal } from "marked-terminal";
 import { resolveServerConfig, parseFlag, validateServerUrl } from "./config.js";
 import { runAgentLoop, confirmTool } from "./agent.js";
 import { fetchConversations } from "./server-client.js";
+import { checkForUpdate, runUpdate } from "./updater.js";
 import { login, logout, status, getAccessToken } from "./auth-entra.js";
 import { readConfig, writeConfig } from "./config-store.js";
 import { formatForTerminal } from "./format-terminal.js";
@@ -268,9 +269,15 @@ async function handleAuthCommand() {
 // ─────────────────────────────────────────────────────────────
 
 async function main() {
-  // Handle auth sub-commands before starting the REPL
+  // Handle sub-commands before starting the REPL
   if (process.argv[2] === "auth") {
     await handleAuthCommand();
+    return;
+  }
+
+  if (process.argv[2] === "update") {
+    const { serverUrl, getAuthHeader } = await resolveServerConfig();
+    await runUpdate(serverUrl, getAuthHeader);
     return;
   }
 
@@ -279,6 +286,9 @@ async function main() {
 
   printBanner();
   console.log(chalk.gray(`    Connected to ${serverUrl}\n`));
+
+  // ── Check for CLI updates (non-blocking) ────────────────
+  try { await checkForUpdate(serverUrl, getAuthHeader); } catch { /* silent */ }
 
   // ── Background token refresh for Entra ID sessions ──────
   let refreshInterval = null;

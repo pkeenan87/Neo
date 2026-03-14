@@ -186,3 +186,29 @@ export async function fetchConversations(serverUrl, getAuthHeader) {
   const data = await res.json();
   return data.conversations || [];
 }
+
+/**
+ * Fetch the latest CLI version from the server.
+ * Returns { version, downloadUrl, platform } on success, or null on any error.
+ */
+export async function fetchLatestVersion(serverUrl, getAuthHeader) {
+  try {
+    let authHeader;
+    try {
+      authHeader = await getAuthHeader();
+    } catch {
+      // Auth may not be required for this endpoint, but try if available
+      authHeader = null;
+    }
+
+    const headers = {};
+    if (authHeader) headers.Authorization = authHeader;
+
+    const res = await fetch(`${serverUrl}/api/cli/version`, { headers });
+    if (!res.ok) return null;
+
+    return await res.json();
+  } catch {
+    return null;
+  }
+}
