@@ -206,6 +206,8 @@ CLI installer files are hosted in Azure Blob Storage, allowing the CLI to be upd
 
 If `CLI_STORAGE_ACCOUNT` is not set, the `/api/downloads/[filename]` route returns a 503 error.
 
+**CLI auto-update version endpoint**: The `GET /api/cli/version` route also reads from the storage account to compute a SHA-256 hash of the installer blob. The hash is cached in memory (keyed by the blob's ETag) so subsequent requests are fast. When you upload a new installer, the ETag changes and the hash is recomputed on the next request. The CLI verifies this hash after downloading to ensure integrity. To update the CLI version number, change the `version` field in `web/lib/download-config.ts` and redeploy the web server.
+
 ### Token Usage Budgets
 
 Neo enforces per-user token budgets to control API costs. Two rolling windows are checked before each agent loop call:

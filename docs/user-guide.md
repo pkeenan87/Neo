@@ -11,6 +11,7 @@ This guide covers day-to-day usage of Neo for both regular users (readers) and a
   - [First-Time Setup (Web Server)](#first-time-setup-web-server)
 - [Using the CLI](#using-the-cli)
   - [Starting the REPL](#starting-the-repl)
+  - [Updating the CLI](#updating-the-cli)
   - [Running Investigations](#running-investigations)
   - [Understanding Tool Calls](#understanding-tool-calls)
   - [Confirming Destructive Actions](#confirming-destructive-actions)
@@ -174,6 +175,33 @@ You will see the Neo banner and a prompt:
 ```
 
 Type your question or investigation request and press Enter.
+
+### Updating the CLI
+
+The CLI automatically checks for updates each time it starts. If a newer version is available, you will see a notice:
+
+```
+    [UPDATE] v1.0.0 -> v1.1.0
+    Run neo update to install the latest version.
+```
+
+To update, run:
+
+```bash
+neo update
+```
+
+On Windows, this downloads the latest installer and launches it automatically. The CLI will exit and the installer will replace the existing version. Open a new terminal after the installer completes.
+
+If you are already on the latest version:
+
+```
+  [OK] You're up to date (v1.0.0).
+```
+
+The update check is non-blocking — if the server is unreachable, the CLI starts normally without any error.
+
+> Note: Auto-update is currently supported on Windows only. On other platforms, `neo update` will direct you to the downloads page.
 
 ### Running Investigations
 
@@ -670,6 +698,7 @@ Neo includes built-in protection against prompt injection attacks. This is trans
 | `neo auth login` | Browser-based Entra ID login (auto-discovers config from server) |
 | `neo auth logout` | Clear Entra ID credentials |
 | `neo auth status` | Show connection and auth status |
+| `neo update` | Check for updates and install the latest CLI version (Windows) |
 
 **REPL commands**:
 
@@ -759,6 +788,7 @@ All endpoints require authentication via `Authorization: Bearer <api-key>` heade
 | `GET` | `/api/usage` | Get token usage summary for the authenticated user (two-hour and weekly windows). |
 | `GET` | `/downloads` | Public (no auth). CLI installer downloads page with OS detection and install guide. |
 | `GET` | `/api/downloads/[filename]` | Public (no auth). Streams an installer file from Azure Blob Storage. |
+| `GET` | `/api/cli/version` | Public (no auth). Returns latest CLI version, download URL, platform, and SHA-256 hash. |
 
 **NDJSON stream events** (returned by `/api/agent` and `/api/agent/confirm`):
 
