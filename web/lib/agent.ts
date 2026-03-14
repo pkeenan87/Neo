@@ -1,14 +1,19 @@
 import Anthropic from "@anthropic-ai/sdk";
-import { env, getSystemPrompt } from "./config";
+import { env, getSystemPrompt, DEFAULT_MODEL } from "./config";
 import { DESTRUCTIVE_TOOLS } from "./tools";
 import { executeTool } from "./executors";
 import { getToolsForRole, type Role } from "./permissions";
 import { logger } from "./logger";
 import { wrapToolResult } from "./injection-guard";
-import { prepareMessages } from "./context-manager";
-import type { Message, AgentLoopResult, AgentCallbacks, PendingTool } from "./types";
+import { prepareMessages, CHARS_PER_TOKEN } from "./context-manager";
+import type { Message, AgentLoopResult, AgentCallbacks, PendingTool, ModelPreference, TokenUsage } from "./types";
 
 const client = new Anthropic({ apiKey: env.ANTHROPIC_API_KEY });
+
+/** Extends the SDK text block type with prompt caching support. */
+interface CacheableTextBlock extends Anthropic.Messages.TextBlockParam {
+  cache_control: { type: "ephemeral" };
+}
 
 const MAX_RETRIES = 3;
 const RETRYABLE_STATUS = new Set([429, 529, 500, 502, 503]);
@@ -60,14 +65,23 @@ export async function runAgentLoop(
   messages: Message[],
   callbacks: AgentCallbacks = {},
   role: Role = "reader",
-  sessionId: string = "unknown"
+  sessionId: string = "unknown",
+  model: ModelPreference = DEFAULT_MODEL,
 ): Promise<AgentLoopResult> {
   const localMessages: Message[] = [...messages];
-  logger.info("Agent loop started", "agent", { role });
+  logger.info("Agent loop started", "agent", { role, model });
 
   const systemPrompt = getSystemPrompt(role);
-  const systemPromptTokenEstimate = Math.ceil(systemPrompt.length / 4);
+  const systemPromptTokenEstimate = Math.ceil(systemPrompt.length / CHARS_PER_TOKEN);
   let lastInputTokens: number | null = null;
+
+  // Build tools with cache_control on the last item so the entire prefix is cached
+  const roleTools = getToolsForRole(role);
+  const cachedTools = roleTools.map((tool, i) =>
+    i === roleTools.length - 1
+      ? { ...tool, cache_control: { type: "ephemeral" as const } }
+      : tool
+  );
 
   while (true) {
     if (callbacks.onThinking) callbacks.onThinking();
@@ -79,15 +93,38 @@ export async function runAgentLoop(
       callbacks.onContextTrimmed(prepared.originalTokens, prepared.newTokens, prepared.method!);
     }
 
+    const systemBlock: CacheableTextBlock = {
+      type: "text",
+      text: systemPrompt,
+      cache_control: { type: "ephemeral" },
+    };
+
     const response = await createWithRetry({
-      model: "claude-opus-4-5",
+      model,
       max_tokens: 4096,
-      system: systemPrompt,
-      tools: getToolsForRole(role),
+      system: [systemBlock] as Anthropic.Messages.TextBlockParam[],
+      tools: cachedTools as Anthropic.Messages.Tool[],
       messages: prepared.messages,
     });
 
     lastInputTokens = response.usage.input_tokens;
+
+    // Track usage
+    const usageRaw = response.usage as unknown as Record<string, number | undefined>;
+    const usage: TokenUsage = {
+      input_tokens: response.usage.input_tokens,
+      output_tokens: response.usage.output_tokens,
+      cache_creation_input_tokens: usageRaw.cache_creation_input_tokens,
+      cache_read_input_tokens: usageRaw.cache_read_input_tokens,
+    };
+    logger.info("API usage", "agent", {
+      inputTokens: usage.input_tokens,
+      outputTokens: usage.output_tokens,
+      cacheCreationTokens: usage.cache_creation_input_tokens,
+      cacheReadTokens: usage.cache_read_input_tokens,
+      model,
+    });
+    if (callbacks.onUsage) callbacks.onUsage(usage, model);
 
     localMessages.push({ role: "assistant", content: response.content });
 
@@ -219,7 +256,8 @@ export async function resumeAfterConfirmation(
   confirmed: boolean,
   callbacks: AgentCallbacks = {},
   role: Role = "reader",
-  sessionId: string = "unknown"
+  sessionId: string = "unknown",
+  model: ModelPreference = DEFAULT_MODEL,
 ): Promise<AgentLoopResult> {
   const localMessages: Message[] = [...messages];
   const { id, name, input } = pendingTool;
@@ -259,5 +297,5 @@ export async function resumeAfterConfirmation(
 
   localMessages.push({ role: "user", content: [toolResult] });
 
-  return runAgentLoop(localMessages, callbacks, role, sessionId);
+  return runAgentLoop(localMessages, callbacks, role, sessionId, model);
 }

@@ -96,6 +96,14 @@ const SAFE_METADATA_FIELDS = new Set([
   "label",
   "userIdHash",
   "filename",
+  "inputTokens",
+  "outputTokens",
+  "cacheCreationTokens",
+  "cacheReadTokens",
+  "estimatedCostUsd",
+  "model",
+  "budgetRemaining",
+  "budgetWarning",
 ]);
 
 function sanitizeMetadata(

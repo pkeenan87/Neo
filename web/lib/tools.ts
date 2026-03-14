@@ -5,10 +5,7 @@ type Tool = Anthropic.Messages.Tool;
 export const TOOLS: Tool[] = [
   {
     name: "run_sentinel_kql",
-    description: `Run a KQL query against Microsoft Sentinel Log Analytics workspace.
-Use this to search security events, sign-in logs, alerts, incidents, audit logs, etc.
-Always think about the right table: SigninLogs, SecurityAlert, SecurityIncident,
-AuditLogs, CommonSecurityLog, DeviceEvents, IdentityLogonEvents, etc.`,
+    description: "Run a KQL query against the Microsoft Sentinel Log Analytics workspace. Choose the appropriate table for the investigation.",
     input_schema: {
       type: "object" as const,
       properties: {
@@ -54,7 +51,7 @@ AuditLogs, CommonSecurityLog, DeviceEvents, IdentityLogonEvents, etc.`,
   },
   {
     name: "get_xdr_alert",
-    description: "Retrieve full alert details from Microsoft Defender XDR or CrowdStrike Falcon. Includes process tree, file hashes, network connections, and timeline.",
+    description: "Get full alert details from Defender XDR, including process tree, hashes, network, and timeline.",
     input_schema: {
       type: "object" as const,
       properties: {
@@ -96,7 +93,7 @@ AuditLogs, CommonSecurityLog, DeviceEvents, IdentityLogonEvents, etc.`,
   },
   {
     name: "get_user_info",
-    description: "Look up Entra ID / Azure AD user account details, MFA status, group memberships, recent devices, and risk level.",
+    description: "Look up Entra ID user details: MFA, groups, devices, and risk level.",
     input_schema: {
       type: "object" as const,
       properties: {

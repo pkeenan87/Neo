@@ -5,6 +5,7 @@ import type { Message } from "../lib/types";
 const mockCreate = vi.hoisted(() =>
   vi.fn().mockResolvedValue({
     content: [{ type: "text", text: "- Alert INC-2847 investigated\n- User jsmith@goodwin.com compromised\n- TOR exit node 185.220.101.47 identified" }],
+    usage: { input_tokens: 100, output_tokens: 50 },
   }),
 );
 
@@ -24,8 +25,8 @@ import { estimateTokens, truncateToolResult, prepareMessages } from "../lib/cont
 describe("estimateTokens", () => {
   it("returns a reasonable count for string content messages", () => {
     const messages: Message[] = [
-      { role: "user", content: "a".repeat(400) }, // ~100 tokens
-      { role: "assistant", content: "b".repeat(800) }, // ~200 tokens
+      { role: "user", content: "a".repeat(350) }, // 100 tokens at 3.5 chars/token
+      { role: "assistant", content: "b".repeat(700) }, // 200 tokens
     ];
     const estimate = estimateTokens(messages);
     expect(estimate).toBe(300);
@@ -39,7 +40,7 @@ describe("estimateTokens", () => {
           {
             type: "tool_result" as const,
             tool_use_id: "test-id",
-            content: "x".repeat(4000), // ~1000 tokens
+            content: "x".repeat(3500), // 1000 tokens at 3.5 chars/token
           },
         ],
       },
@@ -63,15 +64,15 @@ describe("truncateToolResult", () => {
 
   it("truncates content exceeding the cap and appends notice", () => {
     const content = "x".repeat(10_000);
-    const result = truncateToolResult(content, 1000); // 1000 tokens = 4000 chars
+    const result = truncateToolResult(content, 1000); // 1000 tokens = 3500 chars
 
     expect(result.length).toBeLessThan(content.length);
-    expect(result).toContain("[Result truncated from 10000 to 4000 characters");
+    expect(result).toContain("[Result truncated from 10000 to 3500 characters");
     expect(result).toContain("get_full_tool_result");
   });
 
   it("preserves content at exactly the cap boundary", () => {
-    const content = "y".repeat(4000); // exactly 1000 tokens * 4 chars
+    const content = "y".repeat(3500); // exactly 1000 tokens * 3.5 chars
     expect(truncateToolResult(content, 1000)).toBe(content);
   });
 });

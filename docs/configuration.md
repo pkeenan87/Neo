@@ -117,14 +117,18 @@ INJECTION_GUARD_MODE=monitor
 | `LOG_LEVEL` | No | Minimum log level: `debug`, `info` (default), `warn`, `error` |
 | `INJECTION_GUARD_MODE` | No | `monitor` (default) or `block`. Controls prompt injection response |
 
-**Context window thresholds** (hardcoded in `web/lib/config.ts`, not environment variables):
+**Constants** (hardcoded in `web/lib/config.ts`, not environment variables):
 
 | Constant | Value | Description |
 |----------|-------|-------------|
+| `DEFAULT_MODEL` | `claude-sonnet-4-5-20250514` | Default Claude model for the agent loop. Users can override per-session with Opus. |
 | `CONTEXT_TOKEN_LIMIT` | 180,000 | Maximum token budget for API calls |
 | `TRIM_TRIGGER_THRESHOLD` | 160,000 | Token count that triggers conversation compression |
 | `PER_TOOL_RESULT_TOKEN_CAP` | 50,000 | Maximum tokens per individual tool result before truncation |
 | `PRESERVED_RECENT_MESSAGES` | 10 | Number of recent messages always preserved during compression |
+| `USAGE_LIMITS.twoHourWindow.maxInputTokens` | 55,000 | Per-user input token cap in a 2-hour rolling window |
+| `USAGE_LIMITS.weeklyWindow.maxInputTokens` | 1,650,000 | Per-user input token cap in a 1-week rolling window |
+| `USAGE_LIMITS.warningThreshold` | 0.80 | Usage fraction at which a warning is sent to the client |
 
 ### API Key Management
 
@@ -201,6 +205,26 @@ CLI installer files are hosted in Azure Blob Storage, allowing the CLI to be upd
 **Required RBAC role**: The identity must have **Storage Blob Data Reader** on the storage account or container.
 
 If `CLI_STORAGE_ACCOUNT` is not set, the `/api/downloads/[filename]` route returns a 503 error.
+
+### Token Usage Budgets
+
+Neo enforces per-user token budgets to control API costs. Two rolling windows are checked before each agent loop call:
+
+| Window | Default Limit | Description |
+|--------|---------------|-------------|
+| 2-hour | 55,000 input tokens | Prevents short-term burst usage |
+| 1-week | 1,650,000 input tokens | Caps sustained weekly usage |
+
+These defaults approximate a $100/month Claude Max plan when using the default Sonnet model.
+
+**How it works**:
+- Before each API call, the server checks the user's accumulated token usage in both windows.
+- At 80% of either limit, a warning is included in the NDJSON response stream.
+- At 100%, the request is rejected with a 429 status and a message indicating which limit was exceeded.
+- Usage data is stored in the `usage-logs` Cosmos DB container with a 90-day TTL.
+- Users can check their current usage via `GET /api/usage`.
+
+**Tuning**: To adjust the limits, edit `USAGE_LIMITS` in `web/lib/config.ts`. The values are in input tokens. To convert to approximate cost: multiply by the per-token input price for your default model (Sonnet: $3/M tokens, Opus: $15/M tokens).
 
 ---
 
@@ -492,10 +516,11 @@ Use the provisioning script to create the Cosmos DB infrastructure:
 | `-DatabaseName` | `neo-db` | Database name |
 | `-ContainerName` | `conversations` | Container name |
 | `-MappingsContainerName` | `teams-mappings` | Teams mapping container name |
+| `-UsageContainerName` | `usage-logs` | Token usage tracking container name |
 | `-Location` | `eastus` | Azure region |
 | `-PartitionKeyPath` | `/ownerId` | Partition key path |
 
-The script creates the account in serverless capacity mode (pay-per-request), creates both the `conversations` container (partition key `/ownerId`) and the `teams-mappings` container (partition key `/id`) with 90-day TTL, and assigns the **Cosmos DB Built-in Data Contributor** role to the currently logged-in Azure CLI user.
+The script creates the account in serverless capacity mode (pay-per-request), creates the `conversations` container (partition key `/ownerId`), the `teams-mappings` container (partition key `/id`), and the `usage-logs` container (partition key `/userId`) — all with 90-day TTL — and assigns the **Cosmos DB Built-in Data Contributor** role to the currently logged-in Azure CLI user.
 
 ### Adding the Teams Mappings Container to an Existing Cosmos DB
 
@@ -524,6 +549,18 @@ After provisioning, set the endpoint in your `.env`:
 ```bash
 COSMOS_ENDPOINT=https://<account-name>.documents.azure.com:443/
 ```
+
+### Usage Logs Container
+
+The `usage-logs` container stores per-API-call token usage records for budget enforcement and cost tracking.
+
+- **Partition key**: `/userId` — the immutable AAD Object ID from Entra ID.
+- **Document TTL**: 90 days (same as conversations).
+- **Created automatically** by `scripts/provision-cosmos-db.ps1`.
+
+Each document contains the model used, input/output token counts, cache metrics, session ID, and timestamp. The `GET /api/usage` endpoint queries this container to return usage summaries for the authenticated user.
+
+Without Cosmos DB configured, usage tracking and budget enforcement are disabled (all requests are allowed).
 
 ### Without Cosmos DB
 
