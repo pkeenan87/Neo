@@ -15,6 +15,7 @@ This guide covers day-to-day usage of Neo for both regular users (readers) and a
   - [Understanding Tool Calls](#understanding-tool-calls)
   - [Confirming Destructive Actions](#confirming-destructive-actions)
   - [Managing Sessions](#managing-sessions)
+  - [Settings](#settings)
   - [Debugging](#debugging)
 - [Common Tasks — Reader](#common-tasks--reader)
   - [Triage Incidents](#triage-incidents)
@@ -245,7 +246,7 @@ Neo supports two Claude models. You can choose between them per-session:
 - **Sonnet** (default) — Fast, cost-effective, and capable for most investigations.
 - **Opus** — Most capable model for complex multi-step reasoning.
 
-In the web UI, select your preferred model before starting a conversation. Via the API, pass `"model": "claude-opus-4-5"` in the request body to use Opus; omit it to use Sonnet (the default).
+In the web UI, select your preferred model before starting a conversation (model selection UI coming soon). Via the API, pass `"model": "claude-opus-4-5"` in the request body to use Opus; omit it to use Sonnet (the default). You can check your current token usage on the [Settings](#settings) page under the Usage tab.
 
 The model preference applies for the duration of the session and does not affect other users.
 
@@ -261,6 +262,24 @@ When Azure Cosmos DB is configured, the web interface persists conversations acr
 Conversations idle for 30 minutes are treated as expired for active session purposes, but the full message history is retained in Cosmos DB for 90 days.
 
 Without Cosmos DB configured (or in mock mode), sessions are stored in-memory and do not persist across server restarts.
+
+### Settings
+
+Click the gear icon in the chat sidebar footer to open the Settings page (`/settings`). The page has two tabs:
+
+**General**
+
+- **Profile**: Shows your full name (from your Entra ID account, read-only) and a "What should Neo call you?" field where you can set a display name. The display name is stored in your browser's local storage and persists across sessions.
+- **Appearance**: Choose between Light, Auto, or Dark color mode. Auto follows your operating system's theme preference and updates in real time when you change your OS settings. Your choice is saved in local storage.
+
+**Usage**
+
+- **Current session**: A progress bar showing your token usage in the current 2-hour rolling window.
+- **Weekly limits**: A progress bar showing your token usage in the 1-week rolling window.
+- **Estimated monthly cost**: A projected cost based on your weekly usage.
+- **Refresh**: Click the refresh button to re-fetch the latest usage data from the server.
+
+Progress bars change color as you approach limits: blue for normal usage, amber at 80%, red at 95%.
 
 ### Debugging
 

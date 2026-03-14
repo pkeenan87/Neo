@@ -234,6 +234,28 @@
   color: #22c55e;
 }
 
+/* ─── Settings link ─── */
+.settingsLink {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #94a3b8;
+  transition: color 0.15s;
+  cursor: pointer;
+}
+
+.settingsLink:hover {
+  color: #334155;
+}
+
+:global(html.dark) .settingsLink {
+  color: rgba(34, 197, 94, 0.4);
+}
+
+:global(html.dark) .settingsLink:hover {
+  color: #22c55e;
+}
+
 /* ─── Logout button ─── */
 .logoutButton {
   width: 100%;

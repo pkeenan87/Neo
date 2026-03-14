@@ -1,49 +1,77 @@
 'use client'
 
-import { createContext, useContext, useEffect, useState } from 'react'
+import { createContext, useCallback, useContext, useEffect, useState } from 'react'
 
-type Theme = 'light' | 'dark'
+export type Theme = 'light' | 'dark' | 'auto'
 
 interface ThemeContextValue {
   theme: Theme
+  setTheme: (theme: Theme) => void
   toggleTheme: () => void
 }
 
 const ThemeContext = createContext<ThemeContextValue | null>(null)
 
 function isTheme(v: string | null): v is Theme {
-  return v === 'light' || v === 'dark'
+  return v === 'light' || v === 'dark' || v === 'auto'
+}
+
+function resolveSystemPreference(): 'light' | 'dark' {
+  return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'
+}
+
+function applyResolvedTheme(resolved: 'light' | 'dark') {
+  if (resolved === 'dark') {
+    document.documentElement.classList.add('dark')
+  } else {
+    document.documentElement.classList.remove('dark')
+  }
 }
 
 export function ThemeProvider({ children }: { children: React.ReactNode }) {
-  const [theme, setTheme] = useState<Theme>('light')
+  const [theme, setThemeState] = useState<Theme>('light')
 
   useEffect(() => {
     const saved = localStorage.getItem('neo-theme')
-    const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches
-    const resolved: Theme = isTheme(saved) ? saved : (prefersDark ? 'dark' : 'light')
+    const resolved: Theme = isTheme(saved) ? saved : 'auto'
 
-    setTheme(resolved)
-    if (resolved === 'dark') {
-      document.documentElement.classList.add('dark')
-    }
+    setThemeState(resolved)
+
+    const applied = resolved === 'auto' ? resolveSystemPreference() : resolved
+    applyResolvedTheme(applied)
   }, [])
 
-  const toggleTheme = () => {
-    setTheme(prev => {
+  // Listen for system preference changes when in auto mode
+  useEffect(() => {
+    if (theme !== 'auto') return
+
+    const mediaQuery = window.matchMedia('(prefers-color-scheme: dark)')
+    const handler = (e: MediaQueryListEvent) => {
+      applyResolvedTheme(e.matches ? 'dark' : 'light')
+    }
+
+    mediaQuery.addEventListener('change', handler)
+    return () => mediaQuery.removeEventListener('change', handler)
+  }, [theme])
+
+  const setTheme = useCallback((next: Theme) => {
+    localStorage.setItem('neo-theme', next)
+    setThemeState(next)
+    const applied = next === 'auto' ? resolveSystemPreference() : next
+    applyResolvedTheme(applied)
+  }, [])
+
+  const toggleTheme = useCallback(() => {
+    setThemeState(prev => {
       const next = prev === 'dark' ? 'light' : 'dark'
       localStorage.setItem('neo-theme', next)
-      if (next === 'dark') {
-        document.documentElement.classList.add('dark')
-      } else {
-        document.documentElement.classList.remove('dark')
-      }
+      applyResolvedTheme(next)
       return next
     })
-  }
+  }, [])
 
   return (
-    <ThemeContext.Provider value={{ theme, toggleTheme }}>
+    <ThemeContext.Provider value={{ theme, setTheme, toggleTheme }}>
       {children}
     </ThemeContext.Provider>
   )

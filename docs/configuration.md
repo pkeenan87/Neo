@@ -1002,6 +1002,19 @@ The web app's `/downloads` page will immediately serve the updated installer —
 
 ---
 
+## Client-Side Storage
+
+The web interface stores user preferences in the browser's `localStorage`. These values are not sent to the server or persisted in Cosmos DB.
+
+| Key | Values | Description |
+|-----|--------|-------------|
+| `neo-theme` | `light`, `dark`, `auto` | Color mode preference. `auto` tracks OS system preference via `matchMedia`. Default: `auto`. |
+| `neo-display-name` | String (max 50 chars) | Optional display name shown in the settings profile section. Falls back to the Entra ID full name when empty. |
+
+These values are managed via the Settings page (`/settings`), accessible from the gear icon in the chat sidebar.
+
+---
+
 ## Security Notes
 
 - **API keys** are compared using timing-safe comparison to prevent enumeration attacks.

@@ -640,7 +640,9 @@ export function ChatInterface({
             <Link href="/downloads" aria-label="Download CLI" className={styles.downloadButton}>
               <Download className="w-4 h-4" />
             </Link>
-            <Settings className="w-4 h-4" aria-hidden="true" />
+            <Link href="/settings" aria-label="Settings" className={styles.settingsLink}>
+              <Settings className="w-4 h-4" />
+            </Link>
           </div>
 
           <button type="button" onClick={onLogout} className={styles.logoutButton}>

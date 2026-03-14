@@ -66,8 +66,14 @@ All source uses ES modules (`"type": "module"` in package.json).
 Next.js app with server-side Claude API integration.
 
 - **`app/`** — Next.js app router pages and API routes
+  - **`app/chat/`** — Main chat interface (auth-gated via `getAuthContext()`)
+  - **`app/settings/`** — Settings page with General (profile, appearance) and Usage (token budget progress bars) tabs
+  - **`app/api/usage/`** — GET endpoint returning per-user token usage summaries
 - **`lib/`** — Shared server-side logic (agent, tools, executors, auth, config, types)
 - **`lib/context-manager.ts`** — Context window management: token estimation, per-tool-result truncation, Haiku-powered rolling conversation compression
+- **`lib/usage-tracker.ts`** — Per-user token usage tracking with Cosmos DB, pessimistic budget reservations, rolling window enforcement (2-hour and weekly)
+- **`context/ThemeContext.tsx`** — Theme provider supporting `'light'` | `'dark'` | `'auto'` modes. `'auto'` tracks system preference via `matchMedia` listener. Stored in `localStorage` key `neo-theme`
+- **`components/SettingsPage/`** — Settings page components (SettingsPage, ProfileSection, AppearanceSection, UsageSection, ProgressBar)
 
 ## Key Design Patterns
 
@@ -78,6 +84,10 @@ Next.js app with server-side Claude API integration.
 **Mock/Live dual-path**: Every executor function checks `env.MOCK_MODE` and branches to either mock data or real API calls. When adding new tools, follow this same pattern.
 
 **Context window management**: The `context-manager.ts` module sits between the session's full message history and the Claude API call. Before each API call, `prepareMessages()` truncates oversized tool results (50K token cap), and compresses older messages via Haiku when context exceeds 160K tokens. Full untrimmed messages remain in session storage. The `get_full_tool_result` tool lets the agent re-fetch truncated results.
+
+**Token optimization**: The agent loop uses Anthropic prompt caching (`cache_control: { type: "ephemeral" }`) on both the system prompt and tool schemas. Default model is Sonnet (user-selectable to Opus). Per-user token budgets (2-hour and weekly rolling windows) are enforced via pessimistic reservations in Cosmos DB before the agent loop runs.
+
+**Client-side preferences**: User display name (`neo-display-name`) and theme preference (`neo-theme`) are stored in `localStorage`. The settings page (`/settings`) provides the UI for these. Theme supports `'light'`, `'dark'`, and `'auto'` (system preference tracking).
 
 ## Adding a New Tool (CLI)
 
