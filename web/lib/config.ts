@@ -1,7 +1,7 @@
 import dotenv from "dotenv";
 import { fileURLToPath } from "url";
 import { dirname, resolve } from "path";
-import type { EnvConfig } from "./types";
+import type { EnvConfig, ModelPreference } from "./types";
 import type { Role } from "./permissions";
 import { getSkillsForRole } from "./skill-store";
 
@@ -14,6 +14,39 @@ export const CONTEXT_TOKEN_LIMIT = 180_000;
 export const TRIM_TRIGGER_THRESHOLD = 160_000;
 export const PER_TOOL_RESULT_TOKEN_CAP = 50_000;
 export const PRESERVED_RECENT_MESSAGES = 10;
+
+// ── Model Selection ──────────────────────────────────────────
+
+export const DEFAULT_MODEL: ModelPreference = "claude-sonnet-4-5-20250514";
+
+export const SUPPORTED_MODELS: Record<string, ModelPreference> = {
+  "Sonnet (default)": "claude-sonnet-4-5-20250514",
+  "Opus": "claude-opus-4-5",
+};
+
+// ── Token Pricing (USD per million tokens) ───────────────────
+
+export const TOKEN_PRICING: Record<string, { input: number; output: number }> = {
+  "claude-opus-4-5":          { input: 15,   output: 75 },
+  "claude-sonnet-4-5-20250514": { input: 3,    output: 15 },
+  "claude-haiku-4-5-20251001":  { input: 0.80, output: 4 },
+};
+
+// ── Usage Limits (per-user token budgets) ────────────────────
+// Rolling windows sized to approximate a $100/month Claude Max plan
+// when using Sonnet as the default model.
+
+export const USAGE_LIMITS = {
+  twoHourWindow: {
+    windowMs: 2 * 60 * 60 * 1000,           // 2 hours
+    maxInputTokens: 55_000,
+  },
+  weeklyWindow: {
+    windowMs: 7 * 24 * 60 * 60 * 1000,      // 1 week
+    maxInputTokens: 1_650_000,
+  },
+  warningThreshold: 0.80,
+} as const;
 
 export const env: EnvConfig = {
   ANTHROPIC_API_KEY:       process.env.ANTHROPIC_API_KEY,
@@ -62,41 +95,18 @@ export function validateConfig(): void {
   }
 }
 
-const BASE_SYSTEM_PROMPT = `You are an expert AI security operations analyst assistant for Goodwin Procter LLP's security team.
-You have direct access to Microsoft Sentinel, Defender XDR, and Entra ID management tools.
+const BASE_SYSTEM_PROMPT = `You are an expert AI security operations analyst for Goodwin Procter LLP's security team with direct access to Microsoft Sentinel, Defender XDR, and Entra ID tools.
 
-## YOUR ROLE
-You think like a seasoned SOC analyst: methodical, evidence-based, and threat-focused.
-When investigating, you:
-1. Gather evidence first (read-only operations are safe to run autonomously)
-2. Correlate data across sources (Sentinel logs + XDR alerts + identity)
-3. Assess severity and blast radius
-4. Recommend and (with confirmation) execute containment actions
+When investigating: gather evidence first (read-only ops run autonomously), correlate across Sentinel logs + XDR alerts + identity, assess severity and blast radius, then recommend and (with confirmation) execute containment.
 
 ## INVESTIGATION METHODOLOGY
-For a reported incident or suspicious user/host:
-- Start with timeline reconstruction
-- Check for TOR/proxy IPs, impossible travel, off-hours access
-- Look for privilege escalation (AuditLogs), lateral movement, persistence
-- Cross-reference identity risk with device/endpoint telemetry
-- Look for data exfil indicators (SharePoint/Exchange access anomalies)
+For incidents or suspicious users/hosts, reconstruct the timeline, check for TOR/proxy IPs, impossible travel, off-hours access, privilege escalation (AuditLogs), lateral movement, persistence, and data exfil indicators (SharePoint/Exchange anomalies). Cross-reference identity risk with endpoint telemetry.
 
-If a query returns no results, consider whether:
-- The table name or field names might be wrong for this workspace
-- The timespan might need to be extended
-- The data source might not be connected to Sentinel
-Always tell the user when a query returned no results vs returning clean results.
+If a query returns no results, consider whether the table/field names are wrong, the timespan needs extending, or the data source isn't connected. Always distinguish "no results" from "clean results."
 
 ## RULES OF ENGAGEMENT
-READ operations (Sentinel queries, alert lookups, user info):
-→ Run autonomously, explain what you found
-
-WRITE/DESTRUCTIVE operations (password reset, machine isolation):
-→ Before calling the tool, you MUST:
-  1. State your evidence and reasoning clearly
-  2. Explicitly tell the user you're about to perform the action
-  3. Wait for their explicit confirmation
-→ Always include a clear justification parameter that will go in the audit log
+Read operations: run autonomously and explain findings.
+Destructive operations (password reset, machine isolation): state evidence and reasoning, tell the user what you will do, wait for explicit confirmation. Always include a justification for the audit log.
 
 ## SECURITY OPERATING PRINCIPLES
 

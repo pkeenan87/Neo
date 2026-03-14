@@ -53,6 +53,7 @@ export type AgentEventType =
   | "confirmation_required"
   | "response"
   | "error"
+  | "warning"
   | "context_trimmed";
 
 export type AgentEvent =
@@ -62,7 +63,9 @@ export type AgentEvent =
   | { type: "confirmation_required"; tool: PendingTool }
   | { type: "response"; text: string }
   | { type: "error"; message: string; code?: string }
-  | { type: "context_trimmed"; originalTokens: number; newTokens: number; method: "truncation" | "summary" };
+  | { type: "warning"; message: string; code: string }
+  | { type: "context_trimmed"; originalTokens: number; newTokens: number; method: "truncation" | "summary" }
+  | { type: "usage"; usage: TokenUsage; model: ModelPreference };
 
 // ─────────────────────────────────────────────────────────────
 //  Session
@@ -117,6 +120,7 @@ export interface Conversation {
   channel: Channel;
   messages: Message[];
   pendingConfirmation: PendingTool | null;
+  model?: string;
   ttl?: number;
 }
 
@@ -146,6 +150,7 @@ export interface AgentRequest {
   sessionId?: string;
   message: string;
   channel?: Channel;
+  model?: ModelPreference;
 }
 
 export interface ConfirmRequest {
@@ -170,6 +175,7 @@ export interface AgentCallbacks {
    * May fire multiple times if truncation recurs on subsequent turns.
    */
   onContextTrimmed?: (originalTokens: number, newTokens: number, method: "truncation" | "summary") => void;
+  onUsage?: (usage: TokenUsage, model: ModelPreference) => void;
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -225,4 +231,39 @@ export interface UnisolateMachineInput {
 
 export interface GetFullToolResultInput {
   tool_use_id: string;
+}
+
+// ─────────────────────────────────────────────────────────────
+//  Model Selection
+// ─────────────────────────────────────────────────────────────
+
+export type ModelPreference = "claude-opus-4-5" | "claude-sonnet-4-5-20250514";
+
+// ─────────────────────────────────────────────────────────────
+//  Token Usage Tracking
+// ─────────────────────────────────────────────────────────────
+
+export interface TokenUsage {
+  input_tokens: number;
+  output_tokens: number;
+  cache_creation_input_tokens?: number;
+  cache_read_input_tokens?: number;
+}
+
+export interface UsageRecord {
+  id: string;
+  userId: string;
+  sessionId: string;
+  model: string;
+  usage: TokenUsage;
+  timestamp: string;
+  ttl: number;
+}
+
+export interface UsageSummary {
+  totalInputTokens: number;
+  totalOutputTokens: number;
+  totalCacheReadTokens: number;
+  callCount: number;
+  estimatedCostUsd: number;
 }

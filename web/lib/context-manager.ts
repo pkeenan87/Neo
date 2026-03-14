@@ -8,7 +8,7 @@ import {
 import { logger } from "./logger";
 import type { Message } from "./types";
 
-const CHARS_PER_TOKEN = 4;
+export const CHARS_PER_TOKEN = 3.5;
 const MAX_MIDDLE_MESSAGES_FOR_SUMMARY = 30;
 
 const anthropicClient = new Anthropic({ apiKey: env.ANTHROPIC_API_KEY });
@@ -135,6 +135,12 @@ async function compressOlderMessages(
         ...cappedMiddle,
         { role: "user", content: "Please summarize the conversation above." },
       ],
+    });
+
+    logger.info("Context compression usage", "context-manager", {
+      inputTokens: response.usage.input_tokens,
+      outputTokens: response.usage.output_tokens,
+      model: "claude-haiku-4-5-20251001",
     });
 
     const summaryText = response.content

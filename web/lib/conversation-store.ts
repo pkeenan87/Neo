@@ -45,6 +45,7 @@ export async function createConversation(
   ownerId: string,
   role: Role,
   channel: Channel,
+  model?: string,
 ): Promise<string> {
   const container = getContainer();
   const id = `conv_${crypto.randomUUID()}`;
@@ -61,6 +62,7 @@ export async function createConversation(
     channel,
     messages: [],
     pendingConfirmation: null,
+    model,
     ttl: DEFAULT_TTL,
   };
 

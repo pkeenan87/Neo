@@ -238,6 +238,17 @@ Each conversation creates a server-side session that maintains your message hist
 
 Sessions persist on the server between CLI restarts. If you restart the CLI without typing `clear`, a new session is created.
 
+### Model Selection
+
+Neo supports two Claude models. You can choose between them per-session:
+
+- **Sonnet** (default) — Fast, cost-effective, and capable for most investigations.
+- **Opus** — Most capable model for complex multi-step reasoning.
+
+In the web UI, select your preferred model before starting a conversation. Via the API, pass `"model": "claude-opus-4-5"` in the request body to use Opus; omit it to use Sonnet (the default).
+
+The model preference applies for the duration of the session and does not affect other users.
+
 ### Conversation History (Web)
 
 When Azure Cosmos DB is configured, the web interface persists conversations across sessions and server restarts. The sidebar shows your recent conversations, and you can:
@@ -695,6 +706,17 @@ Each session has a per-role message limit:
 
 When the limit is reached, start a new session by typing `clear` in the CLI.
 
+**Token usage budgets**: In addition to message limits, each user has token-based budgets:
+
+| Window | Limit |
+|--------|-------|
+| 2-hour rolling window | 55,000 input tokens |
+| Weekly rolling window | 1,650,000 input tokens |
+
+These limits are designed to approximate a $100/month usage level. When a budget is exceeded, you will receive a 429 error indicating which limit was hit. The 2-hour window resets as older usage ages out; the weekly window works the same way. An 80% usage warning is sent in the response stream before the hard limit is reached.
+
+You can check your current usage via the `/api/usage` endpoint.
+
 ### API Endpoints
 
 All endpoints require authentication via `Authorization: Bearer <api-key>` header or Auth.js session cookie, except the discovery endpoint.
@@ -715,6 +737,7 @@ All endpoints require authentication via `Authorization: Bearer <api-key>` heade
 | `GET` | `/api/skills/{id}` | Get full skill by ID. All authenticated users. |
 | `PUT` | `/api/skills/{id}` | Update a skill. Admin only. Body: `{ "content": "..." }` |
 | `DELETE` | `/api/skills/{id}` | Delete a skill. Admin only. |
+| `GET` | `/api/usage` | Get token usage summary for the authenticated user (two-hour and weekly windows). |
 | `GET` | `/downloads` | Public (no auth). CLI installer downloads page with OS detection and install guide. |
 | `GET` | `/api/downloads/[filename]` | Public (no auth). Streams an installer file from Azure Blob Storage. |
 
@@ -728,4 +751,5 @@ All endpoints require authentication via `Authorization: Bearer <api-key>` heade
 | `confirmation_required` | `tool: { id, name, input }` | Destructive tool needs user confirmation |
 | `response` | `text` | Final agent response |
 | `context_trimmed` | `originalTokens`, `newTokens`, `method` | Context window was trimmed to stay within token limits. `method` is `"truncation"` (per-result cap) or `"summary"` (conversation compression). |
+| `usage` | `usage: { input_tokens, output_tokens, cache_read_input_tokens }`, `model` | Per-turn token usage summary |
 | `error` | `message`, `code` | An error occurred |
