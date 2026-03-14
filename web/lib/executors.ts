@@ -1,5 +1,6 @@
 import { env } from "./config";
 import { getAzureToken, getMSGraphToken, generateSecurePassword } from "./auth";
+import { getToolSecret } from "./secrets";
 import { logger } from "./logger";
 import type {
   SentinelKqlInput,
@@ -45,8 +46,10 @@ async function run_sentinel_kql({ query, timespan = "PT24H" }: SentinelKqlInput)
   }
 
   const token = await getAzureToken("https://api.loganalytics.io");
+  const workspaceId = await getToolSecret("SENTINEL_WORKSPACE_ID");
+  if (!workspaceId) throw new Error("Missing SENTINEL_WORKSPACE_ID. Configure via /integrations or .env");
   const res = await fetch(
-    `https://api.loganalytics.io/v1/workspaces/${env.SENTINEL_WORKSPACE_ID}/query`,
+    `https://api.loganalytics.io/v1/workspaces/${workspaceId}/query`,
     {
       method: "POST",
       headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
@@ -74,7 +77,13 @@ async function get_sentinel_incidents({ severity, status = "New", limit = 10 }: 
     if (status && !VALID_STATUS.has(status)) throw new Error(`Invalid status value: ${status}`);
     params.set("$filter", `properties/severity eq '${escapeODataString(severity)}' and properties/status eq '${escapeODataString(status)}'`);
   }
-  const url = `https://management.azure.com/subscriptions/${env.AZURE_SUBSCRIPTION_ID}/resourceGroups/${env.SENTINEL_RG}/providers/Microsoft.OperationalInsights/workspaces/${env.SENTINEL_WORKSPACE_NAME}/providers/Microsoft.SecurityInsights/incidents?api-version=2023-11-01&${params}`;
+  const subscriptionId = await getToolSecret("AZURE_SUBSCRIPTION_ID");
+  const resourceGroup = await getToolSecret("SENTINEL_RESOURCE_GROUP");
+  const workspaceName = await getToolSecret("SENTINEL_WORKSPACE_NAME");
+  if (!subscriptionId || !resourceGroup || !workspaceName) {
+    throw new Error("Missing Sentinel config. Configure via /integrations or set AZURE_SUBSCRIPTION_ID, SENTINEL_RESOURCE_GROUP, and SENTINEL_WORKSPACE_NAME in .env");
+  }
+  const url = `https://management.azure.com/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}/providers/Microsoft.OperationalInsights/workspaces/${workspaceName}/providers/Microsoft.SecurityInsights/incidents?api-version=2023-11-01&${params}`;
   const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
 
   if (!res.ok) {

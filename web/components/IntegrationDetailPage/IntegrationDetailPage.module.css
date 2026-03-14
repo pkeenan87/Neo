@@ -1,0 +1,321 @@
+@reference "../../app/globals.css";
+
+/* ── Layout ────────────────────────────────────────────────── */
+
+.container {
+  @apply p-8;
+  max-width: 720px;
+  margin: 0 auto;
+}
+
+.backLink {
+  @apply flex items-center gap-2 text-brand-500 transition-colors duration-150 mb-8;
+  font-size: 0.875rem;
+  text-decoration: none;
+}
+
+.backLink:hover {
+  @apply text-brand-700;
+}
+
+.backLink:focus-visible {
+  outline: 2px solid #64748b;
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+/* ── Header ────────────────────────────────────────────────── */
+
+.header {
+  @apply flex items-start gap-4 mb-8;
+}
+
+.iconWrapper {
+  @apply p-4 rounded-lg bg-brand-100 text-brand-600;
+}
+
+.heading {
+  @apply text-2xl font-bold tracking-tight text-brand-900;
+}
+
+.description {
+  @apply text-sm text-brand-500 mt-2;
+}
+
+/* ── Sections ──────────────────────────────────────────────── */
+
+.section {
+  @apply mb-8;
+}
+
+.sectionTitle {
+  @apply text-lg font-bold text-brand-900 mb-4;
+}
+
+/* ── Capabilities ──────────────────────────────────────────── */
+
+.capabilityList {
+  @apply flex flex-wrap gap-2;
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+
+.capabilityItem {
+  @apply px-4 py-1 rounded-lg bg-brand-100 text-brand-600;
+  font-size: 0.8125rem;
+}
+
+.toolName {
+  font-family: inherit;
+}
+
+/* ── Form ──────────────────────────────────────────────────── */
+
+.form {
+  @apply flex flex-col gap-4 mb-4;
+  border: none;
+  padding: 0;
+  margin: 0 0 1rem;
+}
+
+.requiredNote {
+  @apply text-sm text-brand-400 mb-4;
+}
+
+.srOnly {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+}
+
+.fieldGroup {
+  @apply flex flex-col gap-2;
+}
+
+.labelRow {
+  @apply flex items-center gap-2;
+}
+
+.fieldLabel {
+  @apply text-sm font-bold text-brand-600;
+}
+
+.required {
+  @apply text-error-500;
+  margin-left: 2px;
+}
+
+.tooltipTrigger {
+  @apply relative text-brand-400 cursor-help;
+  background: none;
+  border: none;
+  padding: 2px;
+  border-radius: 4px;
+}
+
+.tooltipTrigger:focus-visible {
+  outline: 2px solid #64748b;
+  outline-offset: 2px;
+}
+
+.tooltipText {
+  @apply absolute left-0 top-0 px-4 py-2 rounded-lg bg-brand-900 text-white text-sm;
+  transform: translateY(calc(-100% - 8px));
+  max-width: 320px;
+  white-space: normal;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 150ms;
+  z-index: 10;
+}
+
+.tooltipTrigger:hover .tooltipText,
+.tooltipTrigger:focus-visible .tooltipText {
+  opacity: 1;
+}
+
+.fieldInput {
+  @apply px-4 py-2 rounded-lg border border-border-default bg-surface-sunken text-brand-900 transition-colors duration-150;
+  font-size: 0.875rem;
+}
+
+.fieldInput:focus-visible {
+  outline: none;
+  @apply border-brand-500;
+  box-shadow: 0 0 0 3px rgba(100, 116, 139, 0.25);
+}
+
+/* ── Actions ───────────────────────────────────────────────── */
+
+.actions {
+  @apply flex gap-4 mt-4;
+}
+
+.saveButton {
+  @apply px-4 py-2 rounded-lg text-sm font-bold cursor-pointer transition-colors duration-150;
+  @apply bg-brand-900 text-white;
+  border: none;
+}
+
+.saveButton:hover:not(:disabled) {
+  @apply bg-brand-800;
+}
+
+.saveButton:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.saveButton:focus-visible {
+  outline: 2px solid #64748b;
+  outline-offset: 2px;
+}
+
+.testButton {
+  @apply px-4 py-2 rounded-lg text-sm font-bold cursor-pointer transition-colors duration-150;
+  @apply bg-brand-100 text-brand-700;
+  border: none;
+}
+
+.testButton:hover:not(:disabled) {
+  @apply bg-brand-200;
+}
+
+.testButton:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.testButton:focus-visible {
+  outline: 2px solid #64748b;
+  outline-offset: 2px;
+}
+
+/* ── Feedback ──────────────────────────────────────────────── */
+
+.feedbackSuccess {
+  @apply flex items-center gap-2 text-sm mt-4 px-4 py-2 rounded-lg;
+  background-color: rgba(34, 197, 94, 0.1);
+  color: #16a34a;
+}
+
+.feedbackError {
+  @apply flex items-center gap-2 text-sm mt-4 px-4 py-2 rounded-lg;
+  background-color: rgba(239, 68, 68, 0.1);
+  color: #ef4444;
+}
+
+/* ── Responsive ────────────────────────────────────────────── */
+
+@media (max-width: 768px) {
+  .container {
+    @apply p-4;
+  }
+
+  .header {
+    @apply flex-col;
+  }
+
+  .actions {
+    @apply flex-col;
+  }
+}
+
+/* ── Dark Mode ─────────────────────────────────────────────── */
+
+:global(html.dark) .container {
+  background-color: #313338;
+}
+
+:global(html.dark) .backLink {
+  color: #3ba55d;
+}
+
+:global(html.dark) .backLink:hover {
+  color: #4cba6e;
+}
+
+:global(html.dark) .backLink:focus-visible {
+  outline-color: #3ba55d;
+}
+
+:global(html.dark) .iconWrapper {
+  background-color: rgba(59, 165, 93, 0.1);
+  color: #3ba55d;
+}
+
+:global(html.dark) .heading {
+  color: #dbdee1;
+}
+
+:global(html.dark) .description {
+  color: #b9bbbe;
+}
+
+:global(html.dark) .sectionTitle {
+  color: #dbdee1;
+}
+
+:global(html.dark) .requiredNote {
+  color: #72767d;
+}
+
+:global(html.dark) .capabilityItem {
+  background-color: rgba(255, 255, 255, 0.06);
+  color: #b9bbbe;
+}
+
+:global(html.dark) .fieldLabel {
+  color: #b9bbbe;
+}
+
+:global(html.dark) .tooltipTrigger {
+  color: #72767d;
+}
+
+:global(html.dark) .tooltipTrigger:focus-visible {
+  outline-color: #3ba55d;
+}
+
+:global(html.dark) .fieldInput {
+  background-color: #1e1f22;
+  border-color: rgba(255, 255, 255, 0.06);
+  color: #dbdee1;
+}
+
+:global(html.dark) .fieldInput:focus-visible {
+  border-color: #3ba55d;
+  box-shadow: 0 0 0 3px rgba(59, 165, 93, 0.15);
+}
+
+:global(html.dark) .saveButton {
+  background-color: #3ba55d;
+  color: #fff;
+}
+
+:global(html.dark) .saveButton:hover:not(:disabled) {
+  background-color: #4cba6e;
+}
+
+:global(html.dark) .testButton {
+  background-color: rgba(255, 255, 255, 0.06);
+  color: #dbdee1;
+}
+
+:global(html.dark) .testButton:hover:not(:disabled) {
+  background-color: rgba(255, 255, 255, 0.1);
+}
+
+:global(html.dark) .feedbackSuccess {
+  background-color: rgba(59, 165, 93, 0.1);
+  color: #4ade80;
+}
+
+:global(html.dark) .feedbackError {
+  background-color: rgba(239, 68, 68, 0.1);
+  color: #f87171;
+}

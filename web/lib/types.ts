@@ -40,6 +40,27 @@ export interface EnvConfig {
   COSMOS_ENDPOINT: string | undefined;
   CLI_STORAGE_ACCOUNT: string | undefined;
   CLI_STORAGE_CONTAINER: string;
+  KEY_VAULT_URL: string | undefined;
+}
+
+// ─────────────────────────────────────────────────────────────
+//  Integrations
+// ─────────────────────────────────────────────────────────────
+
+export interface IntegrationSecret {
+  key: string;
+  label: string;
+  description: string;
+  required: boolean;
+}
+
+export interface IntegrationInfo {
+  slug: string;
+  name: string;
+  iconName: string;
+  description: string;
+  capabilities: string[];
+  secrets: IntegrationSecret[];
 }
 
 // ─────────────────────────────────────────────────────────────

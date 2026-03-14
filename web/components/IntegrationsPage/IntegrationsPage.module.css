@@ -1,0 +1,240 @@
+@reference "../../app/globals.css";
+
+/* ── Layout ────────────────────────────────────────────────── */
+
+.container {
+  @apply p-8;
+  max-width: 960px;
+  margin: 0 auto;
+}
+
+.backLink {
+  @apply flex items-center gap-2 text-brand-500 transition-colors duration-150 mb-8;
+  font-size: 0.875rem;
+  text-decoration: none;
+}
+
+.backLink:hover {
+  @apply text-brand-700;
+}
+
+.backLink:focus-visible {
+  outline: 2px solid #64748b;
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+.header {
+  @apply mb-8;
+}
+
+.heading {
+  @apply text-2xl font-bold tracking-tight text-brand-900;
+}
+
+.subtitle {
+  @apply text-sm text-brand-500 mt-2;
+}
+
+/* ── Search ────────────────────────────────────────────────── */
+
+.searchWrapper {
+  @apply flex items-center gap-4 px-4 py-2 rounded-lg border border-border-default bg-surface-sunken text-brand-500 mb-8 transition-colors duration-150;
+}
+
+.searchWrapper:focus-within {
+  @apply border-brand-500;
+  box-shadow: 0 0 0 3px rgba(100, 116, 139, 0.25);
+}
+
+.searchInput {
+  @apply flex-1 bg-transparent text-brand-900;
+  font-size: 0.875rem;
+  border: none;
+  outline: none;
+}
+
+.searchInput::placeholder {
+  @apply text-brand-400;
+}
+
+/* ── Grid ──────────────────────────────────────────────────── */
+
+.grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 1rem;
+}
+
+/* ── Card ──────────────────────────────────────────────────── */
+
+.card {
+  @apply flex flex-col p-4 rounded-lg border border-border-default bg-surface-default transition-all duration-150;
+  text-decoration: none;
+  color: inherit;
+}
+
+.card:hover {
+  @apply shadow-card-hover border-brand-300;
+}
+
+.card:focus-visible {
+  outline: 2px solid #64748b;
+  outline-offset: 2px;
+}
+
+.cardHeader {
+  @apply flex items-center justify-between mb-4;
+}
+
+.iconWrapper {
+  @apply p-2 rounded-lg bg-brand-100 text-brand-600;
+}
+
+.badge {
+  @apply px-2 py-1 rounded-lg text-sm font-bold;
+  font-size: 0.75rem;
+}
+
+.badge_configured {
+  background-color: rgba(34, 197, 94, 0.15);
+  color: #16a34a;
+}
+
+.badge_partial {
+  @apply text-warning-500;
+  background-color: rgba(245, 158, 11, 0.15);
+}
+
+.badge_none {
+  @apply bg-brand-100 text-brand-400;
+}
+
+.cardTitle {
+  @apply text-lg font-bold text-brand-900 mb-2;
+}
+
+.cardDescription {
+  @apply text-sm text-brand-500 mb-4;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.cardCapabilities {
+  @apply text-sm text-brand-400 mt-auto;
+}
+
+.emptyState {
+  @apply text-sm text-brand-400 text-center py-8;
+  min-height: 0;
+}
+
+.srOnly {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+}
+
+/* ── Responsive ────────────────────────────────────────────── */
+
+@media (max-width: 768px) {
+  .container {
+    @apply p-4;
+  }
+
+  .grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (min-width: 769px) and (max-width: 1024px) {
+  .grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+
+/* ── Dark Mode ─────────────────────────────────────────────── */
+
+:global(html.dark) .container {
+  background-color: #313338;
+}
+
+:global(html.dark) .backLink {
+  color: #3ba55d;
+}
+
+:global(html.dark) .backLink:hover {
+  color: #4cba6e;
+}
+
+:global(html.dark) .backLink:focus-visible {
+  outline-color: #3ba55d;
+}
+
+:global(html.dark) .heading {
+  color: #dbdee1;
+}
+
+:global(html.dark) .subtitle {
+  color: #b9bbbe;
+}
+
+:global(html.dark) .searchWrapper {
+  background-color: #1e1f22;
+  border-color: rgba(255, 255, 255, 0.06);
+  color: #b9bbbe;
+}
+
+:global(html.dark) .searchWrapper:focus-within {
+  border-color: #3ba55d;
+  box-shadow: 0 0 0 3px rgba(59, 165, 93, 0.15);
+}
+
+:global(html.dark) .searchInput {
+  color: #dbdee1;
+}
+
+:global(html.dark) .searchInput::placeholder {
+  color: #72767d;
+}
+
+:global(html.dark) .card {
+  background-color: #2b2d31;
+  border-color: rgba(255, 255, 255, 0.06);
+}
+
+:global(html.dark) .card:hover {
+  border-color: rgba(255, 255, 255, 0.15);
+}
+
+:global(html.dark) .iconWrapper {
+  background-color: rgba(59, 165, 93, 0.1);
+  color: #3ba55d;
+}
+
+:global(html.dark) .badge_configured {
+  background-color: rgba(59, 165, 93, 0.15);
+  color: #4ade80;
+}
+
+:global(html.dark) .badge_none {
+  background-color: rgba(255, 255, 255, 0.06);
+  color: #72767d;
+}
+
+:global(html.dark) .cardTitle {
+  color: #dbdee1;
+}
+
+:global(html.dark) .cardDescription {
+  color: #b9bbbe;
+}
+
+:global(html.dark) .cardCapabilities {
+  color: #72767d;
+}

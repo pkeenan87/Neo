@@ -15,20 +15,20 @@
 
 /* ─── Back link ─── */
 .backLink {
-  @apply inline-flex items-center gap-2 text-sm;
-  @apply text-slate-500 transition-colors duration-150;
+  @apply inline-flex items-center gap-2 text-sm transition-colors duration-150;
+  color: #16a34a;
 }
 
 .backLink:hover {
-  @apply text-slate-900;
+  color: #15803d;
 }
 
 :global(html.dark) .backLink {
-  color: #b9bbbe;
+  color: #3ba55d;
 }
 
 :global(html.dark) .backLink:hover {
-  color: #3ba55d;
+  color: #4cba6e;
 }
 
 /* ─── Header ─── */

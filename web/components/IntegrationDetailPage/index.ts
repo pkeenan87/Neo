@@ -1,0 +1,1 @@
+export { IntegrationDetailPage } from './IntegrationDetailPage'

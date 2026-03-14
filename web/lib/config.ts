@@ -67,6 +67,7 @@ export const env: EnvConfig = {
   COSMOS_ENDPOINT:              process.env.COSMOS_ENDPOINT,
   CLI_STORAGE_ACCOUNT:          process.env.CLI_STORAGE_ACCOUNT,
   CLI_STORAGE_CONTAINER:        process.env.CLI_STORAGE_CONTAINER || "cli-releases",
+  KEY_VAULT_URL:                process.env.KEY_VAULT_URL,
 };
 
 // Note: validateConfig uses console.warn directly (not logger) because

@@ -19,6 +19,7 @@ import {
   Check,
   X,
   Loader2,
+  Blocks,
 } from 'lucide-react'
 import Link from 'next/link'
 import { useTheme } from '@/context/ThemeContext'
@@ -842,6 +843,16 @@ export function ChatInterface({
                   className={styles.textarea}
                 />
                 <div className={styles.inputActions}>
+                  {userRole?.toLowerCase() === 'admin' && (
+                    <Link
+                      href="/integrations"
+                      className={styles.plusBtn}
+                      aria-label="Integrations"
+                    >
+                      <Plus className="w-5 h-5" />
+                    </Link>
+                  )}
+                  <div className={styles.inputActionsSpacer} />
                   <button
                     type="button"
                     onClick={() => { void handleSendMessage() }}

@@ -570,9 +570,43 @@
 .inputActions {
   display: flex;
   align-items: center;
-  justify-content: flex-end;
   gap: 0.5rem;
   padding: 0.5rem 1rem;
+}
+
+.inputActionsSpacer {
+  flex: 1;
+}
+
+.plusBtn {
+  padding: 0.5rem;
+  border-radius: 0.375rem;
+  transition: all 150ms;
+  background: #f1f5f9;
+  color: #475569;
+  border: none;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.plusBtn:hover {
+  background: #e2e8f0;
+}
+
+.plusBtn:focus-visible {
+  outline: 2px solid #64748b;
+  outline-offset: 2px;
+}
+
+:global(html.dark) .plusBtn {
+  background: rgba(255, 255, 255, 0.06);
+  color: #b9bbbe;
+}
+
+:global(html.dark) .plusBtn:hover {
+  background: rgba(255, 255, 255, 0.1);
 }
 
 .sendBtn {

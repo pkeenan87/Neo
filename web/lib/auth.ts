@@ -1,5 +1,5 @@
 import { randomInt } from "crypto";
-import { env } from "./config";
+import { getToolSecret } from "./secrets";
 
 // ─────────────────────────────────────────────────────────────
 //  Azure AD / Entra ID Authentication
@@ -21,11 +21,13 @@ export async function getAzureToken(resource: string): Promise<string> {
     return cached.token;
   }
 
-  const { AZURE_TENANT_ID, AZURE_CLIENT_ID, AZURE_CLIENT_SECRET } = env;
+  const AZURE_TENANT_ID = await getToolSecret("AZURE_TENANT_ID");
+  const AZURE_CLIENT_ID = await getToolSecret("AZURE_CLIENT_ID");
+  const AZURE_CLIENT_SECRET = await getToolSecret("AZURE_CLIENT_SECRET");
 
   if (!AZURE_TENANT_ID || !AZURE_CLIENT_ID || !AZURE_CLIENT_SECRET) {
     throw new Error(
-      "Missing Azure credentials. Set AZURE_TENANT_ID, AZURE_CLIENT_ID, and AZURE_CLIENT_SECRET in .env"
+      "Missing Azure credentials. Configure them via /integrations or set AZURE_TENANT_ID, AZURE_CLIENT_ID, and AZURE_CLIENT_SECRET in .env"
     );
   }
 
@@ -57,6 +59,14 @@ export async function getAzureToken(resource: string): Promise<string> {
   });
 
   return data.access_token;
+}
+
+/**
+ * Flush the OAuth token cache. Call after rotating Azure credentials
+ * so the next request re-authenticates with the new secrets.
+ */
+export function clearTokenCache(): void {
+  tokenCache.clear();
 }
 
 export async function getMSGraphToken(): Promise<string> {
