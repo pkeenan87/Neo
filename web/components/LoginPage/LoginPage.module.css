@@ -121,6 +121,7 @@
   letter-spacing: 0.2em;
   text-align: center;
   margin-top: 0;
+  padding-top: .25rem;
   color: #475569;
 }
 
@@ -158,6 +159,7 @@
 /* ─── Quote ─── */
 .quoteWrapper {
   margin-top: 0.125rem;
+  padding-top: 1rem;
   padding-left: 1rem;
   padding-right: 1rem;
   text-align: center;
