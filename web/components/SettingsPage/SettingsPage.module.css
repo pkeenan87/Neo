@@ -107,17 +107,8 @@
   @apply bg-surface-default cursor-default;
 }
 
-.inputWithButton {
-  display: flex;
-  gap: 0.5rem;
-  align-items: stretch;
-}
-
-.inputWithButton .fieldInput {
-  flex: 1;
-}
-
 .saveButton {
+  @apply self-start;
   @apply px-4 py-2 rounded-lg text-sm font-bold cursor-pointer transition-colors duration-150;
   @apply bg-brand-900 text-white;
   border: none;

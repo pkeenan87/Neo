@@ -48,44 +48,40 @@ export function ProfileSection({ userName, userImage, className }: ProfileSectio
   return (
     <div className={`${styles.section}${className ? ` ${className}` : ''}`}>
       <h2 className={styles.sectionTitle}>Profile</h2>
-      <div className={styles.profileRow}>
-        <UserAvatar src={userImage} userName={userName} size={48} decorative />
-        <div className={styles.profileField}>
-          <label className={styles.fieldLabel} htmlFor="profile-full-name">Full name</label>
-          <input
-            id="profile-full-name"
-            type="text"
-            value={userName}
-            readOnly
-            aria-readonly="true"
-            className={styles.fieldInput}
-          />
-        </div>
+      <UserAvatar src={userImage} userName={userName} size={48} decorative />
+      <div className={styles.profileFieldWide}>
+        <label className={styles.fieldLabel} htmlFor="profile-full-name">Full name</label>
+        <input
+          id="profile-full-name"
+          type="text"
+          value={userName}
+          readOnly
+          aria-readonly="true"
+          className={styles.fieldInput}
+        />
       </div>
       <div className={styles.profileFieldWide}>
         <label className={styles.fieldLabel} htmlFor="display-name">
           What should Neo call you?
         </label>
-        <div className={styles.inputWithButton}>
-          <input
-            id="display-name"
-            type="text"
-            value={displayName}
-            onChange={(e) => handleChange(e.target.value)}
-            onKeyDown={(e) => { if (e.key === 'Enter' && hasChanges) handleSave() }}
-            maxLength={MAX_DISPLAY_NAME_LEN}
-            placeholder={userName}
-            className={styles.fieldInput}
-          />
-          <button
-            type="button"
-            onClick={handleSave}
-            disabled={!hasChanges}
-            className={styles.saveButton}
-          >
-            {isSaved ? 'Saved' : 'Save'}
-          </button>
-        </div>
+        <input
+          id="display-name"
+          type="text"
+          value={displayName}
+          onChange={(e) => handleChange(e.target.value)}
+          onKeyDown={(e) => { if (e.key === 'Enter' && hasChanges) handleSave() }}
+          maxLength={MAX_DISPLAY_NAME_LEN}
+          placeholder={userName}
+          className={styles.fieldInput}
+        />
+        <button
+          type="button"
+          onClick={handleSave}
+          disabled={!hasChanges}
+          className={styles.saveButton}
+        >
+          {isSaved ? 'Saved' : 'Save'}
+        </button>
       </div>
     </div>
   )
