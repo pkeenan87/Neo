@@ -202,8 +202,7 @@ async function handleAuthCommand() {
     const serverUrl = validateServerUrl(
       parseFlag("--server") ||
       process.env.NEO_SERVER ||
-      config.serverUrl ||
-      "http://localhost:3000"
+      config.serverUrl
     );
 
     try {
@@ -232,7 +231,7 @@ async function handleAuthCommand() {
 
   if (sub === "status") {
     const config = readConfig();
-    const serverUrl = process.env.NEO_SERVER || config.serverUrl || "http://localhost:3000";
+    const serverUrl = process.env.NEO_SERVER || config.serverUrl;
 
     console.log(chalk.bold("\n  Neo CLI Status\n"));
     console.log(`  Server:      ${serverUrl}`);

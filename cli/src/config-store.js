@@ -93,7 +93,7 @@ function deepDelete(obj, path) {
 // ── Public API ────────────────────────────────────────────────
 
 const DEFAULTS = {
-  serverUrl: "http://localhost:3000",
+  serverUrl: process.env.NEO_SERVER_URL || "http://localhost:3000",
   authMethod: null,
 };
 

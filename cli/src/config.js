@@ -61,8 +61,7 @@ export async function resolveServerConfig() {
   const rawServerUrl =
     parseFlag("--server") ||
     process.env.NEO_SERVER ||
-    config.serverUrl ||
-    "http://localhost:3000";
+    config.serverUrl;
 
   const serverUrl = validateServerUrl(rawServerUrl);
 

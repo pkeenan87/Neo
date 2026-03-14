@@ -6,12 +6,20 @@
   "type": "module",
   "scripts": {
     "start": "node --no-deprecation src/index.js",
-    "dev": "node --no-deprecation --watch src/index.js"
+    "dev": "node --no-deprecation --watch src/index.js",
+    "build:bundle": "esbuild src/index.js --bundle --platform=node --format=cjs --outfile=dist/neo-bundle.cjs --minify",
+    "build:sea": "powershell -ExecutionPolicy Bypass -File build/build-sea.ps1",
+    "build:sign": "powershell -ExecutionPolicy Bypass -File build/sign.ps1 -FilePath dist/neo.exe",
+    "build:installer": "powershell -ExecutionPolicy Bypass -File build/build-installer.ps1",
+    "release": "npm run build:bundle && npm run build:sea && npm run build:sign && npm run build:installer"
   },
   "dependencies": {
     "chalk": "^5.3.0",
     "marked": "^15.0.12",
     "marked-terminal": "^7.3.0",
     "open": "^10.1.0"
+  },
+  "devDependencies": {
+    "esbuild": "^0.25.0"
   }
 }
