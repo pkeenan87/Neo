@@ -9,6 +9,7 @@ This guide covers all configuration options for the Neo web server and CLI clien
   - [API Key Management](#api-key-management)
   - [Entra ID Setup (Web Server)](#entra-id-setup-web-server)
   - [Mock Mode](#mock-mode)
+  - [CLI Downloads Storage](#cli-downloads-storage)
 - [CLI Configuration](#cli-configuration)
   - [Config File](#config-file)
   - [Authentication Priority](#authentication-priority)
@@ -30,9 +31,10 @@ This guide covers all configuration options for the Neo web server and CLI clien
   - [1. Provision App Service](#1-provision-app-service)
   - [2. Provision Cosmos DB (Optional)](#2-provision-cosmos-db-optional)
   - [3. Provision Event Hub (Optional)](#3-provision-event-hub-optional)
-  - [4. Provision Log Analytics Custom Table (Optional)](#4-provision-log-analytics-custom-table-optional)
-  - [5. Set Secret Environment Variables](#5-set-secret-environment-variables)
-  - [6. Build and Deploy](#6-build-and-deploy)
+  - [4. Provision Blob Storage for CLI Downloads (Optional)](#4-provision-blob-storage-for-cli-downloads-optional)
+  - [5. Provision Log Analytics Custom Table (Optional)](#5-provision-log-analytics-custom-table-optional)
+  - [6. Set Secret Environment Variables](#6-set-secret-environment-variables)
+  - [7. Build and Deploy](#7-build-and-deploy)
 - [Security Notes](#security-notes)
 
 ---
@@ -104,6 +106,8 @@ INJECTION_GUARD_MODE=monitor
 | `SENTINEL_WORKSPACE_NAME` | When live | Log Analytics workspace name |
 | `SENTINEL_RESOURCE_GROUP` | When live | Resource group containing the Sentinel workspace |
 | `COSMOS_ENDPOINT` | No | Azure Cosmos DB endpoint URL. Omit for in-memory sessions (no persistence). |
+| `CLI_STORAGE_ACCOUNT` | No | Azure Storage account name for hosting CLI installer downloads |
+| `CLI_STORAGE_CONTAINER` | No | Blob container name for CLI installers (default: `cli-releases`) |
 | `DEV_AUTH_BYPASS` | No | Set to `true` in development only. Bypasses all auth checks with a dev-operator identity. Blocked in production by a startup guard. |
 | `MICROSOFT_APP_ID` | No | Bot Framework app ID (for Teams channel) |
 | `MICROSOFT_APP_PASSWORD` | No | Bot Framework app password |
@@ -182,6 +186,21 @@ When `MOCK_MODE=true` (the default), all tool calls return simulated data. This 
 - CI/CD pipelines
 
 Set `MOCK_MODE=false` and provide Azure credentials to execute real Sentinel queries, Defender actions, and Entra ID operations.
+
+### CLI Downloads Storage
+
+CLI installer files are hosted in Azure Blob Storage, allowing the CLI to be updated independently of web app deployments. Upload a new installer to the storage container — no redeployment needed.
+
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `CLI_STORAGE_ACCOUNT` | For downloads | Azure Storage account name (e.g. `neostorage`) |
+| `CLI_STORAGE_CONTAINER` | No | Blob container name (default: `cli-releases`) |
+
+**Authentication**: Uses `DefaultAzureCredential` from `@azure/identity` — the same pattern as Cosmos DB. In Azure, this resolves to the App Service's system-assigned managed identity. Locally, it falls back to Azure CLI login (`az login`).
+
+**Required RBAC role**: The identity must have **Storage Blob Data Reader** on the storage account or container.
+
+If `CLI_STORAGE_ACCOUNT` is not set, the `/api/downloads/[filename]` route returns a 503 error.
 
 ---
 
@@ -662,7 +681,7 @@ The script automatically configures:
 ./scripts/provision-cosmos-db.ps1 -AccountName "neo-prod-cosmos" -Location "westus2"
 ```
 
-The script outputs the endpoint URL. Add it to your app settings (see step 5).
+The script outputs the endpoint URL. Add it to your app settings (see step 6).
 
 For full parameter reference, see [Chat Persistence — Provisioning](#provisioning).
 
@@ -696,7 +715,39 @@ EVENT_HUB_CONNECTION_STRING="<connection-string-from-script-output>"
 EVENT_HUB_NAME="neo-logs"
 ```
 
-### 4. Provision Log Analytics Custom Table (Optional)
+### 4. Provision Blob Storage for CLI Downloads (Optional)
+
+Create an Azure Storage account and container for hosting CLI installer files. Skip this step if you don't need the web-based download page.
+
+```powershell
+# Create a storage account (LRS, hot tier)
+az storage account create \
+    --name neoclireleases \
+    --resource-group neo-rg \
+    --location eastus \
+    --sku Standard_LRS \
+    --kind StorageV2
+
+# Create the container
+az storage container create \
+    --name cli-releases \
+    --account-name neoclireleases
+
+# Assign Storage Blob Data Reader to the App Service managed identity
+$principalId = az webapp identity show \
+    --name neo-web \
+    --resource-group neo-rg \
+    --query principalId -o tsv
+
+az role assignment create \
+    --role "Storage Blob Data Reader" \
+    --assignee $principalId \
+    --scope "/subscriptions/<subscription-id>/resourceGroups/neo-rg/providers/Microsoft.Storage/storageAccounts/neoclireleases"
+```
+
+After creating the storage account, set `CLI_STORAGE_ACCOUNT=neoclireleases` in your app settings (see step 6).
+
+### 5. Provision Log Analytics Custom Table (Optional)
 
 `scripts/provision-log-analytics.ps1` creates a custom Log Analytics table (`NeoLogs_CL`) and a Data Collection Rule (DCR) for ingesting structured application logs. Skip this step if you only need Event Hub or console logging.
 
@@ -753,7 +804,7 @@ NeoLogs_CL
 | order by TimeGenerated desc
 ```
 
-### 5. Set Secret Environment Variables
+### 6. Set Secret Environment Variables
 
 After provisioning, set the secret app settings that the provisioning script does not set (secrets should not be passed as script parameters):
 
@@ -797,7 +848,17 @@ az webapp config appsettings set `
         EVENT_HUB_NAME="neo-logs"
 ```
 
-### 6. Build and Deploy
+If you provisioned Blob Storage for CLI downloads, also add:
+
+```powershell
+az webapp config appsettings set \
+    --name neo-web \
+    --resource-group neo-rg \
+    --settings \
+        CLI_STORAGE_ACCOUNT="neoclireleases"
+```
+
+### 7. Build and Deploy
 
 `scripts/deploy-azure.ps1` builds the Next.js app in standalone mode and deploys it to the existing Azure Web App via zip deploy.
 
@@ -886,6 +947,21 @@ The installer version is pulled from `cli/package.json`. Update the `version` fi
   "version": "1.1.0"
 }
 ```
+
+### Uploading to Blob Storage
+
+After building, upload the installer to your Azure Blob Storage container:
+
+```bash
+az storage blob upload \
+    --account-name neoclireleases \
+    --container-name cli-releases \
+    --name neo-setup.exe \
+    --file cli/dist/NeoSetup-1.0.0.exe \
+    --overwrite
+```
+
+The web app's `/downloads` page will immediately serve the updated installer — no redeployment required.
 
 ---
 

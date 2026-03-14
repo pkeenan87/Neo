@@ -32,6 +32,8 @@ export const env: EnvConfig = {
   EVENT_HUB_NAME:               process.env.EVENT_HUB_NAME,
   LOG_LEVEL:                    process.env.LOG_LEVEL,
   COSMOS_ENDPOINT:              process.env.COSMOS_ENDPOINT,
+  CLI_STORAGE_ACCOUNT:          process.env.CLI_STORAGE_ACCOUNT,
+  CLI_STORAGE_CONTAINER:        process.env.CLI_STORAGE_CONTAINER || "cli-releases",
 };
 
 // Note: validateConfig uses console.warn directly (not logger) because

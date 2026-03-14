@@ -6,6 +6,7 @@ This guide covers day-to-day usage of Neo for both regular users (readers) and a
 
 - [Getting Started](#getting-started)
   - [Prerequisites](#prerequisites)
+  - [Downloading the CLI](#downloading-the-cli)
   - [First-Time Setup (CLI)](#first-time-setup-cli)
   - [First-Time Setup (Web Server)](#first-time-setup-web-server)
 - [Using the CLI](#using-the-cli)
@@ -54,11 +55,24 @@ This guide covers day-to-day usage of Neo for both regular users (readers) and a
 - **Windows installer**: No prerequisites — just run the MSI installer
 - **From source**: Node.js 18 or later
 
+### Downloading the CLI
+
+The CLI installer is available from the downloads page on your Neo web server at `/downloads`. The page auto-detects your operating system and recommends the correct installer.
+
+**Currently available**:
+- **Windows** — standalone `.exe` installer (no Node.js required)
+
+**Coming soon**:
+- macOS
+- Linux
+
+The downloads page also includes step-by-step install instructions and a quick-start guide.
+
 ### First-Time Setup (CLI)
 
 **Option A — Windows Installer (recommended)**:
 
-1. Download and run `NeoSetup-<version>.exe`.
+1. Visit your Neo server's downloads page (`https://<your-server>/downloads`) and download the Windows installer, or run `NeoSetup-<version>.exe` if provided directly.
 2. The installer places `neo.exe` in `Program Files\Neo` and adds it to your system PATH.
 3. Open a new terminal and proceed to step 2 below (authentication), replacing `node src/index.js` with `neo`.
 
@@ -701,6 +715,8 @@ All endpoints require authentication via `Authorization: Bearer <api-key>` heade
 | `GET` | `/api/skills/{id}` | Get full skill by ID. All authenticated users. |
 | `PUT` | `/api/skills/{id}` | Update a skill. Admin only. Body: `{ "content": "..." }` |
 | `DELETE` | `/api/skills/{id}` | Delete a skill. Admin only. |
+| `GET` | `/downloads` | Public (no auth). CLI installer downloads page with OS detection and install guide. |
+| `GET` | `/api/downloads/[filename]` | Public (no auth). Streams an installer file from Azure Blob Storage. |
 
 **NDJSON stream events** (returned by `/api/agent` and `/api/agent/confirm`):
 

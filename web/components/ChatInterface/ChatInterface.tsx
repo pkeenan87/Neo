@@ -7,6 +7,7 @@ import {
   Plus,
   MessageSquare,
   Settings,
+  Download,
   LogOut,
   PanelLeftClose,
   PanelLeftOpen,
@@ -19,6 +20,7 @@ import {
   X,
   Loader2,
 } from 'lucide-react'
+import Link from 'next/link'
 import { useTheme } from '@/context/ThemeContext'
 import { useConversationCache } from '@/context/ConversationCacheContext'
 import { MarkdownRenderer } from '@/components/MarkdownRenderer'
@@ -635,6 +637,9 @@ export function ChatInterface({
                 {userRole}
               </div>
             </div>
+            <Link href="/downloads" aria-label="Download CLI" className={styles.downloadButton}>
+              <Download className="w-4 h-4" />
+            </Link>
             <Settings className="w-4 h-4" aria-hidden="true" />
           </div>
 

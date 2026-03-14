@@ -38,6 +38,8 @@ export interface EnvConfig {
   EVENT_HUB_NAME: string | undefined;
   LOG_LEVEL: string | undefined;
   COSMOS_ENDPOINT: string | undefined;
+  CLI_STORAGE_ACCOUNT: string | undefined;
+  CLI_STORAGE_CONTAINER: string;
 }
 
 // ─────────────────────────────────────────────────────────────

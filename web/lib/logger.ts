@@ -95,6 +95,7 @@ const SAFE_METADATA_FIELDS = new Set([
   "mode",
   "label",
   "userIdHash",
+  "filename",
 ]);
 
 function sanitizeMetadata(
