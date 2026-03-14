@@ -39,7 +39,7 @@ Add an automatic update-check mechanism to the Neo CLI and a `neo update` comman
 - Where should CLI release artifacts be hosted — GitHub Releases, Azure Blob Storage, or served directly from the Next.js server? Read my code, we are already doing this in Azure Blob.
 - Should update checks be rate-limited (e.g. once per session, once per hour) to avoid unnecessary network calls? no.
 - Should `neo update` support a `--force` flag to re-download even when on the latest version? no.
-- How should the version be bumped — manually in `package.json`, or via a CI/CD release pipeline? Manually in package.json for now
+- How should the version be bumped — manually in `package.json`, or via a CI/CD release pipeline? Manually in package.json for now.
 
 ## Testing Guidelines
 
