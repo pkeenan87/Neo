@@ -24,9 +24,8 @@ const themeScript = `
 (function(){
   try {
     var t = localStorage.getItem('neo-theme');
-    if (t === 'dark' || (!t && window.matchMedia('(prefers-color-scheme: dark)').matches)) {
-      document.documentElement.classList.add('dark');
-    }
+    var isDark = t === 'dark' || ((t === 'auto' || !t) && window.matchMedia('(prefers-color-scheme: dark)').matches);
+    if (isDark) document.documentElement.classList.add('dark');
   } catch(e) {}
 })();
 `
