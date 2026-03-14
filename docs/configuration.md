@@ -1008,7 +1008,7 @@ The web interface stores user preferences in the browser's `localStorage`. These
 
 | Key | Values | Description |
 |-----|--------|-------------|
-| `neo-theme` | `light`, `dark`, `auto` | Color mode preference. `auto` tracks OS system preference via `matchMedia`. Default: `auto`. |
+| `neo-theme` | `light`, `dark`, `auto` | Color mode preference. `auto` follows OS system preference. Default: `auto`. |
 | `neo-display-name` | String (max 50 chars) | Optional display name shown in the settings profile section. Falls back to the Entra ID full name when empty. |
 
 These values are managed via the Settings page (`/settings`), accessible from the gear icon in the chat sidebar.

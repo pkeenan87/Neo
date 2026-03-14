@@ -13,6 +13,12 @@ const MODES: { value: Theme; label: string }[] = [
   { value: 'dark', label: 'Dark' },
 ]
 
+const THUMBNAIL_CLASS: Record<Theme, string> = {
+  light: styles.modeThumbnailLight,
+  auto: styles.modeThumbnailAuto,
+  dark: styles.modeThumbnailDark,
+}
+
 export function AppearanceSection({ className }: AppearanceSectionProps) {
   const { theme, setTheme } = useTheme()
 
@@ -30,7 +36,7 @@ export function AppearanceSection({ className }: AppearanceSectionProps) {
               className={`${styles.modeCard} ${theme === value ? styles.modeCardActive : ''}`}
               aria-pressed={theme === value}
             >
-              <div className={`${styles.modeThumbnail} ${styles[`modeThumbnail_${value}`]}`} aria-hidden="true">
+              <div className={`${styles.modeThumbnail} ${THUMBNAIL_CLASS[value]}`} aria-hidden="true">
                 <div className={styles.thumbHeader} />
                 <div className={styles.thumbSidebar} />
                 <div className={styles.thumbContent}>

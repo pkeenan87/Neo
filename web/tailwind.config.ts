@@ -22,12 +22,12 @@ const config: Config = {
           600: '#475569',
           700: '#334155',
           800: '#1e293b',
-          900: '#0f172a', // primary button, headings
+          900: '#0f172a', // primary button, headings (light default)
         },
-        // Accent = Green scale (dark-mode primary brand)
+        // Dark mode accent — Discord-inspired muted green, not neon
         accent: {
-          400: '#4ade80', // dark mode button hover
-          500: '#22c55e', // dark mode primary brand
+          400: '#4cba6e', // hover state
+          500: '#3ba55d', // primary interactive color in dark mode
         },
         surface: {
           default: '#f8fafc', // page background
@@ -38,6 +38,13 @@ const config: Config = {
         border: {
           default: '#e2e8f0', // card/sidebar borders
           strong:  '#f1f5f9', // internal section dividers
+        },
+        // Dark mode surfaces — Discord-inspired charcoal palette
+        'dark-surface': {
+          default: '#313338', // Discord bg-primary — main app background
+          raised:  '#2b2d31', // Discord bg-secondary — sidebar, cards
+          overlay: '#383a40', // Discord bg-floating — modal/login card
+          sunken:  '#1e1f22', // Discord bg-tertiary — inputs, code blocks
         },
         success: {
           50:  '#f0fdf4',
@@ -65,7 +72,7 @@ const config: Config = {
         'dropdown':    '0 4px 6px rgba(0,0,0,0.07), 0 2px 4px rgba(0,0,0,0.06)',
         'button':      '0 1px 2px rgba(0,0,0,0.05)',
         'inner':       'inset 0 2px 4px rgba(0,0,0,0.06)',
-        'glow-green':  '0 0 50px rgba(34,197,94,0.1)', // dark mode login card
+        'glow-green':  '0 0 30px rgba(59,165,93,0.07)', // dark mode login card — subtle, Discord-toned
       },
     },
   },

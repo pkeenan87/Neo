@@ -270,7 +270,7 @@ Click the gear icon in the chat sidebar footer to open the Settings page (`/sett
 **General**
 
 - **Profile**: Shows your full name (from your Entra ID account, read-only) and a "What should Neo call you?" field where you can set a display name. The display name is stored in your browser's local storage and persists across sessions.
-- **Appearance**: Choose between Light, Auto, or Dark color mode. Auto follows your operating system's theme preference and updates in real time when you change your OS settings. Your choice is saved in local storage.
+- **Appearance**: Choose between Light, Auto, or Dark color mode. Auto follows your operating system's preference. Your choice is saved in local storage and persists across sessions.
 
 **Usage**
 

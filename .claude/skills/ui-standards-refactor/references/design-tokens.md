@@ -24,9 +24,10 @@ In dark mode, the brand shifts to **Green** (green-500 replaces slate-900 as the
 | brand-800 | `#1e293b` | `bg-brand-800` | Headings |
 | brand-900 | `#0f172a` | `bg-brand-900` | Primary buttons, high-contrast text, icons |
 
-> **Dark mode accent override**: `green-500 (#22c55e)` replaces `brand-900` as the primary interactive color.
-> Dark mode button: `bg-green-500 text-black hover:bg-green-400`
-> Dark mode glow shadow: `0 0 50px rgba(34,197,94,0.1)`
+> **Dark mode accent override**: `accent-500 (#3ba55d)` replaces `brand-900` as the primary interactive color.
+> Discord-inspired muted green — lower saturation than green-500, reads as intentional rather than neon.
+> Dark mode button: `bg-[#3ba55d] text-white hover:bg-[#4cba6e]`
+> Dark mode glow shadow: `0 0 30px rgba(59,165,93,0.07)` (very subtle — half the spread, half the opacity of old value)
 
 ### Neutral
 Shares the Slate scale. This is intentional — the design uses a single monochromatic system.
@@ -55,9 +56,13 @@ Shares the Slate scale. This is intentional — the design uses a single monochr
 | border-default | neutral-200 | `#e2e8f0` | Default card/sidebar borders (`border-slate-200`) |
 | border-strong | neutral-100 | `#f1f5f9` | Subtle internal dividers (`border-slate-100`) |
 
-> **Dark mode surfaces**: `surface-default` → `#1a1a1a`, `surface-raised` → `#1a1a1a/90`,
-> `surface-overlay` → `#1a1a1a/80`, `border-default` → `rgba(34,197,94,0.2)` (green-500/20),
-> `border-strong` → `rgba(34,197,94,0.1)` (green-500/10)
+> **Dark mode surfaces** (Discord-inspired charcoal palette):
+> `surface-default` → `#313338` (Discord bg-primary — main app background)
+> `surface-raised` → `#2b2d31` (Discord bg-secondary — sidebar, cards, dropdowns)
+> `surface-overlay` → `#383a40` (Discord bg-floating — modal/login card backdrop)
+> `surface-sunken` → `#1e1f22` (Discord bg-tertiary — inputs, code blocks)
+> `border-default` → `rgba(255,255,255,0.06)` (neutral white whisper, not green-tinted)
+> `border-strong` → `rgba(255,255,255,0.03)` (barely-there internal dividers)
 
 ### Feedback Colors
 
@@ -185,12 +190,12 @@ Adjusted to reflect actual values used in App.tsx:
 | Base | Hover | Element type |
 |---|---|---|
 | `slate-900` (#0f172a) | `slate-800` (#1e293b) | Primary button bg (light mode) |
-| `green-500` (#22c55e) | `green-400` (#4ade80) | Primary button bg (dark mode) |
+| `accent-500` (#3ba55d) | `accent-400` (#4cba6e) | Primary button bg (dark mode) |
 | `neutral-50` | `neutral-100` | Card hover bg, sidebar item hover |
 | `white` | `neutral-50` | Subtle card / user profile row hover |
 | `shadow-card` | `shadow-card-hover` | Card shadow elevation |
 | `border-default` | `border-strong` | Input/field focus |
-| transparent | `green-500/5` | Ghost sidebar button hover (dark mode) |
+| transparent | `rgba(59,165,93,0.08)` | Ghost sidebar button hover (dark mode) |
 | transparent | `slate-100` | Ghost sidebar button hover (light mode) |
 | transparent | `red-500/5` | Destructive action hover (Terminate Session) |
 
@@ -218,10 +223,11 @@ const config: Config = {
           800: '#1e293b',  // slate-800
           900: '#0f172a',  // slate-900 — primary button, headings (light default)
         },
-        // Dark mode accent (green) — apply via .dark class or next-themes
+        // Dark mode accent (green) — Discord-inspired muted green, not neon
+        // Apply via .dark class or next-themes
         accent: {
-          400: '#4ade80',  // green-400 — dark mode button hover
-          500: '#22c55e',  // green-500 — dark mode primary brand
+          400: '#4cba6e',  // hover state — one step up from base
+          500: '#3ba55d',  // Discord-style muted green — replaces green-500 (#22c55e)
         },
         surface: {
           default: '#f8fafc',  // slate-50 — page background
@@ -259,7 +265,7 @@ const config: Config = {
         'dropdown':     '0 4px 6px rgba(0,0,0,0.07), 0 2px 4px rgba(0,0,0,0.06)',
         'button':       '0 1px 2px rgba(0,0,0,0.05)',
         'inner':        'inset 0 2px 4px rgba(0,0,0,0.06)',
-        'glow-green':   '0 0 50px rgba(34,197,94,0.1)', // dark mode login card
+        'glow-green':   '0 0 30px rgba(59,165,93,0.07)', // dark mode login card — subtle, Discord-toned
       },
     },
   },
@@ -312,10 +318,11 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
     @apply bg-slate-50 text-slate-900;
   }
 
-  /* Dark mode */
+  /* Dark mode — Discord-inspired charcoal palette */
   body.dark {
-    background-color: #1a1a1a;
-    @apply text-green-500;
+    background-color: #313338; /* Discord bg-primary */
+    color: #dbdee1;             /* Discord text-normal */
+    @apply accent-500;          /* use muted #3ba55d for interactive elements */
   }
 }
 ```

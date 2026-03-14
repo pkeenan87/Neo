@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { UserAvatar } from '@/components'
 import styles from './SettingsPage.module.css'
 
@@ -15,17 +15,35 @@ const MAX_DISPLAY_NAME_LEN = 50
 
 export function ProfileSection({ userName, userImage, className }: ProfileSectionProps) {
   const [displayName, setDisplayName] = useState('')
+  const [savedName, setSavedName] = useState('')
+  const [isSaved, setIsSaved] = useState(false)
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   useEffect(() => {
-    const saved = localStorage.getItem(DISPLAY_NAME_KEY)
-    if (saved) setDisplayName(saved)
+    const existing = localStorage.getItem(DISPLAY_NAME_KEY) ?? ''
+    setDisplayName(existing)
+    setSavedName(existing)
   }, [])
 
-  const handleDisplayNameChange = (value: string) => {
+  useEffect(() => {
+    return () => { if (timerRef.current) clearTimeout(timerRef.current) }
+  }, [])
+
+  const handleChange = (value: string) => {
     const sanitized = value.replace(/[\x00-\x1F\x7F]/g, '').slice(0, MAX_DISPLAY_NAME_LEN)
     setDisplayName(sanitized)
-    localStorage.setItem(DISPLAY_NAME_KEY, sanitized)
+    setIsSaved(false)
   }
+
+  const handleSave = () => {
+    localStorage.setItem(DISPLAY_NAME_KEY, displayName)
+    setSavedName(displayName)
+    setIsSaved(true)
+    if (timerRef.current) clearTimeout(timerRef.current)
+    timerRef.current = setTimeout(() => setIsSaved(false), 2000)
+  }
+
+  const hasChanges = displayName !== savedName
 
   return (
     <div className={`${styles.section}${className ? ` ${className}` : ''}`}>
@@ -48,15 +66,26 @@ export function ProfileSection({ userName, userImage, className }: ProfileSectio
         <label className={styles.fieldLabel} htmlFor="display-name">
           What should Neo call you?
         </label>
-        <input
-          id="display-name"
-          type="text"
-          value={displayName}
-          onChange={(e) => handleDisplayNameChange(e.target.value)}
-          maxLength={MAX_DISPLAY_NAME_LEN}
-          placeholder={userName}
-          className={styles.fieldInput}
-        />
+        <div className={styles.inputWithButton}>
+          <input
+            id="display-name"
+            type="text"
+            value={displayName}
+            onChange={(e) => handleChange(e.target.value)}
+            onKeyDown={(e) => { if (e.key === 'Enter' && hasChanges) handleSave() }}
+            maxLength={MAX_DISPLAY_NAME_LEN}
+            placeholder={userName}
+            className={styles.fieldInput}
+          />
+          <button
+            type="button"
+            onClick={handleSave}
+            disabled={!hasChanges}
+            className={styles.saveButton}
+          >
+            {isSaved ? 'Saved' : 'Save'}
+          </button>
+        </div>
       </div>
     </div>
   )

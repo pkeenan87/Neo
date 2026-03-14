@@ -25,8 +25,10 @@ function PlatformCard({ platform, isRecommended, className }: PlatformCardProps)
 
   return (
     <div className={className ? `${baseClass} ${className}` : baseClass}>
-      {isRecommended && (
+      {isRecommended ? (
         <span className={styles.recommendedBadge}>Recommended for your system</span>
+      ) : (
+        <span className={styles.badgeSpacer} aria-hidden="true">Recommended for your system</span>
       )}
       <Icon className={styles.cardIcon} />
       <h3 className={styles.cardName}>{platform.name}</h3>
@@ -101,6 +103,9 @@ export default function DownloadsPage() {
 
       <div className={styles.section}>
         <h2 className={styles.sectionTitle}>Install Instructions</h2>
+        <p className={styles.sectionDesc}>
+          Select your platform for step-by-step installation instructions.
+        </p>
 
         <details className={styles.detailsBlock}>
           <summary className={styles.detailsSummary}>
@@ -108,17 +113,16 @@ export default function DownloadsPage() {
             Windows
           </summary>
           <div className={styles.detailsContent}>
-            <ol>
-              <li>Download the installer using the button above.</li>
+            <ol className={styles.numberedList}>
+              <li>Download the installer using the <strong>Download .exe</strong> button above.</li>
               <li>
                 Run <code className={styles.code}>NeoSetup-*.exe</code> and follow the setup wizard.
                 The installer places <code className={styles.code}>neo.exe</code> in Program Files
-                and adds it to your system PATH.
+                and adds it to your system PATH automatically.
               </li>
               <li>
-                Open a new terminal and verify the installation:
-                <br />
-                <code className={styles.code}>neo --version</code>
+                Open a <strong>new</strong> terminal window and verify the installation:
+                <pre className={styles.codeBlock}>neo --version</pre>
               </li>
             </ol>
           </div>
@@ -130,7 +134,7 @@ export default function DownloadsPage() {
             macOS
           </summary>
           <div className={styles.detailsContent}>
-            <p>Instructions will be available when this platform is supported.</p>
+            <p className={styles.stepDesc}>macOS support is coming soon. Instructions will be added when the installer is available.</p>
           </div>
         </details>
 
@@ -140,26 +144,26 @@ export default function DownloadsPage() {
             Linux
           </summary>
           <div className={styles.detailsContent}>
-            <p>Instructions will be available when this platform is supported.</p>
+            <p className={styles.stepDesc}>Linux support is coming soon. Instructions will be added when the installer is available.</p>
           </div>
         </details>
       </div>
 
       <div className={styles.section}>
-        <h2 className={styles.sectionTitle}>Quick Start</h2>
+        <h2 className={styles.sectionTitle}>Getting Started</h2>
+        <p className={styles.sectionDesc}>
+          After installing, follow these steps to connect and start investigating.
+        </p>
 
         <div className={styles.stepList}>
           <div className={styles.step}>
             <span className={styles.stepNumber}>1</span>
             <div className={styles.stepBody}>
-              <h3 className={styles.stepTitle}>Set the server URL</h3>
+              <h3 className={styles.stepTitle}>Connect to the server</h3>
               <p className={styles.stepDesc}>
-                If your Neo server is not running on localhost, set the{' '}
-                <code className={styles.code}>NEO_SERVER_URL</code> environment variable to point to
-                your server (e.g.{' '}
-                <code className={styles.code}>https://neo.example.com</code>). The default is{' '}
-                <code className={styles.code}>http://localhost:3000</code>.
+                If your Neo server is not on localhost, set the server URL:
               </p>
+              <pre className={styles.codeBlock}>export NEO_SERVER_URL=https://neo.yourcompany.com</pre>
             </div>
           </div>
 
@@ -168,11 +172,13 @@ export default function DownloadsPage() {
             <div className={styles.stepBody}>
               <h3 className={styles.stepTitle}>Authenticate</h3>
               <p className={styles.stepDesc}>
-                Run <code className={styles.code}>neo auth login</code> to authenticate via your
-                browser with Entra ID, or use{' '}
-                <code className={styles.code}>neo auth login --api-key YOUR_KEY</code> to
-                authenticate with an API key.
+                Log in with your Entra ID credentials:
               </p>
+              <pre className={styles.codeBlock}>neo auth login</pre>
+              <p className={styles.stepDesc}>
+                Or authenticate with an API key:
+              </p>
+              <pre className={styles.codeBlock}>neo auth login --api-key YOUR_KEY</pre>
             </div>
           </div>
 
@@ -181,24 +187,39 @@ export default function DownloadsPage() {
             <div className={styles.stepBody}>
               <h3 className={styles.stepTitle}>Start the CLI</h3>
               <p className={styles.stepDesc}>
-                Run <code className={styles.code}>neo</code> to start the interactive REPL. You can
-                begin investigating security incidents immediately.
+                Launch the interactive REPL:
               </p>
+              <pre className={styles.codeBlock}>neo</pre>
             </div>
           </div>
+        </div>
+      </div>
 
-          <div className={styles.step}>
-            <span className={styles.stepNumber}>4</span>
-            <div className={styles.stepBody}>
-              <h3 className={styles.stepTitle}>Try a command</h3>
-              <p className={styles.stepDesc}>
-                Ask a question like{' '}
-                <code className={styles.code}>
-                  Show me high severity incidents from the last 24 hours
-                </code>{' '}
-                and Neo will query Sentinel and present the findings.
-              </p>
-            </div>
+      <div className={styles.section}>
+        <h2 className={styles.sectionTitle}>Example Commands</h2>
+        <p className={styles.sectionDesc}>
+          Once you&#39;re in the Neo REPL, try these to get started:
+        </p>
+
+        <div className={styles.exampleList}>
+          <div className={styles.example}>
+            <p className={styles.exampleLabel}>Triage recent incidents</p>
+            <pre className={styles.codeBlock}>Show me high severity incidents from the last 24 hours</pre>
+          </div>
+
+          <div className={styles.example}>
+            <p className={styles.exampleLabel}>Investigate a user</p>
+            <pre className={styles.codeBlock}>Investigate user jsmith@company.com — check sign-in logs, MFA status, and risk level</pre>
+          </div>
+
+          <div className={styles.example}>
+            <p className={styles.exampleLabel}>Hunt for threats</p>
+            <pre className={styles.codeBlock}>Search for any sign-ins from TOR exit nodes in the past 7 days</pre>
+          </div>
+
+          <div className={styles.example}>
+            <p className={styles.exampleLabel}>Run a custom KQL query</p>
+            <pre className={styles.codeBlock}>Run this KQL: SigninLogs | where ResultType != 0 | summarize count() by UserPrincipalName</pre>
           </div>
         </div>
       </div>

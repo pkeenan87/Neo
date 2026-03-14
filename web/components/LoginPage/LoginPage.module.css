@@ -12,7 +12,7 @@
 }
 
 :global(html.dark) .page {
-  background-color: #1a1a1a;
+  background-color: #313338;
 }
 
 /* ─── Boot sequence ─── */
@@ -22,7 +22,7 @@
   display: flex;
   flex-direction: column;
   gap: 0.25rem;
-  color: #22c55e;
+  color: #3ba55d;
 }
 
 /* ─── Login card wrapper ─── */
@@ -46,9 +46,9 @@
 }
 
 :global(html.dark) .card {
-  border-color: rgba(34, 197, 94, 0.3);
-  background: rgba(26, 26, 26, 0.8);
-  box-shadow: 0 0 50px rgba(34, 197, 94, 0.1);
+  border-color: rgba(255, 255, 255, 0.10);
+  background: rgba(56, 58, 64, 0.8);
+  box-shadow: 0 0 30px rgba(59, 165, 93, 0.07);
 }
 
 /* ─── Scan line ─── */
@@ -59,11 +59,16 @@
   height: 5rem;
   width: 100%;
   background: linear-gradient(to bottom, transparent, rgba(100, 116, 139, 0.05), transparent);
-  animation: scan 4s linear infinite;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .scanLine {
+    animation: scan 4s linear infinite;
+  }
 }
 
 :global(html.dark) .scanLine {
-  background: linear-gradient(to bottom, transparent, rgba(34, 197, 94, 0.05), transparent);
+  background: linear-gradient(to bottom, transparent, rgba(255, 255, 255, 0.03), transparent);
 }
 
 /* ─── Card header ─── */
@@ -94,12 +99,17 @@
 }
 
 :global(html.dark) .title {
-  color: #22c55e;
+  color: #3ba55d;
   text-shadow:
     0.05em 0 0 rgba(255, 0, 0, 0.75),
     -0.025em -0.05em 0 rgba(0, 255, 0, 0.75),
     0.025em 0.05em 0 rgba(0, 0, 255, 0.75);
-  animation: glitch 500ms infinite;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  :global(html.dark) .title {
+    animation: glitch 500ms infinite;
+  }
 }
 
 /* ─── Subtitle ─── */
@@ -115,7 +125,7 @@
 }
 
 :global(html.dark) .subtitle {
-  color: rgba(34, 197, 94, 0.6);
+  color: #b9bbbe;
 }
 
 @keyframes glitch {
@@ -165,7 +175,7 @@
 }
 
 :global(html.dark) .quote {
-  color: rgba(34, 197, 94, 0.8);
+  color: #dbdee1;
 }
 
 /* ─── Login button ─── */
@@ -202,12 +212,12 @@
 }
 
 :global(html.dark) .loginButton {
-  background: #22c55e;
+  background: #3ba55d;
   color: #000;
 }
 
 :global(html.dark) .loginButton:hover {
-  background: #4ade80;
+  background: #4cba6e;
 }
 
 .loginButtonContent {
@@ -241,7 +251,7 @@
 }
 
 :global(html.dark) .ssoHint {
-  color: rgba(34, 197, 94, 0.3);
+  color: rgba(255, 255, 255, 0.10);
 }
 
 /* ─── Footer status bar ─── */
@@ -259,8 +269,8 @@
 }
 
 :global(html.dark) .footer {
-  border-top-color: rgba(34, 197, 94, 0.1);
-  color: rgba(34, 197, 94, 0.4);
+  border-top-color: rgba(255, 255, 255, 0.06);
+  color: #a3a6aa;
 }
 
 /* ─── Status dot ─── */
@@ -269,11 +279,16 @@
   height: 0.375rem;
   border-radius: 9999px;
   background: #94a3b8;
-  animation: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .statusDot {
+    animation: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+  }
 }
 
 :global(html.dark) .statusDot {
-  background: #22c55e;
+  background: #3ba55d;
 }
 
 @keyframes pulse {
@@ -299,7 +314,7 @@
 }
 
 :global(html.dark) .attribution {
-  color: rgba(34, 197, 94, 0.2);
+  color: #4e5058;
 }
 
 /* ─── Theme toggle ─── */
@@ -319,13 +334,13 @@
 }
 
 :global(html.dark) .themeToggle {
-  border-color: rgba(34, 197, 94, 0.2);
-  color: rgba(34, 197, 94, 0.4);
+  border-color: #4e5058;
+  color: #a3a6aa;
 }
 
 :global(html.dark) .themeToggle:hover {
-  color: #22c55e;
-  border-color: rgba(34, 197, 94, 0.4);
+  color: #3ba55d;
+  border-color: #a3a6aa;
 }
 
 /* ─── Scan keyframe (scoped to module) ─── */

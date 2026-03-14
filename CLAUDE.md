@@ -72,7 +72,7 @@ Next.js app with server-side Claude API integration.
 - **`lib/`** — Shared server-side logic (agent, tools, executors, auth, config, types)
 - **`lib/context-manager.ts`** — Context window management: token estimation, per-tool-result truncation, Haiku-powered rolling conversation compression
 - **`lib/usage-tracker.ts`** — Per-user token usage tracking with Cosmos DB, pessimistic budget reservations, rolling window enforcement (2-hour and weekly)
-- **`context/ThemeContext.tsx`** — Theme provider supporting `'light'` | `'dark'` | `'auto'` modes. `'auto'` tracks system preference via `matchMedia` listener. Stored in `localStorage` key `neo-theme`
+- **`context/ThemeContext.tsx`** — Theme provider supporting `'light'` | `'dark'` modes. Stored in `localStorage` key `neo-theme`
 - **`components/SettingsPage/`** — Settings page components (SettingsPage, ProfileSection, AppearanceSection, UsageSection, ProgressBar)
 
 ## Key Design Patterns
@@ -87,7 +87,7 @@ Next.js app with server-side Claude API integration.
 
 **Token optimization**: The agent loop uses Anthropic prompt caching (`cache_control: { type: "ephemeral" }`) on both the system prompt and tool schemas. Default model is Sonnet (user-selectable to Opus). Per-user token budgets (2-hour and weekly rolling windows) are enforced via pessimistic reservations in Cosmos DB before the agent loop runs.
 
-**Client-side preferences**: User display name (`neo-display-name`) and theme preference (`neo-theme`) are stored in `localStorage`. The settings page (`/settings`) provides the UI for these. Theme supports `'light'`, `'dark'`, and `'auto'` (system preference tracking).
+**Client-side preferences**: User display name (`neo-display-name`) and theme preference (`neo-theme`) are stored in `localStorage`. The settings page (`/settings`) provides the UI for these.
 
 ## Adding a New Tool (CLI)
 
@@ -122,6 +122,18 @@ Configured via `.env` file (see `.env.example`):
 
 ## Next.js / React Styling Preferences
 
+### Tailwind v4 + CSS Modules Setup
+
+This project uses **Tailwind v4** with `@tailwindcss/postcss`. Custom design tokens are defined in `web/tailwind.config.ts` and bridged into the v4 CSS pipeline via `@config "../tailwind.config.ts"` in `web/app/globals.css`.
+
+**Critical: `@apply` in CSS modules requires `@reference`**. Every `.module.css` file that uses `@apply` MUST start with:
+```css
+@reference "../../app/globals.css";
+```
+Adjust the relative path based on the file's location. Without this, `@apply` directives are silently dropped during Turbopack compilation and CSS module class names resolve to `undefined` at runtime. The `@reference` directive imports the Tailwind context (including all custom tokens from `tailwind.config.ts`) without emitting any CSS.
+
+The PostCSS config at `web/postcss.config.mjs` wires `@tailwindcss/postcss` into the build pipeline so CSS modules are processed through Tailwind.
+
 ### Component Structure
 Every component lives in its own folder:
 ```
@@ -132,6 +144,8 @@ components/ComponentName/
 ```
 
 All components roll up to `components/index.ts`. Always import from the barrel (`@/components`), never deep imports.
+
+Canonical component patterns for Button, Card, Input, NavBar, Modal, and Badge are defined in `.claude/skills/ui-standards-refactor/references/component-patterns.md`. Use these as the baseline when building new components — they enforce the 3-class rule, correct hover patterns, and proper TypeScript shapes.
 
 ### The 3-Class Inline Rule
 Maximum 3 Tailwind classes inline on any JSX element. When a 4th is needed, extract ALL classes for that element into a CSS Module using `@apply`.
@@ -148,6 +162,19 @@ Maximum 3 Tailwind classes inline on any JSX element. When a 4th is needed, extr
 
 CSS module class names use **camelCase semantic names** (`.cardWrapper`, `.primaryButton`) — never visual names (`.flexRow`, `.bgWhite`).
 
+### Design Tokens
+
+All colors must come from the design token scales in `tailwind.config.ts`. Never use arbitrary hex values in JSX or CSS modules when a token exists.
+
+| Token | Usage |
+|-------|-------|
+| `brand-50` through `brand-900` | Primary UI (Slate scale in light mode) |
+| `accent-400`, `accent-500` | Dark mode primary brand (Green scale) |
+| `surface-default`, `surface-raised`, `surface-sunken`, `surface-overlay` | Background surfaces |
+| `border-default`, `border-strong` | Borders and dividers |
+| `success-500`, `error-500`, `warning-500` | Semantic status colors |
+| `shadow-card`, `shadow-card-hover`, `shadow-modal`, `shadow-dropdown` | Elevation |
+
 ### Hover States
 Never use `hover:opacity-80`. Always use explicit shade tokens (one step darker/lighter):
 ```css
@@ -160,6 +187,14 @@ Never use `hover:opacity-80`. Always use explicit shade tokens (one step darker/
 .ghostButton { @apply bg-transparent transition-colors duration-150; }
 .ghostButton:hover { @apply bg-brand-50; }
 ```
+
+### Dark Mode
+Dark mode is class-based (`.dark` on `<html>`), managed by `ThemeContext`. In CSS modules, use `:global(html.dark)` selector:
+```css
+.container { @apply bg-surface-default; }
+:global(html.dark) .container { @apply bg-brand-900; }
+```
+Dark mode accent color is green (`#22c55e` primary, `#4ade80` hover, `rgba(34, 197, 94, ...)` for opacity variants).
 
 ### TypeScript Conventions
 - No `any` — ever. Use proper types or `unknown` + narrow.
@@ -176,6 +211,15 @@ Only use: `2 / 4 / 8 / 16 / 32` (0.5 / 1 / 2 / 4 / 8rem). Avoid `px-3`, `py-5`, 
 - Size and weight always travel together (`text-3xl font-bold`).
 - `tracking-tight` for headings 2xl+, `tracking-normal` otherwise.
 - Use semantic HTML heading elements (`h1`–`h6`), never a `div` styled as a heading.
+
+### Accessibility
+- All interactive elements must have visible `:focus-visible` styles (use `outline` or `box-shadow`, never remove focus indicators without replacement).
+- Use ARIA tablist/tab/tabpanel pattern for within-page tab navigation (not `<nav>`).
+- `role="progressbar"` goes on the track element, not the fill. Use `aria-valuetext` for human-readable values.
+- Group related controls with `role="group"` + `aria-labelledby` or `<fieldset>`/`<legend>`.
+- Gate animations behind `@media (prefers-reduced-motion: no-preference)`.
+- Use `aria-live="polite"` for dynamic status text (e.g., loading states, timestamps).
+- Decorative icons get `aria-hidden="true"`.
 
 ### Next.js Specifics
 - Images: `next/image` with explicit dimensions or `fill` + `sizes`
@@ -194,3 +238,6 @@ Only use: `2 / 4 / 8 / 16 / 32` (0.5 / 1 / 2 / 4 / 8rem). Avoid `px-3`, `py-5`, 
 | Deep component imports | Barrel import from `@/components` |
 | `<a href="/page">` | `<Link href="/page">` |
 | `any` type | Proper interface or `unknown` |
+| CSS module without `@reference` | Add `@reference "../../app/globals.css"` at top |
+| Raw CSS values when token exists | Use `@apply` with design token |
+| `outline: none` without replacement | `:focus-visible` with box-shadow or outline |

@@ -23,9 +23,7 @@ import {
 import Link from 'next/link'
 import { useTheme } from '@/context/ThemeContext'
 import { useConversationCache } from '@/context/ConversationCacheContext'
-import { MarkdownRenderer } from '@/components/MarkdownRenderer'
-import { ThinkingBubble } from '@/components/ThinkingBubble'
-import { UserAvatar } from '@/components/UserAvatar'
+import { MarkdownRenderer, ThinkingBubble, UserAvatar } from '@/components'
 import styles from './ChatInterface.module.css'
 import type { Conversation, ConversationMeta, PendingTool } from '@/lib/types'
 
@@ -713,11 +711,9 @@ export function ChatInterface({
                 )}
 
                 <div className={msg.role === 'user' ? styles.msgContentUser : styles.msgContent}>
-                  {msg.role === 'assistant' && (
-                    <div className={styles.msgLabel}>
-                      Neo Agent
-                    </div>
-                  )}
+                  <div className={styles.msgLabel}>
+                    {msg.role === 'assistant' ? 'Neo Agent' : userName}
+                  </div>
                   <div
                     className={
                       msg.role === 'assistant'

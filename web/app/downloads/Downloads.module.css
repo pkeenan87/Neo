@@ -1,3 +1,5 @@
+@reference "../globals.css";
+
 /* ─── Page layout ─── */
 .page {
   @apply min-h-dvh py-16 px-8;
@@ -7,8 +9,8 @@
 }
 
 :global(html.dark) .page {
-  background-color: #1a1a1a;
-  @apply text-green-500;
+  background-color: #313338;
+  color: #dbdee1;
 }
 
 /* ─── Back link ─── */
@@ -22,11 +24,11 @@
 }
 
 :global(html.dark) .backLink {
-  color: rgba(34, 197, 94, 0.5);
+  color: #b9bbbe;
 }
 
 :global(html.dark) .backLink:hover {
-  @apply text-green-400;
+  color: #3ba55d;
 }
 
 /* ─── Header ─── */
@@ -43,7 +45,7 @@
 }
 
 :global(html.dark) .subtitle {
-  color: rgba(34, 197, 94, 0.5);
+  color: #a3a6aa;
 }
 
 /* ─── Mobile notice ─── */
@@ -74,12 +76,12 @@
 }
 
 :global(html.dark) .card {
-  background-color: #222;
-  border-color: rgba(34, 197, 94, 0.15);
+  background-color: #2b2d31;
+  border-color: rgba(255, 255, 255, 0.06);
 }
 
 :global(html.dark) .card:hover {
-  border-color: rgba(34, 197, 94, 0.3);
+  border-color: rgba(255, 255, 255, 0.12);
 }
 
 .cardRecommended {
@@ -88,17 +90,30 @@
 }
 
 :global(html.dark) .cardRecommended {
-  border-color: #22c55e;
-  --tw-ring-color: #22c55e;
+  border-color: #3ba55d;
+  --tw-ring-color: #3ba55d;
+}
+
+/* Shared sizing for badge and its invisible spacer */
+.recommendedBadge,
+.badgeSpacer {
+  @apply text-xs font-bold mb-4 px-2 py-1 rounded;
+  display: inline-block;
 }
 
 .recommendedBadge {
-  @apply text-xs font-bold mb-4 px-2 py-1 rounded;
   @apply bg-slate-900 text-white;
 }
 
 :global(html.dark) .recommendedBadge {
-  @apply bg-green-600 text-white;
+  background-color: #3ba55d;
+  color: #fff;
+}
+
+/* Invisible spacer preserves card alignment without semantic coupling */
+.badgeSpacer {
+  visibility: hidden;
+  pointer-events: none;
 }
 
 .cardIcon {
@@ -114,7 +129,7 @@
 }
 
 :global(html.dark) .cardMeta {
-  color: rgba(34, 197, 94, 0.4);
+  color: #a3a6aa;
 }
 
 /* ─── Download button ─── */
@@ -133,15 +148,16 @@
 }
 
 :global(html.dark) .downloadBtn {
-  @apply bg-green-600 text-white;
+  background-color: #3ba55d;
+  color: #fff;
 }
 
 :global(html.dark) .downloadBtn:hover {
-  @apply bg-green-700;
+  background-color: #4cba6e;
 }
 
 :global(html.dark) .downloadBtn:focus-visible {
-  outline-color: #22c55e;
+  outline-color: #3ba55d;
 }
 
 .comingSoonBadge {
@@ -150,8 +166,8 @@
 }
 
 :global(html.dark) .comingSoonBadge {
-  background-color: #333;
-  color: rgba(34, 197, 94, 0.3);
+  background-color: #1e1f22;
+  color: #a3a6aa;
 }
 
 /* ─── Sections ─── */
@@ -160,7 +176,15 @@
 }
 
 .sectionTitle {
-  @apply text-2xl font-bold tracking-tight mb-8;
+  @apply text-2xl font-bold tracking-tight mb-2;
+}
+
+.sectionDesc {
+  @apply text-sm text-slate-500 mb-8;
+}
+
+:global(html.dark) .sectionDesc {
+  color: #b9bbbe;
 }
 
 /* ─── Collapsible instructions ─── */
@@ -169,7 +193,7 @@
 }
 
 :global(html.dark) .detailsBlock {
-  border-color: rgba(34, 197, 94, 0.15);
+  border-color: rgba(255, 255, 255, 0.06);
 }
 
 .detailsSummary {
@@ -188,7 +212,7 @@
 }
 
 :global(html.dark) .detailsSummary:focus-visible {
-  outline-color: #22c55e;
+  outline-color: #3ba55d;
 }
 
 .summaryChevron {
@@ -200,7 +224,23 @@
 }
 
 .detailsContent {
-  @apply px-4 pb-4 text-sm leading-relaxed;
+  @apply pb-4 text-sm leading-relaxed;
+  /* Left padding aligns with summary text: px-4 (1rem) + chevron w-4 (1rem) + gap-2 (0.5rem) */
+  padding-left: 2.5rem;
+  padding-right: 1rem;
+}
+
+.numberedList {
+  @apply space-y-4 pl-4;
+  list-style: decimal;
+}
+
+.numberedList li {
+  @apply pl-2;
+}
+
+.numberedList li::marker {
+  @apply font-bold;
 }
 
 /* ─── Quick-start steps ─── */
@@ -219,7 +259,7 @@
 }
 
 :global(html.dark) .stepNumber {
-  @apply bg-green-600;
+  background-color: #3ba55d;
 }
 
 .stepBody {
@@ -236,7 +276,38 @@
 }
 
 :global(html.dark) .stepDesc {
-  color: rgba(34, 197, 94, 0.5);
+  color: #b9bbbe;
+}
+
+/* ─── Code block (multi-line command) ─── */
+.codeBlock {
+  @apply px-4 py-2 rounded-lg text-sm font-mono mt-2 mb-2;
+  @apply bg-slate-100 text-slate-800;
+  overflow-x: auto;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+:global(html.dark) .codeBlock {
+  background-color: #1e1f22;
+  color: #dbdee1;
+}
+
+/* ─── Example commands ─── */
+.exampleList {
+  @apply space-y-4;
+}
+
+.example {
+  @apply border border-slate-200 rounded-lg p-4;
+}
+
+:global(html.dark) .example {
+  border-color: rgba(255, 255, 255, 0.06);
+}
+
+.exampleLabel {
+  @apply text-sm font-bold mb-2;
 }
 
 .code {
@@ -245,6 +316,6 @@
 }
 
 :global(html.dark) .code {
-  background-color: #333;
-  @apply text-green-400;
+  background-color: #1e1f22;
+  color: #dbdee1;
 }
