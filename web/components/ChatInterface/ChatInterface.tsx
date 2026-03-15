@@ -167,7 +167,7 @@ export function ChatInterface({
   const [slashMenuOpen, setSlashMenuOpen] = useState(false)
   const [slashFilter, setSlashFilter] = useState('')
   const [slashSelectedIndex, setSlashSelectedIndex] = useState(0)
-  const slashSkillsRef = useRef<Array<{ id: string; name: string; description: string; parameters: string[] }>>([])
+  const [slashSkills, setSlashSkills] = useState<Array<{ id: string; name: string; description: string; parameters: string[] }>>([])
   const slashFetchedRef = useRef(false)
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
@@ -469,13 +469,14 @@ export function ChatInterface({
 
   // Slash command helpers
   const fetchSlashSkills = useCallback(async () => {
-    if (slashFetchedRef.current && slashSkillsRef.current.length > 0) return
+    if (slashFetchedRef.current) return
     try {
       const res = await fetch('/api/skills')
       if (res.ok) {
         const data = await res.json()
-        slashSkillsRef.current = data.skills ?? []
-        if (slashSkillsRef.current.length > 0) {
+        const skills = data.skills ?? []
+        setSlashSkills(skills)
+        if (skills.length > 0) {
           slashFetchedRef.current = true
         }
       }
@@ -486,10 +487,10 @@ export function ChatInterface({
 
   const filteredSkills = useMemo(() => {
     const q = slashFilter.toLowerCase()
-    return slashSkillsRef.current.filter(
+    return slashSkills.filter(
       (s) => s.id.toLowerCase().includes(q) || s.name.toLowerCase().includes(q)
     )
-  }, [slashFilter])
+  }, [slashFilter, slashSkills])
 
   const handleSlashInputChange = useCallback((value: string) => {
     setInputValue(value)
