@@ -293,7 +293,7 @@ Without Cosmos DB configured (or in mock mode), sessions are stored in-memory an
 
 ### Settings
 
-Click the gear icon in the chat sidebar footer to open the Settings page (`/settings`). The page has two tabs:
+Click the gear icon in the chat sidebar footer to open the Settings page (`/settings`). The page has the following tabs:
 
 **General**
 
@@ -308,6 +308,13 @@ Click the gear icon in the chat sidebar footer to open the Settings page (`/sett
 - **Refresh**: Click the refresh button to re-fetch the latest usage data from the server.
 
 Progress bars change color as you approach limits: blue for normal usage, amber at 80%, red at 95%.
+
+**API Keys** (admin-only)
+
+- **Create key**: Generate API keys with a label, role, and optional expiration (max 2 years). The raw key is shown once on creation.
+- **Key table**: View all your keys with label, role, creation date, expiration, last used timestamp, and status (Active/Expired/Revoked).
+- **Revoke**: Immediately invalidate a key with inline confirmation.
+- Super-admins (configured via `SUPER_ADMIN_IDS`) can view and manage all keys.
 
 ### Debugging
 
@@ -571,38 +578,24 @@ You can also create skills by placing `.md` files directly in the `web/skills/` 
 
 ### Managing API Keys
 
-API keys are stored in `web/api-keys.json`. The server watches this file and reloads automatically.
+When Azure Cosmos DB and Key Vault are configured, API keys are managed through the Settings page in the web UI. Navigate to `/settings` and select the **API Keys** tab (admin-only).
 
-**Add a new key**:
+**Creating a key**:
 
-1. Generate a secure key:
-   ```bash
-   openssl rand -base64 24
-   ```
+1. Enter a label (e.g., "CI Pipeline"), select a role (admin or reader), and optionally set an expiration date (maximum 2 years).
+2. Click **Create Key**.
+3. The raw key is displayed exactly once in a modal. Copy it immediately — it cannot be retrieved again.
+4. Distribute the key securely to the user or system that needs it.
 
-2. Edit `web/api-keys.json`:
-   ```json
-   {
-     "keys": [
-       {
-         "key": "existing-key...",
-         "role": "admin",
-         "label": "SOC Team Admin"
-       },
-       {
-         "key": "newly-generated-key",
-         "role": "reader",
-         "label": "Analyst - Jane Doe"
-       }
-     ]
-   }
-   ```
+**Revoking a key**: Click **Revoke** next to any active key in the table. Confirm the inline prompt. The key is immediately invalidated — the next API call using it will receive a 401 response.
 
-3. Save the file. The server picks up changes immediately (no restart needed).
+**Key limits**: Each admin can have up to 20 active keys. Keys can have a maximum lifetime of 2 years.
 
-**Revoke a key**: Remove its entry from `api-keys.json` and save.
+**Super-admin**: Users whose owner ID is listed in the `SUPER_ADMIN_IDS` environment variable can view and revoke all keys across all admins. Regular admins can only manage their own keys.
 
-**Rotate a key**: Replace the `key` value with a new one and distribute the new key to the user.
+**Last used tracking**: The key table shows when each key was last used for authentication, helping identify stale keys.
+
+**Fallback (JSON file)**: For deployments without Cosmos DB, API keys can still be managed via `web/api-keys.json` (the legacy approach). The server watches this file and reloads automatically. See the [Configuration Guide](configuration.md#api-key-management) for the JSON file format.
 
 ### Managing Sessions (Admin)
 
@@ -741,6 +734,7 @@ Neo includes built-in protection against prompt injection attacks. This is trans
 | View skills | Yes | Yes |
 | Create/update/delete skills | Yes | No |
 | Use admin-only skills | Yes | No |
+| Create/revoke API keys | Yes | No |
 | Message limit per session | 200 | 100 |
 
 ### Rate Limits
@@ -786,6 +780,9 @@ All endpoints require authentication via `Authorization: Bearer <api-key>` heade
 | `PUT` | `/api/skills/{id}` | Update a skill. Admin only. Body: `{ "content": "..." }` |
 | `DELETE` | `/api/skills/{id}` | Delete a skill. Admin only. |
 | `GET` | `/api/usage` | Get token usage summary for the authenticated user (two-hour and weekly windows). |
+| `GET` | `/api/api-keys` | List API keys for the authenticated admin (super-admins see all keys). |
+| `POST` | `/api/api-keys` | Create an API key. Admin only. Body: `{ "label": "...", "role": "admin|reader", "expiresAt?": "..." }` |
+| `DELETE` | `/api/api-keys/{id}` | Revoke an API key by hash ID. Admin only (ownership enforced, super-admin bypass). |
 | `GET` | `/downloads` | Public (no auth). CLI installer downloads page with OS detection and install guide. |
 | `GET` | `/api/downloads/[filename]` | Public (no auth). Streams an installer file from Azure Blob Storage. |
 | `GET` | `/api/cli/version` | Public (no auth). Returns latest CLI version, download URL, platform, and SHA-256 hash. |

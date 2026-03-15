@@ -132,7 +132,26 @@ INJECTION_GUARD_MODE=monitor
 
 ### API Key Management
 
-API keys are stored in `web/api-keys.json`:
+API keys can be managed in two ways depending on your deployment:
+
+**Option A — Cosmos DB + Key Vault (recommended for production)**
+
+When both `COSMOS_ENDPOINT` and `KEY_VAULT_URL` are configured, API keys are stored encrypted in a dedicated Cosmos DB container (`api-keys`). Keys are encrypted at rest using an RSA key in Azure Key Vault and looked up via SHA-256 hash for fast authentication. Admins create and revoke keys through the Settings page (`/settings` > API Keys tab).
+
+| Environment Variable | Required | Description |
+|---------------------|----------|-------------|
+| `COSMOS_ENDPOINT` | Yes | Cosmos DB endpoint (same as chat persistence) |
+| `KEY_VAULT_URL` | Yes | Key Vault URL (same as tool integrations) |
+| `KEY_VAULT_KEY_NAME` | No | RSA key name for API key encryption (default: `neo-api-key-encryption`) |
+| `SUPER_ADMIN_IDS` | No | Comma-separated owner IDs that can view/revoke all keys across all admins |
+
+Each key record includes: label, role, creation date, optional expiration (max 2 years), creator, revocation status, and last-used timestamp. Keys are encrypted with RSA-OAEP before storage. The raw key is shown exactly once on creation and cannot be retrieved again.
+
+Run `scripts/provision-cosmos-db.ps1` to create the `api-keys` container, and `scripts/provision-key-vault.ps1` to create the RSA encryption key and assign the `Key Vault Crypto Officer` role.
+
+**Option B — JSON file (fallback for development or simple deployments)**
+
+When Cosmos DB is not configured, API keys fall back to `web/api-keys.json`:
 
 ```json
 {
@@ -163,7 +182,7 @@ An example file is provided at `web/api-keys.example.json`.
 
 **Hot-reload**: The server watches `api-keys.json` for changes. You can add or remove keys without restarting the server.
 
-**Security**: Keep `api-keys.json` out of version control. Add it to `.gitignore` if it contains production keys.
+**Security**: Keep `api-keys.json` out of version control. Add it to `.gitignore` if it contains production keys. For production deployments, use the Cosmos DB option instead.
 
 ### Entra ID Setup (Web Server)
 
