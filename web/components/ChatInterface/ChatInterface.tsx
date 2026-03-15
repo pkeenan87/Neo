@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import Image from 'next/image'
 import { AnimatePresence, motion } from 'motion/react'
 import {
@@ -19,7 +19,6 @@ import {
   Check,
   X,
   Loader2,
-  Blocks,
 } from 'lucide-react'
 import Link from 'next/link'
 import { useTheme } from '@/context/ThemeContext'
@@ -37,6 +36,7 @@ interface ChatMessage {
   role: 'user' | 'assistant'
   content: string
   toolsUsed?: string[]
+  skillBadge?: string
 }
 
 interface SessionEvent { type: 'session'; sessionId: string }
@@ -45,6 +45,7 @@ interface ToolCallEvent { type: 'tool_call'; tool: string; input: Record<string,
 interface ConfirmationEvent { type: 'confirmation_required'; tool: PendingTool }
 interface ResponseEvent { type: 'response'; text: string }
 interface ErrorEvent { type: 'error'; message: string; code?: string }
+interface SkillInvocationEvent { type: 'skill_invocation'; skill: { id: string; name: string } }
 
 type StreamEvent =
   | SessionEvent
@@ -53,6 +54,7 @@ type StreamEvent =
   | ConfirmationEvent
   | ResponseEvent
   | ErrorEvent
+  | SkillInvocationEvent
 
 interface TextBlock { type: 'text'; text: string }
 
@@ -162,6 +164,11 @@ export function ChatInterface({
   )
   const [currentToolName, setCurrentToolName] = useState<string | null>(null)
   const [isThinking, setIsThinking] = useState(false)
+  const [slashMenuOpen, setSlashMenuOpen] = useState(false)
+  const [slashFilter, setSlashFilter] = useState('')
+  const [slashSelectedIndex, setSlashSelectedIndex] = useState(0)
+  const slashSkillsRef = useRef<Array<{ id: string; name: string; description: string; parameters: string[] }>>([])
+  const slashFetchedRef = useRef(false)
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const editInputRef = useRef<HTMLInputElement>(null)
@@ -426,6 +433,17 @@ export function ChatInterface({
                 },
               ])
               break
+            case 'skill_invocation':
+              setMessages(prev => [
+                ...prev,
+                {
+                  id: crypto.randomUUID(),
+                  role: 'assistant',
+                  content: '',
+                  skillBadge: event.skill.name,
+                },
+              ])
+              break
             case 'error':
               setIsThinking(false)
               setMessages(prev => [
@@ -449,10 +467,76 @@ export function ChatInterface({
     setIsThinking(false)
   }
 
-  const handleSendMessage = async () => {
-    if (!inputValue.trim() || isLoading) return
+  // Slash command helpers
+  const fetchSlashSkills = useCallback(async () => {
+    if (slashFetchedRef.current) return
+    slashFetchedRef.current = true
+    try {
+      const res = await fetch('/api/skills')
+      if (res.ok) {
+        const data = await res.json()
+        slashSkillsRef.current = data.skills ?? []
+      }
+    } catch {
+      // Silent
+    }
+  }, [])
 
-    const userMessage = inputValue
+  const filteredSkills = useMemo(() => {
+    const q = slashFilter.toLowerCase()
+    return slashSkillsRef.current.filter(
+      (s) => s.id.toLowerCase().includes(q) || s.name.toLowerCase().includes(q)
+    )
+  }, [slashFilter])
+
+  const handleSlashInputChange = useCallback((value: string) => {
+    setInputValue(value)
+    if (value.startsWith('/') && !value.includes(' ')) {
+      void fetchSlashSkills()
+      setSlashFilter(value.slice(1))
+      setSlashMenuOpen(true)
+      setSlashSelectedIndex(0)
+    } else {
+      setSlashMenuOpen(false)
+    }
+  }, [fetchSlashSkills])
+
+  const sendMessageRef = useRef<((msg?: string) => Promise<void>) | null>(null)
+
+  const handleSlashSelect = useCallback((skill: { id: string; parameters: string[] }) => {
+    setSlashMenuOpen(false)
+    if (skill.parameters.length > 0) {
+      setInputValue(`/${skill.id} `)
+      textareaRef.current?.focus()
+    } else {
+      setInputValue('')
+      void sendMessageRef.current?.(`/${skill.id}`)
+    }
+  }, [])
+
+  const handleSlashKeyDown = useCallback((e: React.KeyboardEvent) => {
+    if (!slashMenuOpen) return
+    if (filteredSkills.length === 0) return
+
+    if (e.key === 'ArrowDown') {
+      e.preventDefault()
+      setSlashSelectedIndex((prev) => (prev + 1) % filteredSkills.length)
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault()
+      setSlashSelectedIndex((prev) => (prev - 1 + filteredSkills.length) % filteredSkills.length)
+    } else if (e.key === 'Enter' || e.key === 'Tab') {
+      e.preventDefault()
+      handleSlashSelect(filteredSkills[slashSelectedIndex])
+    } else if (e.key === 'Escape') {
+      setSlashMenuOpen(false)
+    }
+  }, [slashMenuOpen, filteredSkills, slashSelectedIndex, handleSlashSelect])
+
+  const handleSendMessage = async (messageOverride?: string) => {
+    const msg = messageOverride ?? inputValue
+    if (!msg.trim() || isLoading) return
+
+    const userMessage = msg
     setInputValue('')
     setMessages(prev => [...prev, { id: crypto.randomUUID(), role: 'user', content: userMessage }])
     setIsLoading(true)
@@ -494,6 +578,9 @@ export function ChatInterface({
       void refreshConversations()
     }
   }
+
+  // Keep ref in sync so handleSlashSelect can call it without a circular dependency
+  sendMessageRef.current = handleSendMessage
 
   // Handle browser back/forward navigation (Step 10)
   useEffect(() => {
@@ -722,7 +809,9 @@ export function ChatInterface({
                         : styles.msgBubbleUser
                     }
                   >
-                    {msg.role === 'assistant'
+                    {msg.skillBadge
+                      ? <span role="status" className={styles.skillBadge}>Skill: {msg.skillBadge}</span>
+                      : msg.role === 'assistant'
                       ? <MarkdownRenderer content={msg.content} />
                       : msg.content}
                     {msg.toolsUsed && msg.toolsUsed.length > 0 && (
@@ -825,14 +914,52 @@ export function ChatInterface({
           <div className={styles.inputInner}>
             <div className={styles.inputGroup}>
               <div className={styles.inputGlow} />
+              {/* Slash command popover */}
+              {slashMenuOpen && (
+                <ul id="slash-listbox" role="listbox" aria-label="Available skills" className={styles.slashPopover}>
+                  {filteredSkills.length === 0 ? (
+                    <li role="option" aria-disabled="true" aria-selected="false" className={styles.slashEmpty}>
+                      No skills available
+                    </li>
+                  ) : (
+                    filteredSkills.map((skill, i) => (
+                      <li
+                        key={skill.id}
+                        id={`slash-option-${i}`}
+                        role="option"
+                        aria-selected={i === slashSelectedIndex}
+                        className={`${styles.slashItem} ${i === slashSelectedIndex ? styles.slashItemActive : ''}`}
+                        onMouseDown={(e) => { e.preventDefault(); handleSlashSelect(skill) }}
+                      >
+                        <span className={styles.slashItemName}>/{skill.id}</span>
+                        <span className={styles.slashItemDescription}>{skill.name}</span>
+                        {skill.parameters.length > 0 && (
+                          <span className={styles.slashItemParams}>
+                            {skill.parameters.map((p) => `<${p}>`).join(' ')}
+                          </span>
+                        )}
+                      </li>
+                    ))
+                  )}
+                </ul>
+              )}
               <div className={styles.inputContainer}>
                 <label htmlFor="chat-input" className="sr-only">Security directive</label>
                 <textarea
                   ref={textareaRef}
                   id="chat-input"
+                  role="combobox"
+                  aria-expanded={slashMenuOpen}
+                  aria-haspopup="listbox"
+                  aria-controls={slashMenuOpen ? 'slash-listbox' : undefined}
+                  aria-activedescendant={slashMenuOpen && filteredSkills.length > 0 ? `slash-option-${slashSelectedIndex}` : undefined}
                   value={inputValue}
-                  onChange={e => setInputValue(e.target.value)}
+                  onChange={e => handleSlashInputChange(e.target.value)}
                   onKeyDown={e => {
+                    if (slashMenuOpen) {
+                      handleSlashKeyDown(e)
+                      return
+                    }
                     if (e.key === 'Enter' && !e.shiftKey) {
                       e.preventDefault()
                       void handleSendMessage()

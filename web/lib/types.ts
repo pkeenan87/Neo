@@ -77,7 +77,8 @@ export type AgentEventType =
   | "response"
   | "error"
   | "warning"
-  | "context_trimmed";
+  | "context_trimmed"
+  | "skill_invocation";
 
 export type AgentEvent =
   | { type: "session"; sessionId: string }
@@ -88,7 +89,8 @@ export type AgentEvent =
   | { type: "error"; message: string; code?: string }
   | { type: "warning"; message: string; code: string }
   | { type: "context_trimmed"; originalTokens: number; newTokens: number; method: "truncation" | "summary" }
-  | { type: "usage"; usage: TokenUsage; model: ModelPreference };
+  | { type: "usage"; usage: TokenUsage; model: ModelPreference }
+  | { type: "skill_invocation"; skill: { id: string; name: string } };
 
 // ─────────────────────────────────────────────────────────────
 //  Session

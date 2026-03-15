@@ -64,6 +64,10 @@ async function processStream(response, callbacks) {
           if (callbacks.onToolCall) callbacks.onToolCall(event.tool, event.input);
           break;
 
+        case "skill_invocation":
+          if (callbacks.onSkillInvocation) callbacks.onSkillInvocation(event.skill);
+          break;
+
         case "confirmation_required":
           return { type: "confirmation_required", tool: event.tool, sessionId };
 
@@ -211,4 +215,25 @@ export async function fetchLatestVersion(serverUrl, getAuthHeader) {
   } catch {
     return null;
   }
+}
+
+/**
+ * Fetch available skills from the server.
+ * Returns an array of skill metadata or an empty array on error.
+ */
+export async function fetchSkills(serverUrl, getAuthHeader) {
+  const authHeader = await getAuthHeader();
+  const res = await fetch(`${serverUrl}/api/skills`, {
+    headers: { Authorization: authHeader },
+  });
+
+  if (res.status === 401) {
+    throw new Error("Unauthorized — check your API key or run: node src/index.js auth login");
+  }
+  if (!res.ok) {
+    throw new Error(`Server error (${res.status})`);
+  }
+
+  const data = await res.json();
+  return data.skills || [];
 }

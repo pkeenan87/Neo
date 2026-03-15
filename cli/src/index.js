@@ -5,7 +5,7 @@ import { Marked } from "marked";
 import { markedTerminal } from "marked-terminal";
 import { resolveServerConfig, parseFlag, validateServerUrl } from "./config.js";
 import { runAgentLoop, confirmTool } from "./agent.js";
-import { fetchConversations } from "./server-client.js";
+import { fetchConversations, fetchSkills } from "./server-client.js";
 import { checkForUpdate, runUpdate } from "./updater.js";
 import { login, logout, status, getAccessToken } from "./auth-entra.js";
 import { readConfig, writeConfig } from "./config-store.js";
@@ -329,6 +329,10 @@ async function main() {
   const callbacks = {
     onToolCall:  printToolCall,
     onThinking:  printThinking,
+    onSkillInvocation: (skill) => {
+      clearThinking();
+      console.log(chalk.magenta(`\n[skill] ${skill.name}`));
+    },
   };
 
   while (true) {
@@ -370,6 +374,30 @@ async function main() {
         }
       } catch (err) {
         console.error(chalk.red(`\n  Error fetching history: ${err.message}\n`));
+      }
+      continue;
+    }
+
+    if (userInput.trim().toLowerCase() === "/skills") {
+      try {
+        const skills = await fetchSkills(serverUrl, getAuthHeader);
+        if (skills.length === 0) {
+          console.log(chalk.gray("  No skills configured.\n"));
+        } else {
+          console.log(chalk.bold("\n  Available Skills:\n"));
+          skills.forEach((s) => {
+            const params = s.parameters?.length > 0
+              ? chalk.gray(` ${s.parameters.map(p => `<${p}>`).join(" ")}`)
+              : "";
+            console.log(`  ${chalk.green(`/${s.id}`)}${params}  ${chalk.gray("—")} ${s.name}`);
+            if (s.description) {
+              console.log(chalk.gray(`    ${s.description.slice(0, 80)}${s.description.length > 80 ? "..." : ""}`));
+            }
+          });
+          console.log();
+        }
+      } catch (err) {
+        console.error(chalk.red(`\n  Error fetching skills: ${err.message}\n`));
       }
       continue;
     }

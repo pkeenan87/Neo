@@ -4,6 +4,7 @@ import { runAgentLoop } from "@/lib/agent";
 import { createNDJSONStream, encodeNDJSON, writeAgentResult } from "@/lib/stream";
 import { resolveAuth } from "@/lib/auth-helpers";
 import { scanUserInput, shouldBlock } from "@/lib/injection-guard";
+import { getSkill } from "@/lib/skill-store";
 import { logger } from "@/lib/logger";
 import { isChannel } from "@/lib/types";
 import { DEFAULT_MODEL, SUPPORTED_MODELS } from "@/lib/config";
@@ -40,9 +41,40 @@ export async function POST(request: NextRequest) {
     );
   }
 
-  // Injection scan — runs post-auth so identity context is available for audit log.
-  // Runs before session creation so flagged requests never enter session history.
-  const scanResult = scanUserInput(body.message, {
+  // Slash command detection — resolve skill before injection scan so the
+  // scanner sees the fully-expanded message with skill instructions.
+  let resolvedSkill: { id: string; name: string } | null = null;
+  let effectiveMessage = body.message;
+  if (body.message.startsWith("/")) {
+    const parts = body.message.split(/\s+/);
+    const skillId = parts[0].slice(1); // strip leading /
+    const userArgs = parts.slice(1).join(" ");
+
+    if (skillId) {
+      const skill = getSkill(skillId);
+      if (skill) {
+        if (skill.requiredRole === "admin" && identity.role !== "admin") {
+          return new Response(
+            JSON.stringify({ error: "This skill requires admin access." }),
+            { status: 403 }
+          );
+        }
+        resolvedSkill = { id: skill.id, name: skill.name };
+        effectiveMessage = `[SKILL INVOCATION: ${skill.name}]\n\nFollow these steps precisely:\n\n${skill.instructions}\n\n---\n\nUser input: ${userArgs || "(no additional input)"}`;
+        logger.info("Skill invoked via slash command", "agent", {
+          skillId: skill.id,
+          skillName: skill.name,
+          userId: identity.name,
+        });
+      }
+      // If skill not found, pass message through as-is
+    }
+  }
+
+  // Injection scan — runs on the fully-expanded message (including skill
+  // instructions if a slash command was resolved) so injections embedded
+  // in user args or skill content are detected.
+  const scanResult = scanUserInput(effectiveMessage, {
     sessionId: body.sessionId ?? "new",
     userId: identity.name,
     role: identity.role,
@@ -115,7 +147,7 @@ export async function POST(request: NextRequest) {
   const reservationId = await createReservation(identity.ownerId, sessionId, model);
 
   // Add user message to session
-  session.messages.push({ role: "user", content: body.message });
+  session.messages.push({ role: "user", content: effectiveMessage });
   session.messageCount++;
 
   // Persist user message immediately (before agent loop) so prompts
@@ -135,6 +167,14 @@ export async function POST(request: NextRequest) {
   (async () => {
     try {
       await writer.write(encodeNDJSON({ type: "session", sessionId }));
+
+      // Emit skill invocation event if a slash command was resolved
+      if (resolvedSkill) {
+        void writer.write(encodeNDJSON({
+          type: "skill_invocation",
+          skill: resolvedSkill,
+        })).catch(() => {});
+      }
 
       // Stream budget warning if approaching limits
       if (budget.warning) {
