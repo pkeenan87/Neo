@@ -6,11 +6,12 @@ import { ArrowLeft } from 'lucide-react'
 import { ProfileSection } from './ProfileSection'
 import { AppearanceSection } from './AppearanceSection'
 import { UsageSection } from './UsageSection'
+import { ApiKeysSection } from './ApiKeysSection'
 import styles from './SettingsPage.module.css'
 
-type Tab = 'general' | 'usage'
+type Tab = 'general' | 'usage' | 'api-keys'
 
-const TABS: { value: Tab; label: string }[] = [
+const BASE_TABS: { value: Tab; label: string }[] = [
   { value: 'general', label: 'General' },
   { value: 'usage', label: 'Usage' },
 ]
@@ -18,11 +19,16 @@ const TABS: { value: Tab; label: string }[] = [
 export interface SettingsPageProps {
   userName: string
   userImage?: string
+  userRole?: string
   className?: string
 }
 
-export function SettingsPage({ userName, userImage, className }: SettingsPageProps) {
+export function SettingsPage({ userName, userImage, userRole, className }: SettingsPageProps) {
   const [activeTab, setActiveTab] = useState<Tab>('general')
+
+  const tabs = userRole === 'admin'
+    ? [...BASE_TABS, { value: 'api-keys' as Tab, label: 'API Keys' }]
+    : BASE_TABS
 
   return (
     <div className={`${styles.container}${className ? ` ${className}` : ''}`}>
@@ -33,7 +39,7 @@ export function SettingsPage({ userName, userImage, className }: SettingsPagePro
         </Link>
         <h1 className={styles.heading}>Settings</h1>
         <div role="tablist" aria-label="Settings sections" className={styles.navList}>
-          {TABS.map(({ value, label }) => (
+          {tabs.map(({ value, label }) => (
             <button
               key={value}
               type="button"
@@ -63,6 +69,7 @@ export function SettingsPage({ userName, userImage, className }: SettingsPagePro
           </>
         )}
         {activeTab === 'usage' && <UsageSection />}
+        {activeTab === 'api-keys' && <ApiKeysSection />}
       </main>
     </div>
   )

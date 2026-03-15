@@ -30,11 +30,11 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
       credentials: {
         apiKey: { label: "API Key", type: "text" },
       },
-      authorize(credentials) {
+      async authorize(credentials) {
         const apiKey = credentials?.apiKey;
         if (typeof apiKey !== "string" || !apiKey) return null;
 
-        const entry = findApiKey(apiKey);
+        const entry = await findApiKey(apiKey);
         if (!entry) return null;
 
         return {

@@ -41,6 +41,7 @@ export interface EnvConfig {
   CLI_STORAGE_ACCOUNT: string | undefined;
   CLI_STORAGE_CONTAINER: string;
   KEY_VAULT_URL: string | undefined;
+  KEY_VAULT_KEY_NAME: string;
 }
 
 // ─────────────────────────────────────────────────────────────

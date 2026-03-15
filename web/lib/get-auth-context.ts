@@ -27,7 +27,7 @@ export const getAuthContext = cache(async (): Promise<AuthContext | null> => {
   const user = session.user as Record<string, unknown>;
   return {
     userName: (user.name as string) ?? "Operator",
-    userRole: (user.role as string) ?? "admin",
+    userRole: (user.role as string) ?? "reader",
     ownerId:
       (user.oid as string) ?? (user.id as string) ?? (user.name as string) ?? "",
     userImage: (user.image as string) ?? undefined,

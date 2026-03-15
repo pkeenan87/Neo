@@ -1,6 +1,6 @@
 import { createRemoteJWKSet, jwtVerify } from "jose";
 import { auth } from "@/auth";
-import { findApiKey } from "./api-key-store";
+import { findApiKey, hashApiKey, updateLastUsed } from "./api-key-store";
 import { logger } from "./logger";
 import type { Role } from "./permissions";
 
@@ -88,9 +88,10 @@ export async function resolveAuth(
   if (authHeader?.startsWith("Bearer ")) {
     const token = authHeader.slice(7);
 
-    // Try API key first (fast, in-memory lookup)
-    const entry = findApiKey(token);
+    // Try API key (Cosmos DB + JSON file fallback)
+    const entry = await findApiKey(token);
     if (entry) {
+      updateLastUsed(hashApiKey(token));
       logger.info("Auth resolved via API key", "auth", { role: entry.role, provider: "api-key" });
       return {
         role: entry.role,

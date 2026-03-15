@@ -17,6 +17,7 @@ export default async function SettingsRoute() {
     <SettingsPage
       userName={authCtx.userName}
       userImage={authCtx.userImage}
+      userRole={authCtx.userRole}
     />
   )
 }

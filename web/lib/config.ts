@@ -68,6 +68,7 @@ export const env: EnvConfig = {
   CLI_STORAGE_ACCOUNT:          process.env.CLI_STORAGE_ACCOUNT,
   CLI_STORAGE_CONTAINER:        process.env.CLI_STORAGE_CONTAINER || "cli-releases",
   KEY_VAULT_URL:                process.env.KEY_VAULT_URL,
+  KEY_VAULT_KEY_NAME:           process.env.KEY_VAULT_KEY_NAME || "neo-api-key-encryption",
 };
 
 // Note: validateConfig uses console.warn directly (not logger) because

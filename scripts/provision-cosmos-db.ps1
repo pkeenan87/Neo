@@ -35,6 +35,9 @@ param(
     [string]$UsageContainerName = "usage-logs",
 
     [ValidateNotNullOrEmpty()]
+    [string]$ApiKeysContainerName = "api-keys",
+
+    [ValidateNotNullOrEmpty()]
     [string]$Location = "eastus",
 
     [ValidateRange(86400, 31536000)]
@@ -163,7 +166,7 @@ if ($existingMappings) {
 
 # ── Usage Logs Container ──────────────────────────────────
 
-Write-Host "6/7 Creating usage-logs container..." -ForegroundColor Green
+Write-Host "6/8 Creating usage-logs container..." -ForegroundColor Green
 $existingUsage = az cosmosdb sql container show `
     --account-name $AccountName `
     --resource-group $ResourceGroupName `
@@ -183,9 +186,30 @@ if ($existingUsage) {
     Write-Host "     Container '$UsageContainerName' created with /userId partition key and ${DefaultTtl}s TTL."
 }
 
+# ── API Keys Container ────────────────────────────────────
+
+Write-Host "7/8 Creating api-keys container..." -ForegroundColor Green
+$existingApiKeys = az cosmosdb sql container show `
+    --account-name $AccountName `
+    --resource-group $ResourceGroupName `
+    --database-name $DatabaseName `
+    --name $ApiKeysContainerName 2>$null | ConvertFrom-Json
+if ($existingApiKeys) {
+    Write-Host "     Container '$ApiKeysContainerName' already exists — skipping."
+} else {
+    az cosmosdb sql container create `
+        --account-name $AccountName `
+        --resource-group $ResourceGroupName `
+        --database-name $DatabaseName `
+        --name $ApiKeysContainerName `
+        --partition-key-path "/id" `
+        --output none
+    Write-Host "     Container '$ApiKeysContainerName' created with /id partition key."
+}
+
 # ── Managed Identity Role Assignment ───────────────────────
 
-Write-Host "7/7 Assigning Managed Identity role..." -ForegroundColor Green
+Write-Host "8/8 Assigning Managed Identity role..." -ForegroundColor Green
 if ($WebAppName) {
     $principalId = az webapp identity show `
         --name $WebAppName `

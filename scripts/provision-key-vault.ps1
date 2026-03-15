@@ -80,9 +80,25 @@ if ($existing) {
     Write-Host "     Key Vault '$KeyVaultName' created."
 }
 
+# ── RSA Encryption Key ─────────────────────────────────────
+
+Write-Host "3/4 Creating RSA encryption key..." -ForegroundColor Green
+$existingKey = az keyvault key show --vault-name $KeyVaultName --name neo-api-key-encryption 2>$null | ConvertFrom-Json
+if ($existingKey) {
+    Write-Host "     Key 'neo-api-key-encryption' already exists — skipping."
+} else {
+    az keyvault key create `
+        --vault-name $KeyVaultName `
+        --name neo-api-key-encryption `
+        --kty RSA `
+        --size 2048 `
+        --output none
+    Write-Host "     Key 'neo-api-key-encryption' created."
+}
+
 # ── Managed Identity Role Assignment ───────────────────────
 
-Write-Host "3/3 Assigning Managed Identity role..." -ForegroundColor Green
+Write-Host "4/4 Assigning Managed Identity role..." -ForegroundColor Green
 if ($WebAppName) {
     $principalId = az webapp identity show `
         --name $WebAppName `
@@ -112,6 +128,14 @@ if ($WebAppName) {
         --scope $vaultId `
         --output none 2>$null
     Write-Host "     Key Vault Secrets Officer role assigned to '$WebAppName'."
+
+    az role assignment create `
+        --role "Key Vault Crypto Officer" `
+        --assignee-object-id $principalId `
+        --assignee-principal-type ServicePrincipal `
+        --scope $vaultId `
+        --output none 2>$null
+    Write-Host "     Key Vault Crypto Officer role assigned to '$WebAppName'."
 } else {
     Write-Host "     No -WebAppName specified — skipping role assignment."
     Write-Host "     Run again with -WebAppName to assign Managed Identity access."
