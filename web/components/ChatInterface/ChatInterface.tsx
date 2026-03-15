@@ -469,16 +469,18 @@ export function ChatInterface({
 
   // Slash command helpers
   const fetchSlashSkills = useCallback(async () => {
-    if (slashFetchedRef.current) return
-    slashFetchedRef.current = true
+    if (slashFetchedRef.current && slashSkillsRef.current.length > 0) return
     try {
       const res = await fetch('/api/skills')
       if (res.ok) {
         const data = await res.json()
         slashSkillsRef.current = data.skills ?? []
+        if (slashSkillsRef.current.length > 0) {
+          slashFetchedRef.current = true
+        }
       }
     } catch {
-      // Silent
+      // Silent — will retry on next /
     }
   }, [])
 
