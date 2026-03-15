@@ -29,6 +29,7 @@ export const INTEGRATIONS: IntegrationInfo[] = [
     slug: "microsoft-sentinel",
     name: "Microsoft Sentinel",
     iconName: "Shield",
+    imageSrc: "/microsoft-logo.png",
     description:
       "Cloud-native SIEM for security analytics. Run KQL queries against Log Analytics and retrieve security incidents.",
     capabilities: ["run_sentinel_kql", "get_sentinel_incidents"],
@@ -68,6 +69,7 @@ export const INTEGRATIONS: IntegrationInfo[] = [
     slug: "microsoft-defender-xdr",
     name: "Microsoft Defender XDR",
     iconName: "ShieldAlert",
+    imageSrc: "/microsoft-logo.png",
     description:
       "Endpoint detection and response. Retrieve XDR alerts, search by host, and isolate or release machines.",
     capabilities: [
@@ -82,6 +84,7 @@ export const INTEGRATIONS: IntegrationInfo[] = [
     slug: "microsoft-entra-id",
     name: "Microsoft Entra ID",
     iconName: "Users",
+    imageSrc: "/microsoft-logo.png",
     description:
       "Identity and access management. Look up user details, check MFA status, and reset passwords.",
     capabilities: ["get_user_info", "reset_user_password"],

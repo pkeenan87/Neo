@@ -2,6 +2,7 @@
 
 import { useState } from 'react'
 import Link from 'next/link'
+import Image from 'next/image'
 import { ArrowLeft, Shield, ShieldAlert, Users, Info, Check, X } from 'lucide-react'
 import type { IntegrationInfo } from '@/lib/types'
 import styles from './IntegrationDetailPage.module.css'
@@ -96,11 +97,13 @@ export function IntegrationDetailPage({
       </Link>
 
       <div className={styles.header}>
-        {Icon && (
-          <div className={styles.iconWrapper} aria-hidden="true">
+        <div className={styles.iconWrapper} aria-hidden="true">
+          {integration.imageSrc ? (
+            <Image src={integration.imageSrc} alt="" width={32} height={32} />
+          ) : Icon ? (
             <Icon size={32} />
-          </div>
-        )}
+          ) : null}
+        </div>
         <div>
           <h1 className={styles.heading}>{integration.name}</h1>
           <p className={styles.description}>{integration.description}</p>

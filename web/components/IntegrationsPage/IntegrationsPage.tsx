@@ -2,6 +2,7 @@
 
 import { useState } from 'react'
 import Link from 'next/link'
+import Image from 'next/image'
 import { Shield, ShieldAlert, Users, Search, ArrowLeft } from 'lucide-react'
 import type { IntegrationInfo } from '@/lib/types'
 import styles from './IntegrationsPage.module.css'
@@ -90,11 +91,13 @@ export function IntegrationsPage({
               className={styles.card}
             >
               <div className={styles.cardHeader}>
-                {Icon && (
-                  <div className={styles.iconWrapper} aria-hidden="true">
+                <div className={styles.iconWrapper} aria-hidden="true">
+                  {integration.imageSrc ? (
+                    <Image src={integration.imageSrc} alt="" width={24} height={24} />
+                  ) : Icon ? (
                     <Icon size={24} />
-                  </div>
-                )}
+                  ) : null}
+                </div>
                 <span className={`${styles.badge} ${styles[`badge_${status}`]}`}>
                   {STATUS_LABELS[status]}
                 </span>

@@ -58,6 +58,7 @@ export interface IntegrationInfo {
   slug: string;
   name: string;
   iconName: string;
+  imageSrc?: string;
   description: string;
   capabilities: string[];
   secrets: IntegrationSecret[];
