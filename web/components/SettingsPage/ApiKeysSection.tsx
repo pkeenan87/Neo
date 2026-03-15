@@ -157,58 +157,56 @@ export function ApiKeysSection() {
         onSubmit={(e) => { e.preventDefault(); void handleCreate() }}
         aria-label="Create API key"
       >
-        <div className={styles.keyCreateRow}>
-          <div className={styles.keyCreateField}>
-            <label className={styles.fieldLabel} htmlFor="key-label">Label</label>
-            <input
-              id="key-label"
-              type="text"
-              value={label}
-              onChange={(e) => setLabel(e.target.value)}
-              placeholder="e.g. CI Pipeline"
-              maxLength={128}
-              className={styles.fieldInput}
-            />
-          </div>
-          <div className={styles.keyCreateField}>
-            <label className={styles.fieldLabel} htmlFor="key-role">Role</label>
-            <select
-              id="key-role"
-              value={role}
-              onChange={(e) => setRole(e.target.value as 'admin' | 'reader')}
-              className={styles.fieldInput}
-            >
-              <option value="reader">Reader</option>
-              <option value="admin">Admin</option>
-            </select>
-          </div>
-          <div className={styles.keyCreateField}>
-            <label className={styles.fieldLabel} htmlFor="key-expires">
-              Expires <span className={styles.keyFieldHint}>(optional)</span>
-            </label>
-            <input
-              id="key-expires"
-              type="date"
-              value={expiresAt}
-              onChange={(e) => setExpiresAt(e.target.value)}
-              min={new Date().toISOString().split('T')[0]}
-              max={maxDate}
-              aria-describedby="key-expires-hint"
-              className={styles.fieldInput}
-            />
-            <span id="key-expires-hint" className={styles.keyFieldHintText}>
-              Leave blank for non-expiring. Max 2 years.
-            </span>
-          </div>
-          <button
-            ref={createButtonRef}
-            type="submit"
-            disabled={creating || !label.trim()}
-            className={styles.saveButton}
-          >
-            {creating ? 'Creating...' : 'Create Key'}
-          </button>
+        <div className={styles.profileFieldWide}>
+          <label className={styles.fieldLabel} htmlFor="key-label">Label</label>
+          <input
+            id="key-label"
+            type="text"
+            value={label}
+            onChange={(e) => setLabel(e.target.value)}
+            placeholder="e.g. CI Pipeline"
+            maxLength={128}
+            className={styles.fieldInput}
+          />
         </div>
+        <div className={styles.profileFieldWide}>
+          <label className={styles.fieldLabel} htmlFor="key-role">Role</label>
+          <select
+            id="key-role"
+            value={role}
+            onChange={(e) => setRole(e.target.value as 'admin' | 'reader')}
+            className={styles.fieldInput}
+          >
+            <option value="reader">Reader</option>
+            <option value="admin">Admin</option>
+          </select>
+        </div>
+        <div className={styles.profileFieldWide}>
+          <label className={styles.fieldLabel} htmlFor="key-expires">
+            Expires <span className={styles.keyFieldHint}>(optional)</span>
+          </label>
+          <input
+            id="key-expires"
+            type="date"
+            value={expiresAt}
+            onChange={(e) => setExpiresAt(e.target.value)}
+            min={new Date().toISOString().split('T')[0]}
+            max={maxDate}
+            aria-describedby="key-expires-hint"
+            className={styles.fieldInput}
+          />
+          <span id="key-expires-hint" className={styles.keyFieldHintText}>
+            Leave blank for non-expiring. Max 2 years.
+          </span>
+        </div>
+        <button
+          ref={createButtonRef}
+          type="submit"
+          disabled={creating || !label.trim()}
+          className={styles.saveButton}
+        >
+          {creating ? 'Creating...' : 'Create Key'}
+        </button>
       </form>
 
       {/* Feedback */}

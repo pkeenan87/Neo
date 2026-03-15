@@ -546,17 +546,7 @@
 /* ── API Keys ────────────────────────────────────────────── */
 
 .keyCreateForm {
-  @apply mb-4;
-}
-
-.keyCreateRow {
-  @apply flex items-end gap-4 flex-wrap;
-}
-
-.keyCreateField {
-  @apply flex flex-col gap-2;
-  flex: 1;
-  min-width: 140px;
+  @apply flex flex-col gap-4 mb-4;
 }
 
 .keyFieldHint {
