@@ -121,7 +121,7 @@ INJECTION_GUARD_MODE=monitor
 
 | Constant | Value | Description |
 |----------|-------|-------------|
-| `DEFAULT_MODEL` | `claude-sonnet-4-5-20250514` | Default Claude model for the agent loop. Users can override per-session with Opus. |
+| `DEFAULT_MODEL` | `claude-sonnet-4-6` | Default Claude model for the agent loop. Users can override per-session with Opus. |
 | `CONTEXT_TOKEN_LIMIT` | 180,000 | Maximum token budget for API calls |
 | `TRIM_TRIGGER_THRESHOLD` | 160,000 | Token count that triggers conversation compression |
 | `PER_TOOL_RESULT_TOKEN_CAP` | 50,000 | Maximum tokens per individual tool result before truncation |

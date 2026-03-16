@@ -4,6 +4,7 @@ import {
   TRIM_TRIGGER_THRESHOLD,
   PER_TOOL_RESULT_TOKEN_CAP,
   PRESERVED_RECENT_MESSAGES,
+  HAIKU_MODEL,
 } from "./config";
 import { logger } from "./logger";
 import type { Message } from "./types";
@@ -124,7 +125,7 @@ async function compressOlderMessages(
 
   try {
     const response = await anthropicClient.messages.create({
-      model: "claude-haiku-4-5-20251001",
+      model: HAIKU_MODEL,
       max_tokens: 1024,
       system:
         "Summarize the following security investigation conversation in 3-5 bullet points. " +
@@ -140,7 +141,7 @@ async function compressOlderMessages(
     logger.info("Context compression usage", "context-manager", {
       inputTokens: response.usage.input_tokens,
       outputTokens: response.usage.output_tokens,
-      model: "claude-haiku-4-5-20251001",
+      model: HAIKU_MODEL,
     });
 
     const summaryText = response.content

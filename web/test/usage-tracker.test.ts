@@ -58,7 +58,7 @@ describe("calculateCost", () => {
       output_tokens: 100_000,
     };
     // Sonnet: $3/M input + $15/M output
-    const cost = calculateCost("claude-sonnet-4-5-20250514", usage);
+    const cost = calculateCost("claude-sonnet-4-6", usage);
     expect(cost).toBeCloseTo(3.0 + 1.5, 4);
   });
 
@@ -68,7 +68,7 @@ describe("calculateCost", () => {
       output_tokens: 100_000,
     };
     // Opus: $15/M input + $75/M output
-    const cost = calculateCost("claude-opus-4-5", usage);
+    const cost = calculateCost("claude-opus-4-6", usage);
     expect(cost).toBeCloseTo(15.0 + 7.5, 4);
   });
 
@@ -90,7 +90,7 @@ describe("calculateCost", () => {
       cache_read_input_tokens: 1_000_000,
     };
     // Sonnet: $3/M input + cache creation 1.25x ($3.75) + cache read 0.1x ($0.30)
-    const cost = calculateCost("claude-sonnet-4-5-20250514", usage);
+    const cost = calculateCost("claude-sonnet-4-6", usage);
     expect(cost).toBeCloseTo(3.0 + 3.75 + 0.30, 4);
   });
 

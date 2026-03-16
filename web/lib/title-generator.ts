@@ -1,5 +1,5 @@
 import Anthropic from "@anthropic-ai/sdk";
-import { env } from "./config";
+import { env, HAIKU_MODEL } from "./config";
 import { logger } from "./logger";
 
 const client = new Anthropic({ apiKey: env.ANTHROPIC_API_KEY });
@@ -14,7 +14,7 @@ export async function generateTitle(
 ): Promise<string> {
   try {
     const resp = await client.messages.create({
-      model: "claude-haiku-4-5-20251001",
+      model: HAIKU_MODEL,
       max_tokens: 30,
       messages: [
         {

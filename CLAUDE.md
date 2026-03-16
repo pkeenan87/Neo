@@ -100,7 +100,7 @@ Next.js app with server-side Claude API integration.
 ## Dependencies
 
 ### CLI (`cli/package.json`)
-- `@anthropic-ai/sdk` — Claude API client (uses `claude-opus-4-5` model)
+- `@anthropic-ai/sdk` — Claude API client (uses `claude-sonnet-4-6` model by default)
 - `chalk` — Terminal colors
 - `dotenv` — Environment variable loading
 

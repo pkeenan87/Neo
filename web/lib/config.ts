@@ -17,12 +17,15 @@ export const PRESERVED_RECENT_MESSAGES = 10;
 
 // ── Model Selection ──────────────────────────────────────────
 
-export const DEFAULT_MODEL: ModelPreference = "claude-sonnet-4-6";
+// Model IDs are configurable via env vars so they can be updated without redeploying.
+export const DEFAULT_MODEL = (process.env.CLAUDE_DEFAULT_MODEL || "claude-sonnet-4-6") as ModelPreference;
 
 export const SUPPORTED_MODELS: Record<string, ModelPreference> = {
-  "Sonnet (default)": "claude-sonnet-4-6",
-  "Opus": "claude-opus-4-6",
+  "Sonnet (default)": (process.env.CLAUDE_SONNET_MODEL || "claude-sonnet-4-6") as ModelPreference,
+  "Opus": (process.env.CLAUDE_OPUS_MODEL || "claude-opus-4-6") as ModelPreference,
 };
+
+export const HAIKU_MODEL = process.env.CLAUDE_HAIKU_MODEL || "claude-haiku-4-5-20251001";
 
 // ── Token Pricing (USD per million tokens) ───────────────────
 

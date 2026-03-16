@@ -262,7 +262,8 @@ export interface GetFullToolResultInput {
 //  Model Selection
 // ─────────────────────────────────────────────────────────────
 
-export type ModelPreference = "claude-opus-4-6" | "claude-sonnet-4-6";
+// Model IDs are configurable via env vars, so this accepts any string.
+export type ModelPreference = string;
 
 // ─────────────────────────────────────────────────────────────
 //  Token Usage Tracking

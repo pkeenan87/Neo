@@ -1,5 +1,5 @@
 import Anthropic from "@anthropic-ai/sdk";
-import { env, getSystemPrompt, DEFAULT_MODEL } from "./config";
+import { env, getSystemPrompt, DEFAULT_MODEL, HAIKU_MODEL } from "./config";
 import { DESTRUCTIVE_TOOLS } from "./tools";
 import { executeTool } from "./executors";
 import { getToolsForRole, type Role } from "./permissions";
@@ -207,7 +207,7 @@ export async function summarizeConversation(
 
   try {
     const response = await createWithRetry({
-      model: "claude-sonnet-4-5-20250514",
+      model: DEFAULT_MODEL,
       max_tokens: 1024,
       system:
         "Summarize the following security investigation conversation in 3-5 bullet points. " +

@@ -1,7 +1,7 @@
 import crypto from "crypto";
 import { CosmosClient, type Container } from "@azure/cosmos";
 import { ManagedIdentityCredential } from "@azure/identity";
-import { env, TOKEN_PRICING, USAGE_LIMITS } from "./config";
+import { env, TOKEN_PRICING, USAGE_LIMITS, DEFAULT_MODEL } from "./config";
 import { logger, hashPii } from "./logger";
 import type { TokenUsage, UsageRecord, UsageSummary } from "./types";
 
@@ -190,7 +190,7 @@ export async function getUserUsage(
     // Estimate cost from aggregated totals using the default model pricing
     // (we can't do per-model pricing in a single aggregate query, but this
     // is close enough for budget display purposes)
-    const defaultPricing = TOKEN_PRICING[env.MOCK_MODE ? "" : "claude-sonnet-4-5-20250514"] ?? { input: 3, output: 15 };
+    const defaultPricing = TOKEN_PRICING[env.MOCK_MODE ? "" : DEFAULT_MODEL] ?? { input: 3, output: 15 };
     const estimatedCost =
       ((row.totalInput ?? 0) / 1_000_000) * defaultPricing.input +
       ((row.totalOutput ?? 0) / 1_000_000) * defaultPricing.output +

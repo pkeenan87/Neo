@@ -274,7 +274,7 @@ Neo supports two Claude models. You can choose between them per-session:
 - **Sonnet** (default) — Fast, cost-effective, and capable for most investigations.
 - **Opus** — Most capable model for complex multi-step reasoning.
 
-In the web UI, select your preferred model before starting a conversation (model selection UI coming soon). Via the API, pass `"model": "claude-opus-4-5"` in the request body to use Opus; omit it to use Sonnet (the default). You can check your current token usage on the [Settings](#settings) page under the Usage tab.
+In the web UI, select your preferred model before starting a conversation (model selection UI coming soon). Via the API, pass `"model": "claude-opus-4-6"` in the request body to use Opus; omit it to use Sonnet (the default). You can check your current token usage on the [Settings](#settings) page under the Usage tab.
 
 The model preference applies for the duration of the session and does not affect other users.
 

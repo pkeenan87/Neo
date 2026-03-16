@@ -82,7 +82,7 @@ describe("prompt caching", () => {
     );
 
     const callArgs = mockCreate.mock.calls[0][0];
-    expect(callArgs.model).toBe("claude-sonnet-4-5-20250514");
+    expect(callArgs.model).toBe("claude-sonnet-4-6");
   });
 
   it("accepts a custom model parameter", async () => {
@@ -95,7 +95,7 @@ describe("prompt caching", () => {
     );
 
     const callArgs = mockCreate.mock.calls[0][0];
-    expect(callArgs.model).toBe("claude-opus-4-5");
+    expect(callArgs.model).toBe("claude-opus-4-6");
   });
 
   it("calls onUsage callback with usage data", async () => {
@@ -116,7 +116,7 @@ describe("prompt caching", () => {
         cache_creation_input_tokens: 200,
         cache_read_input_tokens: 0,
       }),
-      "claude-sonnet-4-5-20250514",
+      "claude-sonnet-4-6",
     );
   });
 });
