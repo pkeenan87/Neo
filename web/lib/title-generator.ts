@@ -14,7 +14,7 @@ export async function generateTitle(
 ): Promise<string> {
   try {
     const resp = await client.messages.create({
-      model: "claude-haiku-4-5-20250414",
+      model: "claude-haiku-4-5-latest",
       max_tokens: 30,
       messages: [
         {
