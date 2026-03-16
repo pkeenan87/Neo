@@ -1,6 +1,10 @@
-import { describe, it } from "node:test";
+import { describe, it, skip } from "node:test";
 import assert from "node:assert/strict";
 import { compareSemver, checkForUpdate, runUpdate } from "../cli/src/updater.js";
+
+// In dev mode, CLI_VERSION is "0.0.0-dev" which intentionally fails semver
+// validation. Tests that depend on a real version are skipped in dev.
+const IS_DEV = typeof globalThis.__CLI_VERSION__ === "undefined";
 
 // ── compareSemver ────────────────────────────────────────────
 
@@ -45,7 +49,7 @@ describe("compareSemver", () => {
 // ── checkForUpdate ───────────────────────────────────────────
 
 describe("checkForUpdate", () => {
-  it("prints update notice when newer version is available", async () => {
+  it("prints update notice when newer version is available", { skip: IS_DEV && "requires build-injected CLI_VERSION" }, async () => {
     const lines = [];
     const log = (msg) => lines.push(msg);
 
@@ -66,14 +70,14 @@ describe("checkForUpdate", () => {
     }
   });
 
-  it("prints nothing when already up to date", async () => {
+  it("prints nothing when already up to date", { skip: IS_DEV && "requires build-injected CLI_VERSION" }, async () => {
     const lines = [];
     const log = (msg) => lines.push(msg);
 
     const origFetch = globalThis.fetch;
     globalThis.fetch = async () => ({
       ok: true,
-      json: async () => ({ version: "0.0.1", downloadUrl: "/api/downloads/neo-setup.exe", platform: "windows" }),
+      json: async () => ({ version: "0.0.0", downloadUrl: "/api/downloads/neo-setup.exe", platform: "windows" }),
     });
 
     try {
@@ -121,14 +125,14 @@ describe("checkForUpdate", () => {
 // ── runUpdate ────────────────────────────────────────────────
 
 describe("runUpdate", () => {
-  it("prints 'up to date' with [OK] prefix when on latest version", async () => {
+  it("prints 'up to date' with [OK] prefix when on latest version", { skip: IS_DEV && "requires build-injected CLI_VERSION" }, async () => {
     const lines = [];
     const log = (msg) => lines.push(msg);
 
     const origFetch = globalThis.fetch;
     globalThis.fetch = async () => ({
       ok: true,
-      json: async () => ({ version: "0.0.1", downloadUrl: "/api/downloads/neo-setup.exe", platform: "windows" }),
+      json: async () => ({ version: "0.0.0", downloadUrl: "/api/downloads/neo-setup.exe", platform: "windows" }),
     });
 
     try {
@@ -177,7 +181,7 @@ describe("runUpdate", () => {
     }
   });
 
-  it("rejects unsafe download path from server", async () => {
+  it("rejects unsafe download path from server", { skip: IS_DEV && "requires build-injected CLI_VERSION" }, async () => {
     const lines = [];
     const log = (msg) => lines.push(msg);
 

@@ -3,7 +3,6 @@
 // ─────────────────────────────────────────────────────────────
 
 import { createHash } from "crypto";
-import { createRequire } from "module";
 import { pipeline } from "stream/promises";
 import { Transform } from "stream";
 import { createWriteStream } from "fs";
@@ -14,8 +13,11 @@ import { execFile } from "child_process";
 import chalk from "chalk";
 import { fetchLatestVersion } from "./server-client.js";
 
-const require = createRequire(import.meta.url);
-const { version: CLI_VERSION } = require("../package.json");
+/* global __CLI_VERSION__ */
+// __CLI_VERSION__ is injected at build time by esbuild --define.
+// In dev mode (node src/index.js), it won't exist — fall back to "0.0.0-dev"
+// which intentionally fails SEMVER_RE so update checks no-op silently.
+const CLI_VERSION = typeof __CLI_VERSION__ !== "undefined" ? __CLI_VERSION__ : "0.0.0-dev";
 
 const SEMVER_RE = /^\d{1,6}\.\d{1,6}(\.\d{1,6})?$/;
 const MAX_DOWNLOAD_BYTES = 200 * 1024 * 1024; // 200 MB

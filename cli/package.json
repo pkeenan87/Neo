@@ -7,7 +7,7 @@
   "scripts": {
     "start": "node --no-deprecation src/index.js",
     "dev": "node --no-deprecation --watch src/index.js",
-    "build:bundle": "esbuild src/index.js --bundle --platform=node --format=cjs --outfile=dist/neo-bundle.cjs --minify",
+    "build:bundle": "node build/bundle.cjs",
     "build:sea": "powershell -ExecutionPolicy Bypass -File build/build-sea.ps1",
     "build:sign": "powershell -ExecutionPolicy Bypass -File build/sign.ps1 -FilePath dist/neo.exe",
     "build:installer": "powershell -ExecutionPolicy Bypass -File build/build-installer.ps1",
