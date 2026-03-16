@@ -13,3 +13,7 @@ web/next-env.d.ts
 
 # Claude agent memory — session-specific, not project state
 .claude/agent-memory/
+
+# understand-anyting
+.understand-anything/
+.DS_Store
