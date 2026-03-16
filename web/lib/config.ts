@@ -17,19 +17,19 @@ export const PRESERVED_RECENT_MESSAGES = 10;
 
 // ── Model Selection ──────────────────────────────────────────
 
-export const DEFAULT_MODEL: ModelPreference = "claude-sonnet-4-5-latest";
+export const DEFAULT_MODEL: ModelPreference = "claude-sonnet-4-5-20250514";
 
 export const SUPPORTED_MODELS: Record<string, ModelPreference> = {
-  "Sonnet (default)": "claude-sonnet-4-5-latest",
-  "Opus": "claude-opus-4-5-latest",
+  "Sonnet (default)": "claude-sonnet-4-5-20250514",
+  "Opus": "claude-opus-4-5-20250918",
 };
 
 // ── Token Pricing (USD per million tokens) ───────────────────
 
 export const TOKEN_PRICING: Record<string, { input: number; output: number }> = {
-  "claude-opus-4-5-latest":    { input: 15,   output: 75 },
-  "claude-sonnet-4-5-latest":  { input: 3,    output: 15 },
-  "claude-haiku-4-5-latest":   { input: 0.80, output: 4 },
+  "claude-opus-4-5-20250918":    { input: 15,   output: 75 },
+  "claude-sonnet-4-5-20250514":  { input: 3,    output: 15 },
+  "claude-haiku-4-5-20251001":   { input: 0.80, output: 4 },
 };
 
 // ── Usage Limits (per-user token budgets) ────────────────────
