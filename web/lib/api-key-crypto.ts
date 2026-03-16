@@ -1,5 +1,5 @@
 import { CryptographyClient, KeyClient } from "@azure/keyvault-keys";
-import { DefaultAzureCredential } from "@azure/identity";
+import { ManagedIdentityCredential } from "@azure/identity";
 import { env } from "./config";
 
 // ─────────────────────────────────────────────────────────────
@@ -17,7 +17,7 @@ async function getCryptoClient(): Promise<CryptographyClient> {
     );
   }
 
-  const credential = new DefaultAzureCredential();
+  const credential = new ManagedIdentityCredential();
   const keyClient = new KeyClient(env.KEY_VAULT_URL, credential);
   const key = await keyClient.getKey(env.KEY_VAULT_KEY_NAME);
 

@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createHash } from "crypto";
 import { BlobServiceClient } from "@azure/storage-blob";
-import { DefaultAzureCredential } from "@azure/identity";
+import { ManagedIdentityCredential } from "@azure/identity";
 import { env } from "@/lib/config";
 import { PLATFORMS } from "@/lib/download-config";
 import { detectOS } from "@/lib/detect-os";
@@ -12,7 +12,7 @@ function getBlobServiceClient(): BlobServiceClient {
   if (!_blobServiceClient) {
     _blobServiceClient = new BlobServiceClient(
       `https://${env.CLI_STORAGE_ACCOUNT}.blob.core.windows.net`,
-      new DefaultAzureCredential()
+      new ManagedIdentityCredential()
     );
   }
   return _blobServiceClient;

@@ -1,5 +1,5 @@
 import { SecretClient } from "@azure/keyvault-secrets";
-import { DefaultAzureCredential } from "@azure/identity";
+import { ManagedIdentityCredential } from "@azure/identity";
 import { env } from "./config";
 
 // ─────────────────────────────────────────────────────────────
@@ -37,7 +37,7 @@ function getSecretClient(): SecretClient | null {
   if (!_secretClient) {
     _secretClient = new SecretClient(
       env.KEY_VAULT_URL,
-      new DefaultAzureCredential()
+      new ManagedIdentityCredential()
     );
   }
   return _secretClient;
