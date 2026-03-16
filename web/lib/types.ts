@@ -262,7 +262,7 @@ export interface GetFullToolResultInput {
 //  Model Selection
 // ─────────────────────────────────────────────────────────────
 
-export type ModelPreference = "claude-opus-4-5-20250918" | "claude-sonnet-4-5-20250514";
+export type ModelPreference = "claude-opus-4-6" | "claude-sonnet-4-6";
 
 // ─────────────────────────────────────────────────────────────
 //  Token Usage Tracking

@@ -91,7 +91,7 @@ describe("prompt caching", () => {
       {},
       "reader",
       "test-session",
-      "claude-opus-4-5-20250918",
+      "claude-opus-4-6",
     );
 
     const callArgs = mockCreate.mock.calls[0][0];
