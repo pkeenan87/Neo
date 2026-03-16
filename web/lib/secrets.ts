@@ -19,6 +19,14 @@ let _secretClient: SecretClient | null = null;
 
 const KV_URL_RE = /^https:\/\/[a-zA-Z0-9-]+\.vault\.azure\.net\/?$/;
 
+/**
+ * Convert an underscore-based secret name to a Key Vault-compatible
+ * dashed lowercase name. E.g. AZURE_TENANT_ID → azure-tenant-id.
+ */
+export function toKvName(name: string): string {
+  return name.replace(/_/g, "-").toLowerCase();
+}
+
 function getSecretClient(): SecretClient | null {
   if (!env.KEY_VAULT_URL) return null;
   if (!KV_URL_RE.test(env.KEY_VAULT_URL)) {
@@ -51,7 +59,7 @@ export async function getToolSecret(
   const client = getSecretClient();
   if (client) {
     try {
-      const secret = await client.getSecret(name);
+      const secret = await client.getSecret(toKvName(name));
       if (secret.value) {
         cache.set(name, {
           value: secret.value,
@@ -81,7 +89,7 @@ export async function setToolSecret(
     );
   }
 
-  await client.setSecret(name, value);
+  await client.setSecret(toKvName(name), value);
   cache.set(name, {
     value,
     expiresAt: Date.now() + CACHE_TTL_MS,
@@ -99,7 +107,7 @@ export async function deleteToolSecret(name: string): Promise<void> {
     );
   }
 
-  await client.beginDeleteSecret(name);
+  await client.beginDeleteSecret(toKvName(name));
   cache.delete(name);
 }
 
