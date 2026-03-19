@@ -67,6 +67,23 @@ function isTextBlock(b: unknown): b is TextBlock {
   )
 }
 
+// Detect intermediate assistant turns (tool-use reasoning) that should not
+// be shown on conversation reload. During live streaming only the final
+// "response" event is rendered; this filter replicates that behavior.
+// Also defensively covers "thinking" / "redacted_thinking" blocks in case
+// extended thinking is enabled in the future.
+function isIntermediateAssistantTurn(content: unknown): boolean {
+  if (!Array.isArray(content)) return false
+  return content.some(
+    (b: unknown) =>
+      typeof b === 'object' &&
+      b !== null &&
+      ((b as { type: string }).type === 'tool_use' ||
+       (b as { type: string }).type === 'thinking' ||
+       (b as { type: string }).type === 'redacted_thinking'),
+  )
+}
+
 function isStreamEvent(e: unknown): e is StreamEvent {
   return typeof e === 'object' && e !== null && typeof (e as StreamEvent).type === 'string'
 }
@@ -115,6 +132,12 @@ function conversationToChatMessages(conv: Conversation): ChatMessage[] {
   const chatMessages: ChatMessage[] = []
   for (const msg of conv.messages ?? []) {
     if (msg.role === 'user' || msg.role === 'assistant') {
+      // Skip intermediate assistant turns (tool-use reasoning / thinking)
+      // so reload matches the live streaming experience where only the
+      // final response is shown.
+      if (msg.role === 'assistant' && isIntermediateAssistantTurn(msg.content)) {
+        continue
+      }
       const content = typeof msg.content === 'string'
         ? msg.content
         : Array.isArray(msg.content)
