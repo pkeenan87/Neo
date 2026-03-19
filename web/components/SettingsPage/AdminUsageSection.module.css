@@ -1,0 +1,149 @@
+@reference "../../app/globals.css";
+
+/* ── Admin Usage Section ─────────────────────────────────── */
+
+.limitsRow {
+  @apply mb-4;
+}
+
+.userCard {
+  @apply mb-8 p-4 rounded-lg border border-border-default;
+}
+
+.userHeader {
+  @apply flex items-center justify-between mb-4;
+}
+
+.userId {
+  @apply text-sm font-bold text-brand-900;
+  font-family: monospace;
+  word-break: break-all;
+}
+
+.resetGroup {
+  @apply flex gap-2;
+}
+
+.resetButton {
+  @apply px-4 py-1 rounded-lg text-sm font-bold cursor-pointer transition-colors duration-150;
+  @apply bg-brand-100 text-brand-700;
+  border: none;
+}
+
+.resetButton:hover {
+  @apply bg-brand-200;
+}
+
+.resetButton:focus-visible {
+  outline: 2px solid #64748b;
+  outline-offset: 2px;
+}
+
+.confirmOverlay {
+  @apply text-sm text-brand-600;
+  white-space: nowrap;
+}
+
+.confirmYes {
+  @apply text-sm font-bold text-error-500 cursor-pointer transition-colors duration-150;
+  background: none;
+  border: none;
+  padding: 0;
+}
+
+.confirmYes:hover {
+  color: #dc2626;
+}
+
+.confirmYes:focus-visible {
+  outline: 2px solid #64748b;
+  outline-offset: 2px;
+}
+
+.confirmCancel {
+  @apply text-sm text-brand-500 cursor-pointer transition-colors duration-150;
+  background: none;
+  border: none;
+  padding: 0;
+}
+
+.confirmCancel:hover {
+  @apply text-brand-700;
+}
+
+.confirmCancel:focus-visible {
+  outline: 2px solid #64748b;
+  outline-offset: 2px;
+}
+
+.emptyText {
+  @apply text-sm text-brand-400;
+}
+
+.srOnly {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border-width: 0;
+}
+
+/* ── Dark Mode ───────────────────────────────────────────── */
+
+:global(html.dark) .userCard {
+  border-color: rgba(255, 255, 255, 0.06);
+  background: rgba(255, 255, 255, 0.02);
+}
+
+:global(html.dark) .userId {
+  color: #dbdee1;
+}
+
+:global(html.dark) .resetButton {
+  background-color: #2b2d31;
+  color: #dbdee1;
+}
+
+:global(html.dark) .resetButton:hover {
+  background: rgba(255, 255, 255, 0.06);
+}
+
+:global(html.dark) .resetButton:focus-visible {
+  outline-color: #3ba55d;
+}
+
+:global(html.dark) .confirmOverlay {
+  color: #b9bbbe;
+}
+
+:global(html.dark) .confirmYes {
+  color: #f87171;
+}
+
+:global(html.dark) .confirmYes:hover {
+  color: #ef4444;
+}
+
+:global(html.dark) .confirmYes:focus-visible {
+  outline-color: #3ba55d;
+}
+
+:global(html.dark) .confirmCancel {
+  color: #b9bbbe;
+}
+
+:global(html.dark) .confirmCancel:hover {
+  color: #dbdee1;
+}
+
+:global(html.dark) .confirmCancel:focus-visible {
+  outline-color: #3ba55d;
+}
+
+:global(html.dark) .emptyText {
+  color: #72767d;
+}

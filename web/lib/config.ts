@@ -4,6 +4,7 @@ import { dirname, resolve } from "path";
 import type { EnvConfig, ModelPreference } from "./types";
 import type { Role } from "./permissions";
 import { getSkillsForRole } from "./skill-store";
+import { parsePositiveInt } from "./parse-env";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 dotenv.config({ path: resolve(__dirname, "../../.env") });
@@ -36,20 +37,24 @@ export const TOKEN_PRICING: Record<string, { input: number; output: number }> = 
 };
 
 // ── Usage Limits (per-user token budgets) ────────────────────
-// Rolling windows sized to approximate a $100/month Claude Max plan
-// when using Sonnet as the default model.
+// Defaults approximate $10 (2h) and $100 (weekly) of Opus usage as
+// safety guardrails. Override via env vars without rebuilding.
 
-export const USAGE_LIMITS = {
-  twoHourWindow: {
+export const USAGE_LIMITS = Object.freeze({
+  twoHourWindow: Object.freeze({
     windowMs: 2 * 60 * 60 * 1000,           // 2 hours
-    maxInputTokens: 55_000,
-  },
-  weeklyWindow: {
+    get maxInputTokens() {
+      return parsePositiveInt("USAGE_LIMIT_2H_INPUT_TOKENS", 670_000);
+    },
+  }),
+  weeklyWindow: Object.freeze({
     windowMs: 7 * 24 * 60 * 60 * 1000,      // 1 week
-    maxInputTokens: 1_650_000,
-  },
+    get maxInputTokens() {
+      return parsePositiveInt("USAGE_LIMIT_WEEKLY_INPUT_TOKENS", 6_700_000);
+    },
+  }),
   warningThreshold: 0.80,
-} as const;
+});
 
 export const env: EnvConfig = {
   ANTHROPIC_API_KEY:       process.env.ANTHROPIC_API_KEY,
