@@ -309,6 +309,17 @@ Click the gear icon in the chat sidebar footer to open the Settings page (`/sett
 
 Progress bars change color as you approach limits: blue for normal usage, amber at 80%, red at 95%.
 
+**Organization** (admin-only)
+
+- **Organization Name**: Read-only display of the `ORG_NAME` environment variable (appears in the system prompt, e.g., "for Acme Corp's security team"). Requires a server restart to change.
+- **Organizational Context**: Free-text textarea for adding SOC-relevant knowledge that helps Neo investigate — domain names, SAM account formats, VPN IP ranges, critical assets, escalation contacts. This is injected into the system prompt for every conversation. Maximum 5,000 characters. Changes take effect within 60 seconds.
+
+**Usage Limits** (admin-only)
+
+- **Per-user usage**: View all users' token usage across both the 2-hour and weekly rolling windows, displayed as progress bars.
+- **Configured limits**: Shows the current token caps (configurable via `USAGE_LIMIT_2H_INPUT_TOKENS` and `USAGE_LIMIT_WEEKLY_INPUT_TOKENS` environment variables).
+- **Reset**: Reset a specific user's usage for a specific window with inline confirmation. Useful when a user hits a limit during a legitimate investigation.
+
 **API Keys** (admin-only)
 
 - **Create key**: Generate API keys with a label, role, and optional expiration (max 2 years). The raw key is shown once on creation.
@@ -715,6 +726,7 @@ Neo includes built-in protection against prompt injection attacks. This is trans
 | `get_sentinel_incidents` | List recent Sentinel incidents. Filterable by severity (`High`, `Medium`, `Low`, `Informational`) and status (`New`, `Active`, `Closed`). | All |
 | `get_xdr_alert` | Retrieve full alert details from Defender for Endpoint or CrowdStrike. Includes process tree, file hashes, network connections. | All |
 | `search_xdr_by_host` | Search for all recent alerts on a hostname or IP. Useful for host-based investigations. | All |
+| `get_machine_isolation_status` | Check real-time network isolation status and health of a machine via Defender for Endpoint. Returns isolation state, last action details, health status, and risk score. | All |
 | `get_user_info` | Look up an Entra ID user: account status, MFA, groups, devices, risk level. | All |
 | `get_full_tool_result` | Retrieve the full, untruncated content of a previous tool result that was truncated to fit the context window. | All |
 | `reset_user_password` | Force password reset. Optionally revokes all sessions and refresh tokens. Requires confirmation and justification. | Admin |
@@ -750,12 +762,12 @@ When the limit is reached, start a new session by typing `clear` in the CLI.
 
 **Token usage budgets**: In addition to message limits, each user has token-based budgets:
 
-| Window | Limit |
-|--------|-------|
-| 2-hour rolling window | 55,000 input tokens |
-| Weekly rolling window | 1,650,000 input tokens |
+| Window | Default Limit | Env Var |
+|--------|--------------|---------|
+| 2-hour rolling window | 670,000 input tokens (~$10 Opus) | `USAGE_LIMIT_2H_INPUT_TOKENS` |
+| Weekly rolling window | 6,700,000 input tokens (~$100 Opus) | `USAGE_LIMIT_WEEKLY_INPUT_TOKENS` |
 
-These limits are designed to approximate a $100/month usage level. When a budget is exceeded, you will receive a 429 error indicating which limit was hit. The 2-hour window resets as older usage ages out; the weekly window works the same way. An 80% usage warning is sent in the response stream before the hard limit is reached.
+These limits are safety guardrails. Adjust them via environment variables without rebuilding. When a budget is exceeded, you will receive a 429 error indicating which limit was hit. The 2-hour window resets as older usage ages out; the weekly window works the same way. An 80% usage warning is sent in the response stream before the hard limit is reached. Admins can view per-user usage and reset limits in Settings > Usage Limits.
 
 You can check your current usage via the `/api/usage` endpoint.
 
@@ -780,6 +792,10 @@ All endpoints require authentication via `Authorization: Bearer <api-key>` heade
 | `PUT` | `/api/skills/{id}` | Update a skill. Admin only. Body: `{ "content": "..." }` |
 | `DELETE` | `/api/skills/{id}` | Delete a skill. Admin only. |
 | `GET` | `/api/usage` | Get token usage summary for the authenticated user (two-hour and weekly windows). |
+| `GET` | `/api/admin/usage` | List all users' token usage (admin only). Supports `?page=0&pageSize=50`. |
+| `POST` | `/api/admin/usage/reset` | Reset a user's usage window (admin only). Body: `{ "userId": "...", "window": "two-hour\|weekly" }` |
+| `GET` | `/api/admin/org-context` | Get organizational context and org name (admin only). |
+| `PUT` | `/api/admin/org-context` | Update organizational context (admin only). Body: `{ "orgContext": "..." }` |
 | `GET` | `/api/api-keys` | List API keys for the authenticated admin (super-admins see all keys). |
 | `POST` | `/api/api-keys` | Create an API key. Admin only. Body: `{ "label": "...", "role": "admin|reader", "expiresAt?": "..." }` |
 | `DELETE` | `/api/api-keys/{id}` | Revoke an API key by hash ID. Admin only (ownership enforced, super-admin bypass). |

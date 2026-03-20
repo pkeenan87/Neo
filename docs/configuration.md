@@ -116,6 +116,10 @@ INJECTION_GUARD_MODE=monitor
 | `EVENT_HUB_NAME` | No | Event Hub name (default: `neo-logs`) |
 | `LOG_LEVEL` | No | Minimum log level: `debug`, `info` (default), `warn`, `error` |
 | `INJECTION_GUARD_MODE` | No | `monitor` (default) or `block`. Controls prompt injection response |
+| `ORG_NAME` | No | Organization name shown in the system prompt. Defaults to `Goodwin Procter LLP`. Set to empty for generic `your organization`. |
+| `ORG_CONTEXT` | No | Free-text organizational context injected into the system prompt (domains, SAM formats, VPN ranges, etc.). Supports `\n` for newlines. Also editable by admins in Settings > Organization. |
+| `USAGE_LIMIT_2H_INPUT_TOKENS` | No | Per-user input token cap for the 2-hour rolling window (default: 670,000 — approx. $10 of Opus) |
+| `USAGE_LIMIT_WEEKLY_INPUT_TOKENS` | No | Per-user input token cap for the weekly rolling window (default: 6,700,000 — approx. $100 of Opus) |
 
 **Constants** (hardcoded in `web/lib/config.ts`, not environment variables):
 
@@ -126,8 +130,6 @@ INJECTION_GUARD_MODE=monitor
 | `TRIM_TRIGGER_THRESHOLD` | 160,000 | Token count that triggers conversation compression |
 | `PER_TOOL_RESULT_TOKEN_CAP` | 50,000 | Maximum tokens per individual tool result before truncation |
 | `PRESERVED_RECENT_MESSAGES` | 10 | Number of recent messages always preserved during compression |
-| `USAGE_LIMITS.twoHourWindow.maxInputTokens` | 55,000 | Per-user input token cap in a 2-hour rolling window |
-| `USAGE_LIMITS.weeklyWindow.maxInputTokens` | 1,650,000 | Per-user input token cap in a 1-week rolling window |
 | `USAGE_LIMITS.warningThreshold` | 0.80 | Usage fraction at which a warning is sent to the client |
 
 ### API Key Management
