@@ -1,0 +1,102 @@
+@reference "../../app/globals.css";
+
+/* ── Organization Context Section ────────────────────────── */
+
+.orgNameRow {
+  @apply flex flex-col gap-2 mb-8;
+}
+
+.orgNameValue {
+  @apply text-sm font-bold text-brand-900;
+  font-family: monospace;
+}
+
+.orgNameHint {
+  @apply text-sm text-brand-400;
+  font-size: 0.75rem;
+}
+
+.contextDescription {
+  @apply text-sm text-brand-400 mb-4;
+  font-size: 0.75rem;
+}
+
+.contextTextarea {
+  @apply w-full px-4 py-2 rounded-lg border border-border-default bg-surface-sunken text-brand-900 transition-colors duration-150;
+  font-family: monospace;
+  font-size: 0.8125rem;
+  line-height: 1.5;
+  min-height: 200px;
+  resize: vertical;
+}
+
+.contextTextarea:focus-visible {
+  outline: 2px solid transparent;
+  @apply border-brand-500;
+  box-shadow: 0 0 0 3px rgba(100, 116, 139, 0.25);
+}
+
+.contextFooter {
+  @apply flex items-center justify-between mt-4;
+}
+
+.charCount {
+  @apply text-sm text-brand-400;
+}
+
+.charCountWarn {
+  @apply text-sm text-warning-500;
+}
+
+.charCountError {
+  @apply text-sm text-error-500;
+}
+
+.feedbackSuccess {
+  @apply text-sm mb-4 px-4 py-2 rounded-lg;
+  background-color: rgba(34, 197, 94, 0.1);
+  color: #16a34a;
+}
+
+.feedbackIcon {
+  display: inline;
+  vertical-align: middle;
+  margin-right: 0.5em;
+  width: 1em;
+  height: 1em;
+}
+
+/* ── Dark Mode ───────────────────────────────────────────── */
+
+:global(html.dark) .orgNameValue {
+  color: #dbdee1;
+}
+
+:global(html.dark) .orgNameHint {
+  color: #72767d;
+}
+
+:global(html.dark) .contextDescription {
+  color: #72767d;
+}
+
+:global(html.dark) .contextTextarea {
+  background-color: #1e1f22;
+  border-color: rgba(255, 255, 255, 0.06);
+  color: #dbdee1;
+}
+
+:global(html.dark) .contextTextarea:focus-visible {
+  outline: 2px solid transparent;
+  border-color: #3ba55d;
+  box-shadow: 0 0 0 3px rgba(59, 165, 93, 0.15);
+}
+
+:global(html.dark) .charCount {
+  color: #72767d;
+}
+
+:global(html.dark) .feedbackSuccess {
+  background-color: rgba(59, 165, 93, 0.1);
+  color: #4ade80;
+}

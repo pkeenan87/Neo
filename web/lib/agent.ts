@@ -71,7 +71,7 @@ export async function runAgentLoop(
   const localMessages: Message[] = [...messages];
   logger.info("Agent loop started", "agent", { role, model });
 
-  const systemPrompt = getSystemPrompt(role);
+  const systemPrompt = await getSystemPrompt(role);
   const systemPromptTokenEstimate = Math.ceil(systemPrompt.length / CHARS_PER_TOKEN);
   let lastInputTokens: number | null = null;
 

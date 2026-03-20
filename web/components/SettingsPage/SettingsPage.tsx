@@ -8,9 +8,10 @@ import { AppearanceSection } from './AppearanceSection'
 import { UsageSection } from './UsageSection'
 import { ApiKeysSection } from './ApiKeysSection'
 import { AdminUsageSection } from './AdminUsageSection'
+import { OrgContextSection } from './OrgContextSection'
 import styles from './SettingsPage.module.css'
 
-type Tab = 'general' | 'usage' | 'api-keys' | 'admin-usage'
+type Tab = 'general' | 'usage' | 'api-keys' | 'admin-usage' | 'org-context'
 
 const BASE_TABS: { value: Tab; label: string }[] = [
   { value: 'general', label: 'General' },
@@ -28,7 +29,7 @@ export function SettingsPage({ userName, userImage, userRole, className }: Setti
   const [activeTab, setActiveTab] = useState<Tab>('general')
 
   const tabs = userRole === 'admin'
-    ? [...BASE_TABS, { value: 'admin-usage' as Tab, label: 'Usage Limits' }, { value: 'api-keys' as Tab, label: 'API Keys' }]
+    ? [...BASE_TABS, { value: 'org-context' as Tab, label: 'Organization' }, { value: 'admin-usage' as Tab, label: 'Usage Limits' }, { value: 'api-keys' as Tab, label: 'API Keys' }]
     : BASE_TABS
 
   return (
@@ -70,6 +71,7 @@ export function SettingsPage({ userName, userImage, userRole, className }: Setti
           </>
         )}
         {activeTab === 'usage' && <UsageSection />}
+        {activeTab === 'org-context' && <OrgContextSection />}
         {activeTab === 'admin-usage' && <AdminUsageSection />}
         {activeTab === 'api-keys' && <ApiKeysSection />}
       </main>
