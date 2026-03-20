@@ -92,6 +92,27 @@ export const TOOLS: Tool[] = [
     },
   },
   {
+    name: "get_machine_isolation_status",
+    description:
+      "Check the real-time network isolation status and health of a machine via Microsoft Defender for Endpoint. " +
+      "Returns whether the machine is currently isolated, pending isolation, or not isolated, along with health status and risk score.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        hostname: {
+          type: "string",
+          description: "Hostname or FQDN of the machine",
+        },
+        machine_id: {
+          type: "string",
+          description: "Defender machine ID — optional if hostname is provided",
+          maxLength: 64,
+        },
+      },
+      required: ["hostname"],
+    },
+  },
+  {
     name: "get_user_info",
     description: "Look up Entra ID user details: MFA, groups, devices, and risk level.",
     input_schema: {

@@ -31,6 +31,7 @@ const TOOL_COLORS = {
   get_sentinel_incidents: chalk.cyan,
   get_xdr_alert:          chalk.yellow,
   search_xdr_by_host:     chalk.yellow,
+  get_machine_isolation_status: chalk.yellow,
   get_user_info:          chalk.blue,
   reset_user_password:    chalk.red.bold,
   isolate_machine:        chalk.red.bold,

@@ -11,6 +11,7 @@ import type {
   ResetPasswordInput,
   IsolateMachineInput,
   UnisolateMachineInput,
+  MachineIsolationStatusInput,
   GetFullToolResultInput,
   Message,
 } from "./types";
@@ -31,6 +32,14 @@ function validateHostname(hostname: string): void {
 function validateUpn(upn: string): void {
   if (!UPN_RE.test(upn)) {
     throw new Error(`Invalid UPN format: ${upn}`);
+  }
+}
+
+const MACHINE_ID_RE = /^[0-9a-f]{40}$/i;
+
+function validateMachineId(id: string): void {
+  if (!MACHINE_ID_RE.test(id)) {
+    throw new Error("Invalid machine ID format");
   }
 }
 
@@ -311,6 +320,124 @@ async function unisolate_machine({ hostname, platform, justification }: Unisolat
   return await res.json();
 }
 
+// ── Machine Isolation Status ─────────────────────────────────
+
+async function get_machine_isolation_status({ hostname, machine_id }: MachineIsolationStatusInput): Promise<unknown> {
+  validateHostname(hostname);
+  if (machine_id !== undefined) {
+    validateMachineId(machine_id);
+  }
+
+  if (env.MOCK_MODE) {
+    return mockMachineIsolationStatus(hostname, machine_id);
+  }
+
+  const token = await getAzureToken("https://api.securitycenter.microsoft.com");
+  let resolvedMachineId = machine_id;
+  let machineHealth: Record<string, unknown> | null = null;
+
+  // Resolve machine ID from hostname and get health data
+  const machineRes = await fetch(
+    resolvedMachineId
+      ? `https://api.securitycenter.microsoft.com/api/machines/${encodeURIComponent(resolvedMachineId)}`
+      : `https://api.securitycenter.microsoft.com/api/machines?$filter=computerDnsName eq '${escapeODataString(hostname)}'`,
+    { headers: { Authorization: `Bearer ${token}` } },
+  );
+
+  if (!machineRes.ok) {
+    const errText = await machineRes.text();
+    throw new Error(`Machine lookup failed (${machineRes.status}): ${errText}`);
+  }
+
+  const machineData = await machineRes.json();
+  const machine = resolvedMachineId ? machineData : machineData.value?.[0];
+
+  if (!machine) {
+    throw new Error(`No machine found matching hostname '${hostname}' in Defender`);
+  }
+
+  const apiMachineId = machine.id as string;
+  validateMachineId(apiMachineId);
+  resolvedMachineId = apiMachineId;
+
+  machineHealth = {
+    healthStatus: machine.healthStatus,
+    riskScore: machine.riskScore,
+    exposureLevel: machine.exposureLevel,
+    osPlatform: machine.osPlatform,
+    osVersion: machine.osVersion,
+    lastSeen: machine.lastSeen,
+    lastIpAddress: machine.lastIpAddress,
+  };
+
+  // Query recent isolation/unisolation actions (type filter in OData avoids
+  // non-isolation actions crowding out results within the $top limit)
+  const actionsRes = await fetch(
+    `https://api.securitycenter.microsoft.com/api/machineactions?$filter=machineId eq '${escapeODataString(resolvedMachineId)}' and (type eq 'Isolate' or type eq 'Unisolate')&$orderby=creationDateTimeUtc desc&$top=5`,
+    { headers: { Authorization: `Bearer ${token}` } },
+  );
+
+  if (!actionsRes.ok) {
+    const errText = await actionsRes.text();
+    throw new Error(`Machine actions query failed (${actionsRes.status}): ${errText}`);
+  }
+
+  const actionsData = await actionsRes.json();
+  return buildIsolationResult(hostname, resolvedMachineId, actionsData.value ?? [], machineHealth);
+}
+
+function buildIsolationResult(
+  hostname: string,
+  machineId: string,
+  isolationActions: Record<string, unknown>[],
+  health: Record<string, unknown> | null,
+): unknown {
+  if (isolationActions.length === 0) {
+    return {
+      hostname,
+      machineId,
+      isolationStatus: "NotIsolated",
+      note: "No isolation history found for this machine",
+      lastAction: null,
+      health,
+    };
+  }
+
+  const latest = isolationActions[0];
+  let isolationStatus: string;
+
+  if (latest.type === "Isolate" && latest.status === "Succeeded") {
+    isolationStatus = "Isolated";
+  } else if (latest.type === "Isolate" && (latest.status === "Pending" || latest.status === "InProgress")) {
+    isolationStatus = "Pending";
+  } else if (latest.type === "Isolate" && latest.status === "Failed") {
+    isolationStatus = "NotIsolated";
+  } else if (latest.type === "Unisolate" && latest.status === "Succeeded") {
+    isolationStatus = "NotIsolated";
+  } else if (latest.type === "Unisolate" && (latest.status === "Pending" || latest.status === "InProgress")) {
+    isolationStatus = "UnisolatePending";
+  } else if (latest.type === "Unisolate" && latest.status === "Failed") {
+    isolationStatus = "Isolated";
+  } else {
+    isolationStatus = "Unknown";
+  }
+
+  return {
+    hostname,
+    machineId,
+    isolationStatus,
+    lastAction: {
+      type: latest.type,
+      status: latest.status,
+      requestor: latest.requestor,
+      creationDateTimeUtc: latest.creationDateTimeUtc,
+      lastUpdateDateTimeUtc: latest.lastUpdateDateTimeUtc,
+      comment: latest.requestorComment ?? latest.title,
+    },
+    health,
+  };
+}
+
 // ── Context Retrieval ─────────────────────────────────────────
 
 // Anthropic tool_use_id format: "toolu_" followed by alphanumerics
@@ -358,6 +485,7 @@ const executors: Record<string, (input: Record<string, unknown>) => Promise<unkn
   reset_user_password: (input) => reset_user_password(input as unknown as ResetPasswordInput),
   isolate_machine: (input) => isolate_machine(input as unknown as IsolateMachineInput),
   unisolate_machine: (input) => unisolate_machine(input as unknown as UnisolateMachineInput),
+  get_machine_isolation_status: (input) => get_machine_isolation_status(input as unknown as MachineIsolationStatusInput),
 };
 
 export interface ExecuteToolContext {
@@ -576,4 +704,31 @@ function mockUnisolateMachine(hostname: string, platform: string): unknown {
     status: "Pending",
     _mock: true,
   };
+}
+
+function mockMachineIsolationStatus(hostname: string, machineId: string | undefined): unknown {
+  const result = buildIsolationResult(
+    hostname,
+    machineId || "a".repeat(40),
+    [
+      {
+        type: "Isolate",
+        status: "Succeeded",
+        requestor: "analyst@goodwin.com",
+        creationDateTimeUtc: "2026-03-19T14:30:00Z",
+        lastUpdateDateTimeUtc: "2026-03-19T14:31:00Z",
+        requestorComment: "Suspicious lateral movement detected — isolating for investigation",
+      },
+    ],
+    {
+      healthStatus: "Active",
+      riskScore: "Medium",
+      exposureLevel: "Medium",
+      osPlatform: "Windows11",
+      osVersion: "22H2",
+      lastSeen: "2026-03-20T10:00:00Z",
+      lastIpAddress: "10.1.50.42",
+    },
+  ) as Record<string, unknown>;
+  return { ...result, _mock: true };
 }

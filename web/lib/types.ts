@@ -254,6 +254,11 @@ export interface UnisolateMachineInput {
   justification: string;
 }
 
+export interface MachineIsolationStatusInput {
+  hostname: string;
+  machine_id?: string;
+}
+
 export interface GetFullToolResultInput {
   tool_use_id: string;
 }
