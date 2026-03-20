@@ -233,12 +233,12 @@ If `CLI_STORAGE_ACCOUNT` is not set, the `/api/downloads/[filename]` route retur
 
 Neo enforces per-user token budgets to control API costs. Two rolling windows are checked before each agent loop call:
 
-| Window | Default Limit | Description |
-|--------|---------------|-------------|
-| 2-hour | 55,000 input tokens | Prevents short-term burst usage |
-| 1-week | 1,650,000 input tokens | Caps sustained weekly usage |
+| Window | Default Limit | Env Var |
+|--------|--------------|---------|
+| 2-hour | 670,000 input tokens (~$10 Opus) | `USAGE_LIMIT_2H_INPUT_TOKENS` |
+| 1-week | 6,700,000 input tokens (~$100 Opus) | `USAGE_LIMIT_WEEKLY_INPUT_TOKENS` |
 
-These defaults approximate a $100/month Claude Max plan when using the default Sonnet model.
+These defaults are safety guardrails calibrated to Opus pricing. Adjust via environment variables without rebuilding.
 
 **How it works**:
 - Before each API call, the server checks the user's accumulated token usage in both windows.
@@ -246,8 +246,9 @@ These defaults approximate a $100/month Claude Max plan when using the default S
 - At 100%, the request is rejected with a 429 status and a message indicating which limit was exceeded.
 - Usage data is stored in the `usage-logs` Cosmos DB container with a 90-day TTL.
 - Users can check their current usage via `GET /api/usage`.
+- Admins can view per-user usage and reset limits in Settings > Usage Limits.
 
-**Tuning**: To adjust the limits, edit `USAGE_LIMITS` in `web/lib/config.ts`. The values are in input tokens. To convert to approximate cost: multiply by the per-token input price for your default model (Sonnet: $3/M tokens, Opus: $15/M tokens).
+**Tuning**: Set `USAGE_LIMIT_2H_INPUT_TOKENS` and `USAGE_LIMIT_WEEKLY_INPUT_TOKENS` in `.env` or your app settings. Values are in input tokens. To convert to approximate cost: multiply by the per-token input price for your default model (Sonnet: $3/M tokens, Opus: $15/M tokens).
 
 ---
 
@@ -417,6 +418,22 @@ Neo uses two separate concerns in Azure AD:
    - Allowed member types: Users/Groups
 2. Assign the `Admin` role to users or groups under **Enterprise applications > Neo Security Agent > Users and groups**.
 3. Users without the `Admin` role automatically get `reader` permissions.
+
+**API permissions** (for tool execution when `MOCK_MODE=false`):
+
+The app registration used for tool execution (`AZURE_CLIENT_ID`) needs these application permissions:
+
+| API | Permission | Used by |
+|-----|-----------|---------|
+| Microsoft Graph | `User.Read.All` | `get_user_info` |
+| Microsoft Graph | `User.ReadWrite.All` | `reset_user_password` |
+| Microsoft Graph | `Mail.Read` | `search_user_messages` |
+| Microsoft Graph | `Mail.Send` | `report_message_as_phishing` |
+| Microsoft Threat Protection | `Machine.Read.All` | `get_machine_isolation_status`, `isolate_machine`, `unisolate_machine` |
+| Microsoft Threat Protection | `Machine.Isolate` | `isolate_machine`, `unisolate_machine` |
+| Log Analytics API | (workspace-level RBAC) | `run_sentinel_kql` |
+
+Add these under **API permissions > Add a permission > Microsoft Graph > Application permissions** (and similarly for Microsoft Threat Protection).
 
 ### CLI Public Client Setup
 

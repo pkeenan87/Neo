@@ -259,6 +259,21 @@ export interface MachineIsolationStatusInput {
   machine_id?: string;
 }
 
+export interface SearchUserMessagesInput {
+  upn: string;
+  sender?: string;
+  subject?: string;
+  search_text?: string;
+  days?: number;
+}
+
+export interface ReportMessageAsPhishingInput {
+  upn: string;
+  message_id: string;
+  report_type?: "phishing" | "junk";
+  justification: string;
+}
+
 export interface GetFullToolResultInput {
   tool_use_id: string;
 }

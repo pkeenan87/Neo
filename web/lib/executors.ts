@@ -12,6 +12,8 @@ import type {
   IsolateMachineInput,
   UnisolateMachineInput,
   MachineIsolationStatusInput,
+  SearchUserMessagesInput,
+  ReportMessageAsPhishingInput,
   GetFullToolResultInput,
   Message,
 } from "./types";
@@ -438,6 +440,131 @@ function buildIsolationResult(
   };
 }
 
+// ── Email Message Search & Reporting ─────────────────────────
+
+// Graph message IDs are base64-encoded; enforce length bounds to prevent memory abuse
+const MESSAGE_ID_RE = /^[A-Za-z0-9+/=_-]{10,512}$/;
+const SAFE_SEARCH_RE = /^[\w\s@.\-,!?']+$/u;
+const MAX_SEARCH_DAYS = 90;
+
+async function search_user_messages({ upn, sender, subject, search_text, days = 7 }: SearchUserMessagesInput): Promise<unknown> {
+  validateUpn(upn);
+  if (sender && !UPN_RE.test(sender)) {
+    throw new Error(`Invalid sender email format: ${sender}`);
+  }
+  if (search_text && !SAFE_SEARCH_RE.test(search_text)) {
+    throw new Error("search_text contains unsupported characters");
+  }
+  const clampedDays = Math.max(1, Math.min(days, MAX_SEARCH_DAYS));
+
+  if (env.MOCK_MODE) {
+    return mockSearchUserMessages(upn, sender, subject, search_text, clampedDays);
+  }
+
+  const token = await getMSGraphToken();
+  const encodedUpn = encodeURIComponent(upn);
+
+  const params = new URLSearchParams();
+  params.set("$select", "id,subject,from,receivedDateTime,bodyPreview,hasAttachments,isRead");
+  params.set("$top", "10");
+
+  const headers: Record<string, string> = { Authorization: `Bearer ${token}` };
+
+  // $search and $filter/$orderby are mutually exclusive on Graph /messages
+  if (search_text) {
+    params.set("$search", `"${search_text.replace(/"/g, '\\"')}"`);
+    headers["ConsistencyLevel"] = "eventual";
+    params.set("$count", "true");
+  } else {
+    params.set("$orderby", "receivedDateTime desc");
+
+    const since = new Date(Date.now() - clampedDays * 24 * 60 * 60 * 1000).toISOString();
+    const filters: string[] = [`receivedDateTime ge ${since}`];
+
+    if (sender) {
+      filters.push(`from/emailAddress/address eq '${escapeODataString(sender)}'`);
+    }
+    if (subject) {
+      filters.push(`contains(subject, '${escapeODataString(subject)}')`);
+    }
+
+    params.set("$filter", filters.join(" and "));
+  }
+
+  const res = await fetch(
+    `https://graph.microsoft.com/v1.0/users/${encodedUpn}/messages?${params.toString()}`,
+    { headers },
+  );
+
+  if (!res.ok) {
+    const errText = await res.text();
+    throw new Error(`Message search failed (${res.status}): ${errText}`);
+  }
+
+  const data = await res.json();
+  return {
+    messages: data.value ?? [],
+    count: (data.value ?? []).length,
+    upn,
+    searchCriteria: { sender, subject, search_text, days: clampedDays },
+  };
+}
+
+async function report_message_as_phishing({
+  upn,
+  message_id,
+  report_type = "phishing",
+  justification,
+}: ReportMessageAsPhishingInput): Promise<unknown> {
+  validateUpn(upn);
+  if (!message_id || !MESSAGE_ID_RE.test(message_id)) {
+    throw new Error("Invalid or missing message_id");
+  }
+
+  if (env.MOCK_MODE) {
+    return {
+      reported: true,
+      messageId: message_id,
+      reportType: report_type,
+      upn,
+      justification,
+      _mock: true,
+    };
+  }
+
+  const token = await getMSGraphToken();
+  const encodedUpn = encodeURIComponent(upn);
+  // message_id is validated by MESSAGE_ID_RE to be URL-safe — no encoding needed
+  // (encodeURIComponent would double-encode = padding and break Graph lookups)
+
+  // SECURITY: Both actions use /beta endpoints — no GA SLA. Track graduation:
+  // https://learn.microsoft.com/en-us/graph/api/message-reportphishing
+  // https://learn.microsoft.com/en-us/graph/api/message-reportjunk
+  const url = report_type === "phishing"
+    ? `https://graph.microsoft.com/beta/users/${encodedUpn}/messages/${message_id}/microsoft.graph.reportPhishing`
+    : `https://graph.microsoft.com/beta/users/${encodedUpn}/messages/${message_id}/microsoft.graph.reportJunk`;
+
+  const res = await fetch(url, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${token}`,
+    },
+  });
+
+  if (!res.ok) {
+    const errText = await res.text();
+    throw new Error(`Report message failed (${res.status}): ${errText}`);
+  }
+
+  return {
+    reported: true,
+    messageId: message_id,
+    reportType: report_type,
+    upn,
+    justification,
+  };
+}
+
 // ── Context Retrieval ─────────────────────────────────────────
 
 // Anthropic tool_use_id format: "toolu_" followed by alphanumerics
@@ -486,6 +613,8 @@ const executors: Record<string, (input: Record<string, unknown>) => Promise<unkn
   isolate_machine: (input) => isolate_machine(input as unknown as IsolateMachineInput),
   unisolate_machine: (input) => unisolate_machine(input as unknown as UnisolateMachineInput),
   get_machine_isolation_status: (input) => get_machine_isolation_status(input as unknown as MachineIsolationStatusInput),
+  search_user_messages: (input) => search_user_messages(input as unknown as SearchUserMessagesInput),
+  report_message_as_phishing: (input) => report_message_as_phishing(input as unknown as ReportMessageAsPhishingInput),
 };
 
 export interface ExecuteToolContext {
@@ -731,4 +860,63 @@ function mockMachineIsolationStatus(hostname: string, machineId: string | undefi
     },
   ) as Record<string, unknown>;
   return { ...result, _mock: true };
+}
+
+function mockSearchUserMessages(
+  upn: string,
+  sender?: string,
+  subject?: string,
+  search_text?: string,
+  days: number = 7,
+): unknown {
+  return {
+    messages: [
+      {
+        id: "AAMkAGI2TG93AAA=",
+        subject: subject || "Urgent: Invoice #4829 - Payment Required",
+        from: {
+          emailAddress: {
+            name: sender || "accounts@suspicious-domain.com",
+            address: sender || "accounts@suspicious-domain.com",
+          },
+        },
+        receivedDateTime: "2026-03-19T09:15:00Z",
+        bodyPreview: "Dear user, please review the attached invoice and process payment immediately. Click here to view...",
+        hasAttachments: true,
+        isRead: true,
+      },
+      {
+        id: "AAMkAGI2TG94AAA=",
+        subject: "Re: Quarterly Report",
+        from: {
+          emailAddress: {
+            name: "jdoe@goodwin.com",
+            address: "jdoe@goodwin.com",
+          },
+        },
+        receivedDateTime: "2026-03-19T08:30:00Z",
+        bodyPreview: "Thanks for sending this over. I've reviewed the numbers and everything looks good...",
+        hasAttachments: false,
+        isRead: true,
+      },
+      {
+        id: "AAMkAGI2TG95AAA=",
+        subject: "Action Required: Verify your account",
+        from: {
+          emailAddress: {
+            name: "security@microsoft-verify.net",
+            address: "noreply@microsoft-verify.net",
+          },
+        },
+        receivedDateTime: "2026-03-18T14:22:00Z",
+        bodyPreview: "Your Microsoft 365 account requires immediate verification. Click the link below to avoid suspension...",
+        hasAttachments: false,
+        isRead: false,
+      },
+    ],
+    count: 3,
+    upn,
+    searchCriteria: { sender, subject, search_text, days },
+    _mock: true,
+  };
 }

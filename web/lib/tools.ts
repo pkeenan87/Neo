@@ -113,6 +113,39 @@ export const TOOLS: Tool[] = [
     },
   },
   {
+    name: "search_user_messages",
+    description:
+      "Search a user's Exchange Online mailbox for specific messages by sender, subject, body content, or date range via Microsoft Graph. " +
+      "Returns message IDs needed for reporting actions.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        upn: {
+          type: "string",
+          description: "User Principal Name of the mailbox owner, e.g. jsmith@goodwin.com",
+        },
+        sender: {
+          type: "string",
+          description: "Filter by sender email address",
+        },
+        subject: {
+          type: "string",
+          description: "Filter by subject text (partial match)",
+        },
+        search_text: {
+          type: "string",
+          description: "Free-text search across subject, body, and sender",
+        },
+        days: {
+          type: "number",
+          description: "How many days back to search (default 7, max 90)",
+          maximum: 90,
+        },
+      },
+      required: ["upn"],
+    },
+  },
+  {
     name: "get_user_info",
     description: "Look up Entra ID user details: MFA, groups, devices, and risk level.",
     input_schema: {
@@ -202,6 +235,35 @@ export const TOOLS: Tool[] = [
       required: ["hostname", "platform", "justification"],
     },
   },
+  {
+    name: "report_message_as_phishing",
+    description:
+      "⚠️ DESTRUCTIVE — Report a message in a user's Exchange Online mailbox as phishing or junk via Microsoft Graph. " +
+      "Use after searching for the message with search_user_messages to obtain the message ID.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        upn: {
+          type: "string",
+          description: "User Principal Name of the mailbox owner",
+        },
+        message_id: {
+          type: "string",
+          description: "The Graph message ID obtained from search_user_messages",
+        },
+        report_type: {
+          type: "string",
+          enum: ["phishing", "junk"],
+          description: "Type of report — phishing (default) or junk",
+        },
+        justification: {
+          type: "string",
+          description: "Reason for reporting — written to audit log",
+        },
+      },
+      required: ["upn", "message_id", "justification"],
+    },
+  },
   // Read-only but returns sensitive data that was intentionally truncated from
   // context. Available to all roles since it only accesses the current session.
   {
@@ -226,4 +288,6 @@ export const DESTRUCTIVE_TOOLS = new Set([
   "reset_user_password",
   "isolate_machine",
   "unisolate_machine",
+  "search_user_messages",
+  "report_message_as_phishing",
 ]);

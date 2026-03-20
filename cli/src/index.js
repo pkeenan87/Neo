@@ -32,10 +32,12 @@ const TOOL_COLORS = {
   get_xdr_alert:          chalk.yellow,
   search_xdr_by_host:     chalk.yellow,
   get_machine_isolation_status: chalk.yellow,
+  search_user_messages:   chalk.blue,
   get_user_info:          chalk.blue,
   reset_user_password:    chalk.red.bold,
   isolate_machine:        chalk.red.bold,
-  unisolate_machine:      chalk.magenta.bold
+  unisolate_machine:      chalk.magenta.bold,
+  report_message_as_phishing: chalk.red.bold
 };
 
 const username = os.userInfo().username;
@@ -151,7 +153,8 @@ function clearThinking() {
 const TOOL_DESCRIPTIONS = {
   reset_user_password: (input) => `Reset password for ${chalk.bold(input.upn)}${input.revoke_sessions !== false ? " + revoke all sessions" : ""}`,
   isolate_machine:     (input) => `Network-isolate ${chalk.bold(input.hostname)} on ${input.platform} (${input.isolation_type || "Full"})`,
-  unisolate_machine:   (input) => `Release ${chalk.bold(input.hostname)} from network isolation`
+  unisolate_machine:   (input) => `Release ${chalk.bold(input.hostname)} from network isolation`,
+  report_message_as_phishing: (input) => `Report message as ${chalk.bold(input.report_type || "phishing")} in ${chalk.bold(input.upn)}'s mailbox`
 };
 
 async function promptForConfirmation(rl, tool) {
