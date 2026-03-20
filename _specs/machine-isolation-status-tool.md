@@ -39,7 +39,7 @@ Neo currently lacks a way to check whether a machine is isolated. Querying Senti
 
 - Should the tool also return the machine's overall health status from the Defender machines API (`/api/machines`), or strictly the isolation status? yes health status too.
 - Which Defender API permission scope is needed — is `Machine.Read.All` sufficient, or does querying `machineactions` require `MachineAction.Read.All`? Can you research this, let me know the answer, and then update the docs. I will add whatever permission is needed.
-- Should the tool support CrowdStrike as a platform option (like `isolate_machine` does), or is Defender-only acceptable for the initial implementation?
+- Should the tool support CrowdStrike as a platform option (like `isolate_machine` does), or is Defender-only acceptable for the initial implementation? no just Microsoft Defender XDR.ß
 
 ## Testing Guidelines
 
