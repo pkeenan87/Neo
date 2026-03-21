@@ -240,6 +240,11 @@ export interface ResetPasswordInput {
   justification: string;
 }
 
+export interface DismissUserRiskInput {
+  upn: string;
+  justification: string;
+}
+
 export interface IsolateMachineInput {
   hostname: string;
   machine_id?: string;

@@ -182,6 +182,26 @@ export const TOOLS: Tool[] = [
     },
   },
   {
+    name: "dismiss_user_risk",
+    description:
+      "⚠️ DESTRUCTIVE — Dismiss the risk state for a user in Entra ID Identity Protection. " +
+      "This re-enables login for users blocked by conditional access risk policies.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        upn: {
+          type: "string",
+          description: "User Principal Name of the account to dismiss risk for",
+        },
+        justification: {
+          type: "string",
+          description: "Reason for dismissing the risk — written to audit log",
+        },
+      },
+      required: ["upn", "justification"],
+    },
+  },
+  {
     name: "isolate_machine",
     description: "⚠️ DESTRUCTIVE — Network-isolate an endpoint using Microsoft Defender for Endpoint or CrowdStrike RTR. The machine will lose all network connectivity except the XDR management channel.",
     input_schema: {
@@ -373,6 +393,7 @@ export const TOOLS: Tool[] = [
 
 export const DESTRUCTIVE_TOOLS = new Set([
   "reset_user_password",
+  "dismiss_user_risk",
   "isolate_machine",
   "unisolate_machine",
   "search_user_messages",

@@ -427,6 +427,7 @@ The app registration used for tool execution (`AZURE_CLIENT_ID`) needs these app
 |-----|-----------|---------|
 | Microsoft Graph | `User.Read.All` | `get_user_info` |
 | Microsoft Graph | `User.ReadWrite.All` | `reset_user_password` |
+| Microsoft Graph | `IdentityRiskyUser.ReadWrite.All` | `dismiss_user_risk` |
 | Microsoft Graph | `Mail.Read` | `search_user_messages` |
 | Microsoft Graph | `Mail.Send` | `report_message_as_phishing` |
 | Microsoft Threat Protection | `Machine.Read.All` | `get_machine_isolation_status`, `isolate_machine`, `unisolate_machine` |

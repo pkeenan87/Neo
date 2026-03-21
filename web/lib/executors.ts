@@ -1,7 +1,7 @@
 import { env } from "./config";
 import { getAzureToken, getMSGraphToken, generateSecurePassword } from "./auth";
 import { getToolSecret } from "./secrets";
-import { logger } from "./logger";
+import { logger, hashPii } from "./logger";
 import type {
   SentinelKqlInput,
   SentinelIncidentsInput,
@@ -9,6 +9,7 @@ import type {
   XdrHostSearchInput,
   UserInfoInput,
   ResetPasswordInput,
+  DismissUserRiskInput,
   IsolateMachineInput,
   UnisolateMachineInput,
   MachineIsolationStatusInput,
@@ -28,6 +29,7 @@ const VALID_SEVERITY = new Set(["High", "Medium", "Low", "Informational"]);
 const VALID_STATUS = new Set(["New", "Active", "Closed"]);
 const HOSTNAME_RE = /^[a-zA-Z0-9._-]+$/;
 const UPN_RE = /^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/;
+const GUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 function validateHostname(hostname: string): void {
   if (!HOSTNAME_RE.test(hostname)) {
@@ -247,6 +249,63 @@ async function reset_user_password({ upn, revoke_sessions = true, justification 
     sessionRevoked,
     completedAt: new Date().toISOString(),
   };
+}
+
+async function dismiss_user_risk({ upn, justification }: DismissUserRiskInput): Promise<unknown> {
+  validateUpn(upn);
+
+  if (env.MOCK_MODE) {
+    return { dismissed: true, upn, justification, _mock: true };
+  }
+
+  const token = await getMSGraphToken();
+  const encodedUpn = encodeURIComponent(upn);
+
+  // Resolve user object ID from UPN
+  const userRes = await fetch(
+    `https://graph.microsoft.com/v1.0/users/${encodedUpn}?$select=id`,
+    { headers: { Authorization: `Bearer ${token}` } },
+  );
+
+  if (!userRes.ok) {
+    const errText = await userRes.text();
+    throw new Error(`User lookup failed (${userRes.status}): ${errText}`);
+  }
+
+  const userData = await userRes.json();
+  const objectId = typeof userData.id === "string" ? userData.id : "";
+
+  // Entra object IDs are always UUIDs — validate before using in a write operation
+  if (!objectId || !GUID_RE.test(objectId)) {
+    throw new Error(`No user found matching UPN '${upn}' in Entra ID, or unexpected ID format`);
+  }
+
+  // SECURITY: Using /beta endpoint — no GA SLA. Track graduation:
+  // https://learn.microsoft.com/en-us/graph/api/riskyuser-dismiss
+  // Requires IdentityRiskyUser.ReadWrite.All application permission.
+  const res = await fetch(
+    "https://graph.microsoft.com/beta/riskyUsers/dismiss",
+    {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ userIds: [objectId] }),
+    },
+  );
+
+  if (!res.ok) {
+    const errText = await res.text();
+    throw new Error(`Dismiss user risk failed (${res.status}): ${errText}`);
+  }
+
+  logger.info("User risk dismissed in Entra ID", "executors", {
+    toolName: "dismiss_user_risk",
+    userIdHash: hashPii(upn),
+  });
+
+  return { dismissed: true, upn, justification };
 }
 
 async function isolate_machine({ hostname, machine_id, platform, isolation_type = "Full", justification }: IsolateMachineInput): Promise<unknown> {
@@ -571,7 +630,6 @@ async function report_message_as_phishing({
 
 // ── ThreatLocker Approval Requests ───────────────────────────
 
-const GUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 // SECURITY: Instance must be a simple subdomain label — no dots, slashes, or
 // special characters that could redirect fetches to an unintended host (SSRF).
 const TL_INSTANCE_RE = /^[a-z0-9]{1,32}$/;
@@ -868,6 +926,7 @@ const executors: Record<string, (input: Record<string, unknown>) => Promise<unkn
   search_xdr_by_host: (input) => search_xdr_by_host(input as unknown as XdrHostSearchInput),
   get_user_info: (input) => get_user_info(input as unknown as UserInfoInput),
   reset_user_password: (input) => reset_user_password(input as unknown as ResetPasswordInput),
+  dismiss_user_risk: (input) => dismiss_user_risk(input as unknown as DismissUserRiskInput),
   isolate_machine: (input) => isolate_machine(input as unknown as IsolateMachineInput),
   unisolate_machine: (input) => unisolate_machine(input as unknown as UnisolateMachineInput),
   get_machine_isolation_status: (input) => get_machine_isolation_status(input as unknown as MachineIsolationStatusInput),

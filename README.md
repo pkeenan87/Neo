@@ -120,6 +120,7 @@ See [docs/configuration.md](docs/configuration.md) for Entra ID setup and all co
 | `get_user_info` | Read-only | Look up Entra ID user details and risk |
 | `get_full_tool_result` | Read-only | Retrieve full content of a previously truncated tool result |
 | `reset_user_password` | Destructive | Force password reset + session revocation |
+| `dismiss_user_risk` | Destructive | Dismiss user risk in Entra ID Identity Protection |
 | `isolate_machine` | Destructive | Network-isolate an endpoint |
 | `unisolate_machine` | Destructive | Release an isolated machine |
 | `report_message_as_phishing` | Destructive | Report a message as phishing/junk in a user's mailbox |
