@@ -123,6 +123,10 @@ See [docs/configuration.md](docs/configuration.md) for Entra ID setup and all co
 | `isolate_machine` | Destructive | Network-isolate an endpoint |
 | `unisolate_machine` | Destructive | Release an isolated machine |
 | `report_message_as_phishing` | Destructive | Report a message as phishing/junk in a user's mailbox |
+| `list_threatlocker_approvals` | Read-only | List ThreatLocker application approval requests |
+| `get_threatlocker_approval` | Read-only | Get full details of a ThreatLocker approval request |
+| `approve_threatlocker_request` | Destructive | Approve a ThreatLocker application approval request |
+| `deny_threatlocker_request` | Destructive | Deny a ThreatLocker application approval request |
 
 Read-only tools execute automatically. Destructive tools pause for human confirmation before executing.
 

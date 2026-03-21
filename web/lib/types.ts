@@ -274,6 +274,28 @@ export interface ReportMessageAsPhishingInput {
   justification: string;
 }
 
+export interface ListThreatLockerApprovalsInput {
+  status?: "pending" | "approved" | "ignored";
+  search_text?: string;
+  page?: number;
+  page_size?: number;
+}
+
+export interface GetThreatLockerApprovalInput {
+  approval_request_id: string;
+}
+
+export interface ApproveThreatLockerRequestInput {
+  approval_request_id: string;
+  policy_level?: "computer" | "group" | "organization";
+  justification: string;
+}
+
+export interface DenyThreatLockerRequestInput {
+  approval_request_id: string;
+  justification: string;
+}
+
 export interface GetFullToolResultInput {
   tool_use_id: string;
 }

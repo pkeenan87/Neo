@@ -14,6 +14,10 @@ import type {
   MachineIsolationStatusInput,
   SearchUserMessagesInput,
   ReportMessageAsPhishingInput,
+  ListThreatLockerApprovalsInput,
+  GetThreatLockerApprovalInput,
+  ApproveThreatLockerRequestInput,
+  DenyThreatLockerRequestInput,
   GetFullToolResultInput,
   Message,
 } from "./types";
@@ -565,6 +569,260 @@ async function report_message_as_phishing({
   };
 }
 
+// ── ThreatLocker Approval Requests ───────────────────────────
+
+const GUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+// SECURITY: Instance must be a simple subdomain label — no dots, slashes, or
+// special characters that could redirect fetches to an unintended host (SSRF).
+const TL_INSTANCE_RE = /^[a-z0-9]{1,32}$/;
+
+const TL_STATUS_MAP: Record<string, number> = {
+  pending: 1,
+  approved: 4,
+  ignored: 10,
+};
+
+async function getThreatLockerConfig(): Promise<{ apiKey: string; baseUrl: string; orgId: string }> {
+  const apiKey = await getToolSecret("THREATLOCKER_API_KEY");
+  const instance = await getToolSecret("THREATLOCKER_INSTANCE");
+  const orgId = await getToolSecret("THREATLOCKER_ORG_ID");
+
+  if (!apiKey || !instance || !orgId) {
+    throw new Error(
+      "ThreatLocker integration not configured — go to Settings > Integrations to add your API key, instance, and organization ID.",
+    );
+  }
+
+  if (!TL_INSTANCE_RE.test(instance)) {
+    throw new Error(
+      "THREATLOCKER_INSTANCE contains invalid characters. Expected a short lowercase subdomain label (e.g., 'us' or 'g').",
+    );
+  }
+
+  if (!GUID_RE.test(orgId)) {
+    throw new Error(
+      "THREATLOCKER_ORG_ID must be a valid GUID (format: 00000000-0000-0000-0000-000000000000).",
+    );
+  }
+
+  return {
+    apiKey,
+    baseUrl: `https://portalapi.${instance}.threatlocker.com/portalapi`,
+    orgId,
+  };
+}
+
+function validateGuid(id: string, label: string): void {
+  if (!GUID_RE.test(id)) {
+    throw new Error(`Invalid ${label} format — expected a GUID`);
+  }
+}
+
+async function list_threatlocker_approvals({
+  status = "pending",
+  search_text,
+  page = 1,
+  page_size = 25,
+}: ListThreatLockerApprovalsInput): Promise<unknown> {
+  if (env.MOCK_MODE) {
+    return mockListThreatLockerApprovals(status);
+  }
+
+  const { apiKey, baseUrl, orgId } = await getThreatLockerConfig();
+
+  const res = await fetch(`${baseUrl}/ApprovalRequest/ApprovalRequestGetByParameters`, {
+    method: "POST",
+    headers: {
+      // ThreatLocker Portal API uses lowercase 'authorization' with bare API key
+      authorization: apiKey,
+      "Content-Type": "application/json",
+      managedOrganizationId: orgId,
+    },
+    body: JSON.stringify({
+      statusId: TL_STATUS_MAP[status] ?? 1,
+      pageNumber: Math.max(1, page),
+      pageSize: Math.max(1, Math.min(page_size, 50)),
+      orderBy: "dateTime",
+      isAscending: false,
+      showChildOrganizations: false,
+      showCurrentTierOnly: false,
+      ...(search_text ? { searchText: search_text.slice(0, 200) } : {}),
+    }),
+  });
+
+  if (!res.ok) {
+    const errText = await res.text();
+    throw new Error(`ThreatLocker list approvals failed (${res.status}): ${errText}`);
+  }
+
+  return await res.json();
+}
+
+async function get_threatlocker_approval({
+  approval_request_id,
+}: GetThreatLockerApprovalInput): Promise<unknown> {
+  validateGuid(approval_request_id, "approval_request_id");
+
+  if (env.MOCK_MODE) {
+    return mockGetThreatLockerApproval(approval_request_id);
+  }
+
+  const { apiKey, baseUrl, orgId } = await getThreatLockerConfig();
+
+  const res = await fetch(
+    `${baseUrl}/ApprovalRequest/ApprovalRequestGetPermitApplicationById?approvalRequestId=${encodeURIComponent(approval_request_id)}`,
+    {
+      headers: {
+        authorization: apiKey,
+        managedOrganizationId: orgId,
+      },
+    },
+  );
+
+  if (!res.ok) {
+    const errText = await res.text();
+    throw new Error(`ThreatLocker get approval failed (${res.status}): ${errText}`);
+  }
+
+  return await res.json();
+}
+
+async function approve_threatlocker_request({
+  approval_request_id,
+  policy_level = "computer",
+  justification,
+}: ApproveThreatLockerRequestInput): Promise<unknown> {
+  validateGuid(approval_request_id, "approval_request_id");
+
+  if (env.MOCK_MODE) {
+    return {
+      approved: true,
+      approvalRequestId: approval_request_id,
+      policyLevel: policy_level,
+      justification,
+      _mock: true,
+    };
+  }
+
+  const { apiKey, baseUrl, orgId } = await getThreatLockerConfig();
+
+  // Fetch the full request details first (needed for the permit body)
+  const details = await get_threatlocker_approval({ approval_request_id });
+  const detailsObj = details as Record<string, unknown>;
+
+  // Validate required fields from the API response before constructing the approve body
+  const requestJson = detailsObj.json ?? detailsObj.approvalRequestJson;
+  if (requestJson === undefined || requestJson === null) {
+    throw new Error(
+      `ThreatLocker approve failed — approval request ${approval_request_id} is missing the required "json" field in its details response.`,
+    );
+  }
+
+  // Verify the request belongs to the configured organization
+  if (
+    typeof detailsObj.organizationId === "string" &&
+    detailsObj.organizationId.toLowerCase() !== orgId.toLowerCase()
+  ) {
+    throw new Error(
+      `ThreatLocker approve aborted — the approval request belongs to organization ${detailsObj.organizationId} but the configured THREATLOCKER_ORG_ID is ${orgId}.`,
+    );
+  }
+
+  const res = await fetch(`${baseUrl}/ApprovalRequest/ApprovalRequestPermitApplication`, {
+    method: "POST",
+    headers: {
+      authorization: apiKey,
+      "Content-Type": "application/json",
+      managedOrganizationId: orgId,
+    },
+    body: JSON.stringify({
+      approvalRequest: {
+        approvalRequestId: approval_request_id,
+        json: requestJson,
+        comments: justification,
+      },
+      computerId: detailsObj.computerId,
+      computerGroupId: detailsObj.computerGroupId,
+      organizationId: detailsObj.organizationId,
+      osType: detailsObj.osType ?? 1,
+      matchingApplications: { useMatchingApplication: true },
+      policyConditions: { ruleId: 0 },
+      policyLevel: {
+        toComputer: policy_level === "computer",
+        toComputerGroup: policy_level === "group",
+        toEntireOrganization: policy_level === "organization",
+      },
+      ringfenceActionId: 0,
+    }),
+  });
+
+  if (!res.ok) {
+    const errText = await res.text();
+    throw new Error(`ThreatLocker approve request failed (${res.status}): ${errText}`);
+  }
+
+  logger.info("ThreatLocker approval request approved", "threatlocker", {
+    toolName: "approve_threatlocker_request",
+    policyLevel: policy_level,
+  });
+
+  return {
+    approved: true,
+    approvalRequestId: approval_request_id,
+    policyLevel: policy_level,
+    justification,
+  };
+}
+
+async function deny_threatlocker_request({
+  approval_request_id,
+  justification,
+}: DenyThreatLockerRequestInput): Promise<unknown> {
+  validateGuid(approval_request_id, "approval_request_id");
+
+  if (env.MOCK_MODE) {
+    return {
+      denied: true,
+      approvalRequestId: approval_request_id,
+      justification,
+      _mock: true,
+    };
+  }
+
+  const { apiKey, baseUrl, orgId } = await getThreatLockerConfig();
+
+  // Sets the request status to "ignored" (statusId 10) — effectively denying it.
+  // Endpoint name is misleading ("Authorize"); confirmed via ThreatLocker Portal API docs:
+  // https://threatlocker.kb.help/portalapiapprovalrequest/
+  const res = await fetch(`${baseUrl}/ApprovalRequest/ApprovalRequestAuthorizeForPermitById`, {
+    method: "POST",
+    headers: {
+      authorization: apiKey,
+      "Content-Type": "application/json",
+      managedOrganizationId: orgId,
+    },
+    body: JSON.stringify({
+      approvalRequestId: approval_request_id,
+      message: justification,
+    }),
+  });
+
+  if (!res.ok) {
+    const errText = await res.text();
+    throw new Error(`ThreatLocker deny request failed (${res.status}): ${errText}`);
+  }
+
+  logger.info("ThreatLocker approval request denied", "threatlocker", {
+    toolName: "deny_threatlocker_request",
+  });
+
+  return {
+    denied: true,
+    approvalRequestId: approval_request_id,
+    justification,
+  };
+}
+
 // ── Context Retrieval ─────────────────────────────────────────
 
 // Anthropic tool_use_id format: "toolu_" followed by alphanumerics
@@ -615,6 +873,10 @@ const executors: Record<string, (input: Record<string, unknown>) => Promise<unkn
   get_machine_isolation_status: (input) => get_machine_isolation_status(input as unknown as MachineIsolationStatusInput),
   search_user_messages: (input) => search_user_messages(input as unknown as SearchUserMessagesInput),
   report_message_as_phishing: (input) => report_message_as_phishing(input as unknown as ReportMessageAsPhishingInput),
+  list_threatlocker_approvals: (input) => list_threatlocker_approvals(input as unknown as ListThreatLockerApprovalsInput),
+  get_threatlocker_approval: (input) => get_threatlocker_approval(input as unknown as GetThreatLockerApprovalInput),
+  approve_threatlocker_request: (input) => approve_threatlocker_request(input as unknown as ApproveThreatLockerRequestInput),
+  deny_threatlocker_request: (input) => deny_threatlocker_request(input as unknown as DenyThreatLockerRequestInput),
 };
 
 export interface ExecuteToolContext {
@@ -917,6 +1179,80 @@ function mockSearchUserMessages(
     count: 3,
     upn,
     searchCriteria: { sender, subject, search_text, days },
+    _mock: true,
+  };
+}
+
+function mockListThreatLockerApprovals(status: string): unknown {
+  return {
+    approvalRequests: [
+      {
+        approvalRequestId: "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+        computerName: "DESKTOP-JS4729",
+        userName: "jsmith",
+        path: "C:\\Users\\jsmith\\Downloads\\installer.exe",
+        hash: "TL:abc123def456",
+        sha256: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        dateTime: "2026-03-20T14:30:00Z",
+        statusId: TL_STATUS_MAP[status] ?? 1,
+        actionType: "Execute",
+        organizationId: "org-guid-placeholder",
+      },
+      {
+        approvalRequestId: "b2c3d4e5-f6a7-8901-bcde-f12345678901",
+        computerName: "LAPTOP-MK8812",
+        userName: "mkim",
+        path: "C:\\Program Files\\CustomApp\\update.exe",
+        hash: "TL:789xyz012345",
+        sha256: "d7a8fbb307d7809469ca9abcb0082e4f8d5651e46d3cdb762d02d0bf37c9e592",
+        dateTime: "2026-03-20T13:15:00Z",
+        statusId: TL_STATUS_MAP[status] ?? 1,
+        actionType: "Execute",
+        organizationId: "org-guid-placeholder",
+      },
+      {
+        approvalRequestId: "c3d4e5f6-a7b8-9012-cdef-123456789012",
+        computerName: "WORKSTATION-04",
+        userName: "admin.local",
+        path: "C:\\Temp\\script.ps1",
+        hash: "TL:elevate456789",
+        sha256: "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9820",
+        dateTime: "2026-03-20T11:45:00Z",
+        statusId: TL_STATUS_MAP[status] ?? 1,
+        actionType: "Elevate",
+        organizationId: "org-guid-placeholder",
+      },
+    ],
+    totalCount: 3,
+    status,
+    _mock: true,
+  };
+}
+
+function mockGetThreatLockerApproval(approvalRequestId: string): unknown {
+  return {
+    approvalRequestId,
+    computerName: "DESKTOP-JS4729",
+    computerId: "comp-guid-placeholder",
+    computerGroupId: "group-guid-placeholder",
+    userName: "jsmith",
+    organizationId: "org-guid-placeholder",
+    path: "C:\\Users\\jsmith\\Downloads\\installer.exe",
+    hash: "TL:abc123def456",
+    sha256: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    dateTime: "2026-03-20T14:30:00Z",
+    statusId: 1,
+    actionType: "Execute",
+    osType: 1,
+    threatLockerActionDto: {
+      fullPath: "C:\\Users\\jsmith\\Downloads\\installer.exe",
+      processName: "installer.exe",
+      osType: 1,
+      certs: [],
+    },
+    matchingApplications: [
+      { applicationName: "Custom Application", applicationId: "app-guid-placeholder" },
+    ],
     _mock: true,
   };
 }

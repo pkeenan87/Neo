@@ -90,6 +90,41 @@ export const INTEGRATIONS: IntegrationInfo[] = [
     capabilities: ["get_user_info", "reset_user_password"],
     secrets: [...AZURE_AD_SECRETS],
   },
+  {
+    slug: "threatlocker",
+    name: "ThreatLocker",
+    iconName: "Lock",
+    description:
+      "Application allowlisting and ringfencing. Review, approve, or deny application approval requests.",
+    capabilities: [
+      "list_threatlocker_approvals",
+      "get_threatlocker_approval",
+      "approve_threatlocker_request",
+      "deny_threatlocker_request",
+    ],
+    secrets: [
+      {
+        key: "THREATLOCKER_API_KEY",
+        label: "API Key",
+        description: "ThreatLocker Portal API key for authentication.",
+        required: true,
+      },
+      {
+        key: "THREATLOCKER_INSTANCE",
+        label: "Instance",
+        description:
+          "Portal API instance name (e.g., 'us' for portalapi.us.threatlocker.com).",
+        required: true,
+      },
+      {
+        key: "THREATLOCKER_ORG_ID",
+        label: "Organization ID",
+        description:
+          "Managed organization GUID (format: 00000000-0000-0000-0000-000000000000).",
+        required: true,
+      },
+    ],
+  },
 ];
 
 export function getIntegration(slug: string): IntegrationInfo | undefined {

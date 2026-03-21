@@ -37,7 +37,11 @@ const TOOL_COLORS = {
   reset_user_password:    chalk.red.bold,
   isolate_machine:        chalk.red.bold,
   unisolate_machine:      chalk.magenta.bold,
-  report_message_as_phishing: chalk.red.bold
+  report_message_as_phishing: chalk.red.bold,
+  list_threatlocker_approvals: chalk.green,
+  get_threatlocker_approval:  chalk.green,
+  approve_threatlocker_request: chalk.red.bold,
+  deny_threatlocker_request:   chalk.red.bold
 };
 
 const username = os.userInfo().username;
@@ -154,7 +158,9 @@ const TOOL_DESCRIPTIONS = {
   reset_user_password: (input) => `Reset password for ${chalk.bold(input.upn)}${input.revoke_sessions !== false ? " + revoke all sessions" : ""}`,
   isolate_machine:     (input) => `Network-isolate ${chalk.bold(input.hostname)} on ${input.platform} (${input.isolation_type || "Full"})`,
   unisolate_machine:   (input) => `Release ${chalk.bold(input.hostname)} from network isolation`,
-  report_message_as_phishing: (input) => `Report message as ${chalk.bold(input.report_type || "phishing")} in ${chalk.bold(input.upn)}'s mailbox`
+  report_message_as_phishing: (input) => `Report message as ${chalk.bold(input.report_type || "phishing")} in ${chalk.bold(input.upn)}'s mailbox`,
+  approve_threatlocker_request: (input) => `Approve ThreatLocker request ${chalk.bold(input.approval_request_id)} (policy: ${input.policy_level || "computer"})`,
+  deny_threatlocker_request:    (input) => `Deny ThreatLocker request ${chalk.bold(input.approval_request_id)}`
 };
 
 async function promptForConfirmation(rl, tool) {

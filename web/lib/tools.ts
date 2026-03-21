@@ -264,6 +264,93 @@ export const TOOLS: Tool[] = [
       required: ["upn", "message_id", "justification"],
     },
   },
+  {
+    name: "list_threatlocker_approvals",
+    description:
+      "List ThreatLocker application approval requests. Returns pending requests by default with request details, file hashes, and requesting user/computer.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        status: {
+          type: "string",
+          enum: ["pending", "approved", "ignored"],
+          description: "Filter by request status (default: pending)",
+        },
+        search_text: {
+          type: "string",
+          description: "Search by hostname, username, or file path",
+          maxLength: 200,
+        },
+        page: {
+          type: "number",
+          description: "Page number (default: 1)",
+        },
+        page_size: {
+          type: "number",
+          description: "Results per page (default: 25)",
+        },
+      },
+      required: [],
+    },
+  },
+  {
+    name: "get_threatlocker_approval",
+    description:
+      "Get full details of a specific ThreatLocker approval request by ID, including application matching information and file details.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        approval_request_id: {
+          type: "string",
+          description: "The approval request GUID",
+        },
+      },
+      required: ["approval_request_id"],
+    },
+  },
+  {
+    name: "approve_threatlocker_request",
+    description:
+      "⚠️ DESTRUCTIVE — Approve a ThreatLocker application approval request. By default applies the policy to the requesting computer only.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        approval_request_id: {
+          type: "string",
+          description: "The approval request GUID to approve",
+        },
+        policy_level: {
+          type: "string",
+          enum: ["computer", "group", "organization"],
+          description: "Scope of the approval — computer (default), group, or entire organization",
+        },
+        justification: {
+          type: "string",
+          description: "Reason for approval — written to audit log",
+        },
+      },
+      required: ["approval_request_id", "justification"],
+    },
+  },
+  {
+    name: "deny_threatlocker_request",
+    description:
+      "⚠️ DESTRUCTIVE — Deny (ignore) a ThreatLocker application approval request.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        approval_request_id: {
+          type: "string",
+          description: "The approval request GUID to deny",
+        },
+        justification: {
+          type: "string",
+          description: "Reason for denial — written to audit log",
+        },
+      },
+      required: ["approval_request_id", "justification"],
+    },
+  },
   // Read-only but returns sensitive data that was intentionally truncated from
   // context. Available to all roles since it only accesses the current session.
   {
@@ -290,4 +377,6 @@ export const DESTRUCTIVE_TOOLS = new Set([
   "unisolate_machine",
   "search_user_messages",
   "report_message_as_phishing",
+  "approve_threatlocker_request",
+  "deny_threatlocker_request",
 ]);

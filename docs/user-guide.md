@@ -734,6 +734,10 @@ Neo includes built-in protection against prompt injection attacks. This is trans
 | `isolate_machine` | Network-isolate a machine via Defender or CrowdStrike. Requires confirmation and justification. | Admin |
 | `unisolate_machine` | Release a previously isolated machine. Requires confirmation and justification. | Admin |
 | `report_message_as_phishing` | Report a message in a user's mailbox as phishing or junk via Microsoft Graph. Requires confirmation and justification. | Admin |
+| `list_threatlocker_approvals` | List ThreatLocker application approval requests with optional status and search filters. | All |
+| `get_threatlocker_approval` | Get full details of a specific ThreatLocker approval request by ID. | All |
+| `approve_threatlocker_request` | Approve a ThreatLocker application approval request. Requires confirmation and justification. | Admin |
+| `deny_threatlocker_request` | Deny (ignore) a ThreatLocker application approval request. Requires confirmation and justification. | Admin |
 
 ### Role Permissions
 
