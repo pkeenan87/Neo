@@ -94,6 +94,7 @@ export const INTEGRATIONS: IntegrationInfo[] = [
     slug: "threatlocker",
     name: "ThreatLocker",
     iconName: "Lock",
+    imageSrc: "/threatlocker-logo.png",
     description:
       "Application allowlisting and ringfencing. Review, approve, or deny application approval requests.",
     capabilities: [
