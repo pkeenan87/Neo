@@ -90,7 +90,10 @@ export async function POST(request: NextRequest) {
   // Resolve or create session
   let sessionId: string;
   if (body.sessionId) {
-    const existing = await sessionStore.get(body.sessionId);
+    // Try active session first, then fall back to idle-expired sessions
+    // (conversations persisted in Cosmos survive beyond the 30-min idle timeout)
+    const existing = await sessionStore.get(body.sessionId)
+      ?? await sessionStore.getExpired(body.sessionId);
     if (!existing) {
       return new Response(JSON.stringify({ error: "Session not found" }), { status: 404 });
     }
@@ -109,7 +112,7 @@ export async function POST(request: NextRequest) {
     sessionId = await sessionStore.create(identity.role, identity.ownerId, channel);
   }
 
-  const session = (await sessionStore.get(sessionId))!;
+  const session = (await sessionStore.get(sessionId) ?? await sessionStore.getExpired(sessionId))!;
   logger.info("Agent request", "api/agent", { sessionId, role: session.role, provider: identity.provider });
 
   // Rate limit check

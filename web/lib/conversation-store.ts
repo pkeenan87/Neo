@@ -101,7 +101,7 @@ export async function listConversations(
     ? `SELECT c.id, c.ownerId, c.title, c.createdAt, c.updatedAt,
               c.messageCount, c.role, c.channel
        FROM c
-       WHERE c.ownerId = @ownerId AND c.channel = @channel
+       WHERE c.ownerId = @ownerId AND (c.channel = @channel OR NOT IS_DEFINED(c.channel))
        ORDER BY c.updatedAt DESC
        OFFSET 0 LIMIT 50`
     : `SELECT c.id, c.ownerId, c.title, c.createdAt, c.updatedAt,
