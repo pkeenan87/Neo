@@ -607,10 +607,12 @@ async function report_message_as_phishing({
     ? `https://graph.microsoft.com/beta/users/${encodedUpn}/messages/${message_id}/microsoft.graph.reportPhishing`
     : `https://graph.microsoft.com/beta/users/${encodedUpn}/messages/${message_id}/microsoft.graph.reportJunk`;
 
+  // Graph API requires Content-Type on all write requests, even with an empty body
   const res = await fetch(url, {
     method: "POST",
     headers: {
       Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json",
     },
   });
 
