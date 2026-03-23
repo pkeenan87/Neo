@@ -95,6 +95,11 @@ export function validateConfig(): void {
     console.warn("AUTH_SECRET is not set — Auth.js requires this in production.");
   }
 
+  const authUrl = process.env.AUTH_URL;
+  if (authUrl && !authUrl.startsWith("https://") && process.env.NODE_ENV !== "development") {
+    console.warn("AUTH_URL is not HTTPS — Auth.js cookies may fail on Azure App Service. Set AUTH_URL to your production HTTPS domain.");
+  }
+
   if (env.MOCK_MODE) {
     console.warn("Running in MOCK MODE — tool calls return simulated data.");
     console.warn("Set MOCK_MODE=false in .env and add Azure credentials to use real APIs.");

@@ -9,8 +9,48 @@ import { logger } from "@/lib/logger";
 //  Auth.js Config
 // ─────────────────────────────────────────────────────────────
 
+// On Azure App Service behind a reverse proxy, the default SameSite=Lax
+// cookies are dropped during the cross-origin OAuth redirect from Entra ID.
+// Force SameSite=None + Secure on OAuth flow cookies for HTTPS deployments
+// so they survive the redirect cycle. The session token stays Lax to prevent CSRF.
+const useSecureCookies = (() => {
+  try {
+    return new URL(process.env.AUTH_URL ?? "").protocol === "https:";
+  } catch {
+    return false;
+  }
+})();
+
+const crossOriginCookie = { httpOnly: true, sameSite: "none" as const, path: "/", secure: true, maxAge: 900 };
+
 export const { handlers, auth, signIn, signOut } = NextAuth({
   trustHost: true,
+  ...(useSecureCookies && {
+    cookies: {
+      pkceCodeVerifier: {
+        name: "__Secure-authjs.pkce.code_verifier",
+        options: crossOriginCookie,
+      },
+      state: {
+        name: "__Secure-authjs.state",
+        options: crossOriginCookie,
+      },
+      nonce: {
+        name: "__Secure-authjs.nonce",
+        options: crossOriginCookie,
+      },
+      callbackUrl: {
+        name: "__Secure-authjs.callback-url",
+        options: crossOriginCookie,
+      },
+      // SECURITY: Session token stays SameSite=Lax to prevent CSRF.
+      // Only the OAuth flow cookies above need None for the cross-origin redirect.
+      sessionToken: {
+        name: "__Secure-authjs.session-token",
+        options: { httpOnly: true, sameSite: "lax" as const, path: "/", secure: true },
+      },
+    },
+  }),
   providers: [
     MicrosoftEntraID({
       clientId: process.env.AUTH_MICROSOFT_ENTRA_ID_ID,
