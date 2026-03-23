@@ -788,6 +788,22 @@ async function approve_threatlocker_request({
     );
   }
 
+  // Check for matching applications — the API requires one to exist.
+  // If no match, the analyst must approve manually in the ThreatLocker portal.
+  const matchingApps = Array.isArray(detailsObj.matchingApplications)
+    ? detailsObj.matchingApplications
+    : [];
+  if (matchingApps.length === 0) {
+    return {
+      approved: false,
+      approvalRequestId: approval_request_id,
+      error: "No matching application found in ThreatLocker's catalog for this request. " +
+        "The ThreatLocker API does not support creating new applications — this request " +
+        "must be approved manually in the ThreatLocker portal where you can create a new " +
+        "application and assign the policy.",
+    };
+  }
+
   const res = await fetch(`${baseUrl}/ApprovalRequest/ApprovalRequestPermitApplication`, {
     method: "POST",
     headers: {
