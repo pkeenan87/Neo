@@ -595,27 +595,37 @@ async function report_message_as_phishing({
     };
   }
 
+  // Forward the message to a phishing intake mailbox.
+  // The beta reportPhishing/reportJunk endpoints are not available in all tenants,
+  // so we use the reliable Graph v1.0 forward action instead.
+  const reportEmail = await getToolSecret("PHISHING_REPORT_EMAIL");
+  if (!reportEmail) {
+    throw new Error(
+      "PHISHING_REPORT_EMAIL is not configured. Set it in Settings > Integrations (Microsoft Entra ID) or as an environment variable.",
+    );
+  }
+
   const token = await getMSGraphToken();
   const encodedUpn = encodeURIComponent(upn);
   // message_id is validated by MESSAGE_ID_RE to be URL-safe — no encoding needed
   // (encodeURIComponent would double-encode = padding and break Graph lookups)
 
-  // SECURITY: Both actions use /beta endpoints — no GA SLA. Track graduation:
-  // https://learn.microsoft.com/en-us/graph/api/message-reportphishing
-  // https://learn.microsoft.com/en-us/graph/api/message-reportjunk
-  const url = report_type === "phishing"
-    ? `https://graph.microsoft.com/beta/users/${encodedUpn}/messages/${message_id}/microsoft.graph.reportPhishing`
-    : `https://graph.microsoft.com/beta/users/${encodedUpn}/messages/${message_id}/microsoft.graph.reportJunk`;
-
-  // Graph beta report actions require a JSON body (empty object is valid)
-  const res = await fetch(url, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${token}`,
-      "Content-Type": "application/json",
+  const res = await fetch(
+    `https://graph.microsoft.com/v1.0/users/${encodedUpn}/messages/${message_id}/forward`,
+    {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        toRecipients: [
+          { emailAddress: { address: reportEmail } },
+        ],
+        comment: `Reported as ${report_type} by Neo agent. Justification: ${justification}`,
+      }),
     },
-    body: "{}",
-  });
+  );
 
   if (!res.ok) {
     const errText = await res.text();
@@ -628,6 +638,7 @@ async function report_message_as_phishing({
     reportType: report_type,
     upn,
     justification,
+    forwardedTo: reportEmail,
   };
 }
 
