@@ -158,11 +158,13 @@
 /* ─── Table ─── */
 .tableWrapper {
   overflow-x: auto;
+  max-width: 100%;
   margin-bottom: 0.75rem;
 }
 
 .table {
-  width: 100%;
+  width: auto;
+  min-width: 100%;
   border-collapse: collapse;
   font-size: 0.8125rem;
 }
@@ -181,6 +183,7 @@
   text-align: left;
   padding: 0.5rem;
   border-bottom: 2px solid #e2e8f0;
+  white-space: nowrap;
 }
 
 :global(html.dark) .tableHeader {
@@ -190,6 +193,8 @@
 
 .tableCell {
   padding: 0.5rem;
+  max-width: 40ch;
+  word-break: break-word;
 }
 
 /* ─── Blockquote ─── */

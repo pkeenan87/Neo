@@ -61,7 +61,7 @@ const components: Components = {
   thead: ({ children }) => <thead>{children}</thead>,
   tbody: ({ children }) => <tbody>{children}</tbody>,
   tr: ({ children }) => <tr className={styles.tableRow}>{children}</tr>,
-  th: ({ children }) => <th className={styles.tableHeader}>{children}</th>,
+  th: ({ children }) => <th className={styles.tableHeader} scope="col">{children}</th>,
   td: ({ children }) => <td className={styles.tableCell}>{children}</td>,
   a: ({ href, children }) => (
     <a href={href} className={styles.link} target="_blank" rel="noopener noreferrer">

@@ -124,7 +124,13 @@ function printResponse(text) {
   const normalized = text.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
   const formatted = formatForTerminal(normalized);
   const md = createTerminalMarkdown();
-  const rendered = md.parse(formatted);
+  let rendered = md.parse(formatted);
+
+  // Safety net: convert any remaining raw markdown bold/italic markers
+  // that marked-terminal didn't handle (edge cases in list items, etc.)
+  rendered = rendered.replace(/\*\*(.+?)\*\*/gs, (_, t) => chalk.bold(t));
+  rendered = rendered.replace(/\*(.+?)\*/gs, (_, t) => chalk.underline(t));
+
   console.log("\n" + rendered);
 }
 
@@ -190,7 +196,7 @@ async function handleAuthCommand() {
   const sub = process.argv[3];
 
   if (!sub) {
-    console.error("  Usage: node src/index.js auth <login|logout|status>\n");
+    console.error("  Usage: neo auth <login|logout|status>\n");
     process.exit(1);
   }
 
@@ -220,12 +226,17 @@ async function handleAuthCommand() {
 
     try {
       const { displayName } = await login({ tenantId, serverUrl });
-      console.log(chalk.green(`\n  Logged in as ${displayName}. You can now run: npm start\n`));
+      const isLocal = serverUrl.includes("localhost") || serverUrl.includes("127.0.0.1");
+      const serverHint = isLocal ? "" : ` --server ${serverUrl}`;
+      console.log(chalk.green(`\n  Logged in as ${displayName}. You can now run: neo${serverHint}\n`));
+      if (!isLocal) {
+        console.log(chalk.gray(`  Tip: Run "neo config set server ${serverUrl}" to save this as your default.\n`));
+      }
     } catch (err) {
       console.error(chalk.red(`\n  Login failed: ${err.message}\n`));
       console.error("  Usage:");
-      console.error("    Entra ID: node src/index.js auth login [--tenant-id <id>]");
-      console.error("    API key:  node src/index.js auth login --api-key <key>\n");
+      console.error("    Entra ID: neo auth login [--tenant-id <id>]");
+      console.error("    API key:  neo auth login --api-key <key>\n");
       console.error("  The CLI auto-discovers Entra ID config from the Neo server.");
       console.error("  Pass --tenant-id only if you need to override discovery.");
       console.error("  If discovery fails, verify the server is reachable:");
@@ -272,7 +283,39 @@ async function handleAuthCommand() {
   }
 
   console.error(chalk.red(`\n  Unknown auth command: "${sub}"`));
-  console.error("  Usage: node src/index.js auth <login|logout|status>\n");
+  console.error("  Usage: neo auth <login|logout|status>\n");
+  process.exit(1);
+}
+
+// ─────────────────────────────────────────────────────────────
+//  Config command
+// ─────────────────────────────────────────────────────────────
+
+function handleConfigCommand() {
+  const action = process.argv[3]; // "set" or "get"
+  const key = process.argv[4];    // "server"
+  const value = process.argv[5];  // the URL
+
+  if (action === "set" && key === "server" && value) {
+    const url = validateServerUrl(value);
+    const config = readConfig();
+    config.serverUrl = url;
+    writeConfig(config);
+    console.log(chalk.green(`\n  Default server saved: ${url}\n`));
+    return;
+  }
+
+  if (action === "get" && key === "server") {
+    const config = readConfig();
+    console.log(`\n  Server: ${config.serverUrl}\n`);
+    return;
+  }
+
+  console.error(`
+  Usage:
+    neo config set server <url>   Save a default server URL
+    neo config get server         Show the current default server URL
+`);
   process.exit(1);
 }
 
@@ -284,6 +327,11 @@ async function main() {
   // Handle sub-commands before starting the REPL
   if (process.argv[2] === "auth") {
     await handleAuthCommand();
+    return;
+  }
+
+  if (process.argv[2] === "config") {
+    handleConfigCommand();
     return;
   }
 
