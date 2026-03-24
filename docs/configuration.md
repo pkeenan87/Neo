@@ -432,6 +432,7 @@ The app registration used for tool execution (`AZURE_CLIENT_ID`) needs these app
 | Microsoft Graph | `Mail.Send` | `report_message_as_phishing` |
 | Microsoft Threat Protection | `Machine.Read.All` | `get_machine_isolation_status`, `isolate_machine`, `unisolate_machine` |
 | Microsoft Threat Protection | `Machine.Isolate` | `isolate_machine`, `unisolate_machine` |
+| Microsoft Threat Protection | `Ti.ReadWrite.All` | `block_indicator`, `import_indicators`, `list_indicators`, `delete_indicator` |
 | Log Analytics API | (workspace-level RBAC) | `run_sentinel_kql` |
 
 Add these under **API permissions > Add a permission > Microsoft Graph > Application permissions** (and similarly for Microsoft Threat Protection).

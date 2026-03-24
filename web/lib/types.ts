@@ -301,6 +301,43 @@ export interface DenyThreatLockerRequestInput {
   justification: string;
 }
 
+export type IndicatorType = "domain" | "ip" | "url" | "sha1" | "sha256" | "md5" | "cert";
+export type IndicatorAction = "block" | "warn" | "audit";
+export type IndicatorSeverity = "informational" | "low" | "medium" | "high";
+
+export interface BlockIndicatorInput {
+  value: string;
+  indicator_type: IndicatorType;
+  action?: IndicatorAction;
+  title: string;
+  description?: string;
+  severity?: IndicatorSeverity;
+  expiration?: string;
+  generate_alert?: boolean;
+}
+
+export interface ImportIndicatorsInput {
+  indicators: {
+    value: string;
+    indicator_type: IndicatorType;
+    action?: IndicatorAction;
+    title: string;
+    severity?: IndicatorSeverity;
+  }[];
+  description?: string;
+  expiration?: string;
+}
+
+export interface ListIndicatorsInput {
+  indicator_type?: IndicatorType;
+  top?: number;
+}
+
+export interface DeleteIndicatorInput {
+  indicator_id: number;
+  justification: string;
+}
+
 export interface GetFullToolResultInput {
   tool_use_id: string;
 }

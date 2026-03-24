@@ -128,6 +128,10 @@ See [docs/configuration.md](docs/configuration.md) for Entra ID setup and all co
 | `get_threatlocker_approval` | Read-only | Get full details of a ThreatLocker approval request |
 | `approve_threatlocker_request` | Destructive | Approve a ThreatLocker application approval request |
 | `deny_threatlocker_request` | Destructive | Deny a ThreatLocker application approval request |
+| `block_indicator` | Destructive | Block a domain, IP, URL, or file hash in Defender for Endpoint |
+| `import_indicators` | Destructive | Batch import up to 500 indicators into Defender |
+| `list_indicators` | Read-only | List current custom indicators in Defender |
+| `delete_indicator` | Destructive | Delete a custom indicator from Defender by ID |
 
 Read-only tools execute automatically. Destructive tools pause for human confirmation before executing.
 

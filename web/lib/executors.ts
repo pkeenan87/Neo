@@ -19,9 +19,14 @@ import type {
   GetThreatLockerApprovalInput,
   ApproveThreatLockerRequestInput,
   DenyThreatLockerRequestInput,
+  BlockIndicatorInput,
+  ImportIndicatorsInput,
+  ListIndicatorsInput,
+  DeleteIndicatorInput,
   GetFullToolResultInput,
   Message,
 } from "./types";
+import type { IndicatorType } from "./types";
 
 // ── Input Validation Helpers ──────────────────────────────────
 
@@ -911,6 +916,269 @@ async function deny_threatlocker_request({
   };
 }
 
+// ── Defender for Endpoint Custom Indicators ──────────────────
+
+import { isIP } from "net";
+
+const INDICATOR_TYPE_MAP: Record<IndicatorType, string> = {
+  domain: "DomainName",
+  ip: "IpAddress",
+  url: "Url",
+  sha1: "FileSha1",
+  sha256: "FileSha256",
+  md5: "FileMd5",
+  cert: "CertificateThumbprint",
+};
+
+const FILE_INDICATOR_TYPES = new Set(["FileSha1", "FileSha256", "FileMd5"]);
+
+const HASH_LENGTHS: Partial<Record<IndicatorType, number>> = {
+  sha1: 40, sha256: 64, md5: 32, cert: 40,
+};
+
+const SEVERITY_MAP: Record<string, string> = {
+  informational: "Informational", low: "Low", medium: "Medium", high: "High",
+};
+
+const ACTION_MAP: Record<string, string> = {
+  block: "Block", warn: "Warn", audit: "Audit",
+};
+
+function validateExpiration(expiration: string | undefined): void {
+  if (!expiration) return;
+  const exp = new Date(expiration);
+  if (isNaN(exp.getTime())) {
+    throw new Error("Expiration is not a valid ISO-8601 datetime");
+  }
+  if (exp.getTime() < Date.now()) {
+    throw new Error("Expiration date is in the past");
+  }
+}
+
+function validateIndicatorValue(value: string, indicatorType: IndicatorType): void {
+  const expectedLen = HASH_LENGTHS[indicatorType];
+  if (expectedLen) {
+    if (!/^[0-9a-fA-F]+$/.test(value) || value.length !== expectedLen) {
+      throw new Error(`Invalid ${indicatorType} — expected ${expectedLen} hex characters, got ${value.length}`);
+    }
+    return;
+  }
+  if (indicatorType === "ip") {
+    if (isIP(value) === 0) {
+      throw new Error(`Invalid IP address: ${value}`);
+    }
+    return;
+  }
+  if (indicatorType === "url") {
+    try {
+      const parsed = new URL(value);
+      if (!["http:", "https:"].includes(parsed.protocol)) {
+        throw new Error("URL must use http or https");
+      }
+    } catch {
+      throw new Error(`Invalid URL format: ${value}`);
+    }
+    return;
+  }
+  if (indicatorType === "domain") {
+    // Allow optional wildcard prefix for subdomain-blocking indicators
+    const normalized = value.startsWith("*.") ? value.slice(2) : value;
+    if (!/^[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?)*\.[a-zA-Z]{2,}$/.test(normalized)) {
+      throw new Error(`Invalid domain format: ${value}`);
+    }
+  }
+}
+
+function buildIndicatorBody(
+  value: string,
+  indicatorType: IndicatorType,
+  action: string,
+  title: string,
+  options: {
+    description?: string;
+    severity?: string;
+    expiration?: string;
+    generateAlert?: boolean;
+  },
+): Record<string, unknown> {
+  const defenderType = INDICATOR_TYPE_MAP[indicatorType];
+  const defenderAction = ACTION_MAP[action];
+  if (!defenderAction) {
+    throw new Error(`Unknown indicator action: ${action}`);
+  }
+  const finalAction = action === "block" && FILE_INDICATOR_TYPES.has(defenderType)
+    ? "BlockAndRemediate"
+    : defenderAction;
+
+  return {
+    indicatorValue: value,
+    indicatorType: defenderType,
+    action: finalAction,
+    title,
+    description: options.description ?? "",
+    severity: SEVERITY_MAP[options.severity ?? "high"] ?? "High",
+    ...(options.expiration ? { expirationTime: options.expiration } : {}),
+    rbacGroupNames: ["All Devices"],
+    generateAlert: options.generateAlert ?? true,
+  };
+}
+
+const DEFENDER_INDICATOR_BASE = "https://api.securitycenter.microsoft.com/api/indicators";
+
+async function block_indicator({
+  value,
+  indicator_type,
+  action = "block",
+  title,
+  description,
+  severity = "high",
+  expiration,
+  generate_alert = true,
+}: BlockIndicatorInput): Promise<unknown> {
+  validateIndicatorValue(value, indicator_type);
+  validateExpiration(expiration);
+
+  if (env.MOCK_MODE) {
+    const mockBody = buildIndicatorBody(value, indicator_type, action, title, {
+      description, severity, expiration, generateAlert: generate_alert,
+    });
+    return { id: 12345, ...mockBody, _mock: true };
+  }
+
+  const token = await getAzureToken("https://api.securitycenter.microsoft.com");
+  const body = buildIndicatorBody(value, indicator_type, action, title, {
+    description, severity, expiration, generateAlert: generate_alert,
+  });
+
+  const res = await fetch(DEFENDER_INDICATOR_BASE, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+
+  if (!res.ok) {
+    const errText = await res.text();
+    throw new Error(`Block indicator failed (${res.status}): ${errText}`);
+  }
+
+  logger.info("Defender indicator created", "executors", { toolName: "block_indicator" });
+  return await res.json();
+}
+
+async function import_indicators({
+  indicators,
+  description,
+  expiration,
+}: ImportIndicatorsInput): Promise<unknown> {
+  if (!Array.isArray(indicators) || indicators.length === 0) {
+    throw new Error("indicators array is required and must not be empty");
+  }
+  if (indicators.length > 500) {
+    throw new Error(`Batch import limited to 500 indicators (got ${indicators.length})`);
+  }
+
+  validateExpiration(expiration);
+
+  for (let i = 0; i < indicators.length; i++) {
+    const ind = indicators[i];
+    if (!ind.title?.trim()) {
+      throw new Error(`Indicator at index ${i}: title is required`);
+    }
+    validateIndicatorValue(ind.value, ind.indicator_type);
+  }
+
+  if (env.MOCK_MODE) {
+    return {
+      importedCount: indicators.length,
+      failedCount: 0,
+      _mock: true,
+    };
+  }
+
+  const token = await getAzureToken("https://api.securitycenter.microsoft.com");
+  const mapped = indicators.map((ind) =>
+    buildIndicatorBody(ind.value, ind.indicator_type, ind.action ?? "block", ind.title, {
+      description, severity: ind.severity ?? "high", expiration,
+    }),
+  );
+
+  const res = await fetch(`${DEFENDER_INDICATOR_BASE}/import`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ Indicators: mapped }),
+  });
+
+  if (!res.ok) {
+    const errText = await res.text();
+    throw new Error(`Import indicators failed (${res.status}): ${errText}`);
+  }
+
+  logger.info("Defender indicators imported", "executors", {
+    toolName: "import_indicators",
+    count: indicators.length,
+  });
+  return await res.json();
+}
+
+async function list_indicators({
+  indicator_type,
+  top = 25,
+}: ListIndicatorsInput): Promise<unknown> {
+  if (env.MOCK_MODE) {
+    return mockListIndicators(indicator_type);
+  }
+
+  const token = await getAzureToken("https://api.securitycenter.microsoft.com");
+  const params = new URLSearchParams();
+  params.set("$top", String(Math.min(top, 100)));
+  if (indicator_type) {
+    // SECURITY: defenderType comes from a hardcoded map, not user input
+    const defenderType = INDICATOR_TYPE_MAP[indicator_type];
+    if (defenderType) {
+      params.set("$filter", `indicatorType eq '${defenderType}'`);
+    }
+  }
+
+  const res = await fetch(`${DEFENDER_INDICATOR_BASE}?${params.toString()}`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+
+  if (!res.ok) {
+    const errText = await res.text();
+    throw new Error(`List indicators failed (${res.status}): ${errText}`);
+  }
+
+  const data = await res.json();
+  return { indicators: data.value ?? [], count: (data.value ?? []).length };
+}
+
+async function delete_indicator({ indicator_id, justification }: DeleteIndicatorInput): Promise<unknown> {
+  // indicator_id is typed as number; runtime guard catches non-integer values from the as-unknown cast
+  if (!Number.isInteger(indicator_id) || indicator_id <= 0) {
+    throw new Error("indicator_id must be a positive integer");
+  }
+
+  if (env.MOCK_MODE) {
+    return { deleted: true, indicatorId: indicator_id, justification, _mock: true };
+  }
+
+  const token = await getAzureToken("https://api.securitycenter.microsoft.com");
+
+  // DELETE returns 204 No Content on success; res.ok covers 200–299 including 204
+  const res = await fetch(`${DEFENDER_INDICATOR_BASE}/${indicator_id}`, {
+    method: "DELETE",
+    headers: { Authorization: `Bearer ${token}` },
+  });
+
+  if (!res.ok) {
+    const errText = await res.text();
+    throw new Error(`Delete indicator failed (${res.status}): ${errText}`);
+  }
+
+  logger.info("Defender indicator deleted", "executors", { toolName: "delete_indicator" });
+  return { deleted: true, indicatorId: indicator_id, justification };
+}
+
 // ── Context Retrieval ─────────────────────────────────────────
 
 // Anthropic tool_use_id format: "toolu_" followed by alphanumerics
@@ -966,6 +1234,10 @@ const executors: Record<string, (input: Record<string, unknown>) => Promise<unkn
   get_threatlocker_approval: (input) => get_threatlocker_approval(input as unknown as GetThreatLockerApprovalInput),
   approve_threatlocker_request: (input) => approve_threatlocker_request(input as unknown as ApproveThreatLockerRequestInput),
   deny_threatlocker_request: (input) => deny_threatlocker_request(input as unknown as DenyThreatLockerRequestInput),
+  block_indicator: (input) => block_indicator(input as unknown as BlockIndicatorInput),
+  import_indicators: (input) => import_indicators(input as unknown as ImportIndicatorsInput),
+  list_indicators: (input) => list_indicators(input as unknown as ListIndicatorsInput),
+  delete_indicator: (input) => delete_indicator(input as unknown as DeleteIndicatorInput),
 };
 
 export interface ExecuteToolContext {
@@ -1344,4 +1616,45 @@ function mockGetThreatLockerApproval(approvalRequestId: string): unknown {
     ],
     _mock: true,
   };
+}
+
+function mockListIndicators(indicatorType?: IndicatorType): unknown {
+  const all = [
+    {
+      id: 1001,
+      indicatorValue: "evil.example.com",
+      indicatorType: "DomainName",
+      action: "Block",
+      title: "IR-2024-001 C2 Domain",
+      severity: "High",
+      creationTimeDateTimeUtc: "2026-03-20T10:00:00Z",
+      expirationTime: "2026-06-20T00:00:00Z",
+    },
+    {
+      id: 1002,
+      indicatorValue: "185.220.101.42",
+      indicatorType: "IpAddress",
+      action: "Block",
+      title: "TOR exit node — lateral movement source",
+      severity: "High",
+      creationTimeDateTimeUtc: "2026-03-19T14:30:00Z",
+      expirationTime: null,
+    },
+    {
+      id: 1003,
+      indicatorValue: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      indicatorType: "FileSha256",
+      action: "BlockAndRemediate",
+      title: "Malware payload — phishing campaign March 2026",
+      severity: "High",
+      creationTimeDateTimeUtc: "2026-03-18T09:15:00Z",
+      expirationTime: "2026-04-18T00:00:00Z",
+    },
+  ];
+
+  const filtered = indicatorType
+    ? all.filter((i) => i.indicatorType === INDICATOR_TYPE_MAP[indicatorType])
+    : all;
+
+  return { indicators: filtered, count: filtered.length, _mock: true };
 }

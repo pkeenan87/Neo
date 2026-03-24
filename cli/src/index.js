@@ -42,7 +42,11 @@ const TOOL_COLORS = {
   list_threatlocker_approvals: chalk.green,
   get_threatlocker_approval:  chalk.green,
   approve_threatlocker_request: chalk.red.bold,
-  deny_threatlocker_request:   chalk.red.bold
+  deny_threatlocker_request:   chalk.red.bold,
+  block_indicator:             chalk.red.bold,
+  import_indicators:           chalk.red.bold,
+  list_indicators:             chalk.yellow,
+  delete_indicator:            chalk.red.bold
 };
 
 const username = os.userInfo().username;
@@ -168,7 +172,10 @@ const TOOL_DESCRIPTIONS = {
   unisolate_machine:   (input) => `Release ${chalk.bold(input.hostname)} from network isolation`,
   report_message_as_phishing: (input) => `Report message as ${chalk.bold(input.report_type || "phishing")} in ${chalk.bold(input.upn)}'s mailbox`,
   approve_threatlocker_request: (input) => `Approve ThreatLocker request ${chalk.bold(input.approval_request_id)} (policy: ${input.policy_level || "computer"})`,
-  deny_threatlocker_request:    (input) => `Deny ThreatLocker request ${chalk.bold(input.approval_request_id)}`
+  deny_threatlocker_request:    (input) => `Deny ThreatLocker request ${chalk.bold(input.approval_request_id)}`,
+  block_indicator:              (input) => `Block ${chalk.bold(input.indicator_type)} indicator: ${chalk.bold(input.value)}`,
+  import_indicators:            (input) => `Import ${chalk.bold(String(input.indicators?.length ?? 0))} indicators into Defender`,
+  delete_indicator:             (input) => `Delete Defender indicator #${chalk.bold(String(input.indicator_id))} — ${input.justification || "no reason given"}`
 };
 
 async function promptForConfirmation(rl, tool) {

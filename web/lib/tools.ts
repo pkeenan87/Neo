@@ -371,6 +371,119 @@ export const TOOLS: Tool[] = [
       required: ["approval_request_id", "justification"],
     },
   },
+  {
+    name: "block_indicator",
+    description:
+      "⚠️ DESTRUCTIVE — Create a custom indicator in Microsoft Defender for Endpoint. " +
+      "The indicator is enforced fleet-wide on ALL enrolled devices immediately via Network Protection and Defender AV. " +
+      "A wrong indicator blocks a legitimate resource for every user simultaneously. Use only for confirmed IOCs. " +
+      "Indicators are permanent unless an expiration is set.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        value: {
+          type: "string",
+          description: "The indicator value — a domain, IP address, URL, file hash, or certificate thumbprint",
+        },
+        indicator_type: {
+          type: "string",
+          enum: ["domain", "ip", "url", "sha1", "sha256", "md5", "cert"],
+          description: "Type of indicator",
+        },
+        action: {
+          type: "string",
+          enum: ["block", "warn", "audit"],
+          description: "Action to take (default: block). File hashes with 'block' automatically use BlockAndRemediate.",
+        },
+        title: {
+          type: "string",
+          description: "Title for the indicator (e.g., 'IR-2024-001 C2 Domain')",
+        },
+        description: {
+          type: "string",
+          description: "Optional description with context about the indicator",
+        },
+        severity: {
+          type: "string",
+          enum: ["informational", "low", "medium", "high"],
+          description: "Severity level (default: high)",
+        },
+        expiration: {
+          type: "string",
+          description: "ISO-8601 expiration datetime (optional — indicator is permanent if omitted)",
+        },
+        generate_alert: {
+          type: "boolean",
+          description: "Generate an alert when the indicator is triggered (default: true)",
+        },
+      },
+      required: ["value", "indicator_type", "title"],
+    },
+  },
+  {
+    name: "import_indicators",
+    description:
+      "⚠️ DESTRUCTIVE — Batch import up to 500 custom indicators into Microsoft Defender for Endpoint. " +
+      "All indicators are enforced fleet-wide on ALL enrolled devices immediately. Each indicator must have a title.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        indicators: {
+          type: "array",
+          description: "Array of indicator objects, each with value, indicator_type, action, title, and severity",
+        },
+        description: {
+          type: "string",
+          description: "Shared description applied to all indicators in the batch",
+        },
+        expiration: {
+          type: "string",
+          description: "Shared ISO-8601 expiration datetime for all indicators in the batch",
+        },
+      },
+      required: ["indicators"],
+    },
+  },
+  {
+    name: "list_indicators",
+    description:
+      "List current custom indicators in Microsoft Defender for Endpoint. Filterable by indicator type.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        indicator_type: {
+          type: "string",
+          enum: ["domain", "ip", "url", "sha1", "sha256", "md5", "cert"],
+          description: "Filter by indicator type (optional — returns all types if omitted)",
+        },
+        top: {
+          type: "number",
+          description: "Maximum number of indicators to return (default: 25)",
+        },
+      },
+      required: [],
+    },
+  },
+  {
+    name: "delete_indicator",
+    description:
+      "⚠️ DESTRUCTIVE — Delete a custom indicator from Microsoft Defender for Endpoint by its numeric ID. " +
+      "Obtain the ID from list_indicators — do not delete an indicator whose value and title you have not verified.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        indicator_id: {
+          type: "number",
+          description: "The numeric ID of the indicator to delete (obtained from list_indicators)",
+        },
+        justification: {
+          type: "string",
+          description: "Reason for deleting the indicator — written to audit log",
+        },
+      },
+      required: ["indicator_id", "justification"],
+    },
+  },
   // Read-only but returns sensitive data that was intentionally truncated from
   // context. Available to all roles since it only accesses the current session.
   {
@@ -400,4 +513,7 @@ export const DESTRUCTIVE_TOOLS = new Set([
   "report_message_as_phishing",
   "approve_threatlocker_request",
   "deny_threatlocker_request",
+  "block_indicator",
+  "import_indicators",
+  "delete_indicator",
 ]);

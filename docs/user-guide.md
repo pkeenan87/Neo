@@ -739,6 +739,10 @@ Neo includes built-in protection against prompt injection attacks. This is trans
 | `get_threatlocker_approval` | Get full details of a specific ThreatLocker approval request by ID. | All |
 | `approve_threatlocker_request` | Approve a ThreatLocker application approval request. Requires confirmation and justification. | Admin |
 | `deny_threatlocker_request` | Deny (ignore) a ThreatLocker application approval request. Requires confirmation and justification. | Admin |
+| `block_indicator` | Create a custom indicator in Defender for Endpoint to block, warn, or audit a domain, IP, URL, or file hash. Requires confirmation. | Admin |
+| `import_indicators` | Batch import up to 500 custom indicators into Defender for Endpoint. Requires confirmation. | Admin |
+| `list_indicators` | List current custom indicators in Defender for Endpoint, filterable by type. | All |
+| `delete_indicator` | Delete a custom indicator from Defender for Endpoint by ID. Requires confirmation. | Admin |
 
 ### Role Permissions
 
