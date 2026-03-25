@@ -24,6 +24,9 @@ import type {
   ListIndicatorsInput,
   DeleteIndicatorInput,
   LookupAssetInput,
+  SearchAbnormalMessagesInput,
+  RemediateAbnormalMessagesInput,
+  GetAbnormalRemediationStatusInput,
   GetFullToolResultInput,
   Message,
 } from "./types";
@@ -35,6 +38,15 @@ import {
   buildVulnSummary,
 } from "./lansweeper-helpers";
 import type { VulnSummary } from "./lansweeper-helpers";
+import {
+  validateMd5Hash,
+  validateSenderEmail,
+  validateSenderIp,
+  validateBodyLink,
+  validateActivityLogId,
+  defaultTimeRange,
+  validateRemediateInput,
+} from "./abnormal-helpers";
 
 // ── Input Validation Helpers ──────────────────────────────────
 
@@ -1501,6 +1513,138 @@ async function lookup_asset({ search, search_type }: LookupAssetInput): Promise<
   };
 }
 
+// ── Abnormal Security ────────────────────────────────────────
+
+async function getAbnormalConfig(): Promise<{ apiToken: string }> {
+  const apiToken = await getToolSecret("ABNORMAL_API_TOKEN");
+
+  if (!apiToken) {
+    throw new Error(
+      "Abnormal Security integration not configured — go to Settings > Integrations to add your API token.",
+    );
+  }
+
+  return { apiToken };
+}
+
+async function abnormalApi(
+  config: { apiToken: string },
+  method: "GET" | "POST",
+  path: string,
+  body?: Record<string, unknown>,
+): Promise<unknown> {
+  const res = await fetch(`https://api.abnormalsecurity.com${path}`, {
+    method,
+    headers: {
+      Authorization: `Bearer ${config.apiToken}`,
+      "Content-Type": "application/json",
+    },
+    ...(body ? { body: JSON.stringify(body) } : {}),
+  });
+
+  if (!res.ok) {
+    const errText = await res.text();
+    logger.error(`Abnormal API error (${res.status}): ${errText.slice(0, 500)}`, "abnormal");
+    throw new Error(`Abnormal Security API request failed (HTTP ${res.status}). Check server logs for details.`);
+  }
+
+  return await res.json();
+}
+
+async function search_abnormal_messages(input: SearchAbnormalMessagesInput): Promise<unknown> {
+  if (env.MOCK_MODE) {
+    return mockSearchAbnormalMessages();
+  }
+
+  // Validate typed filter fields
+  if (input.attachment_md5_hash && !validateMd5Hash(input.attachment_md5_hash)) {
+    throw new Error("Invalid attachment_md5_hash — expected a 32-character hexadecimal string.");
+  }
+  if (input.sender_email && !validateSenderEmail(input.sender_email)) {
+    throw new Error("Invalid sender_email format.");
+  }
+  if (input.sender_ip && !validateSenderIp(input.sender_ip)) {
+    throw new Error("Invalid sender_ip format — expected an IPv4 address.");
+  }
+  if (input.body_link && !validateBodyLink(input.body_link)) {
+    throw new Error("Invalid body_link — must be an http or https URL.");
+  }
+
+  // Default missing time bounds independently so partial ranges are always bounded
+  const fallback = defaultTimeRange();
+  const pageSize = Math.max(1, Math.min(input.page_size ?? 50, 1000));
+
+  const config = await getAbnormalConfig();
+  const body: Record<string, unknown> = {
+    source: input.source ?? "abnormal",
+    page_size: pageSize,
+    page_number: input.page_number ?? 1,
+    start_time: input.start_time ?? fallback.start_time,
+    end_time: input.end_time ?? fallback.end_time,
+    ...(input.sender_email ? { sender_email: input.sender_email } : {}),
+    ...(input.sender_name ? { sender_name: input.sender_name } : {}),
+    ...(input.recipient_email ? { recipient_email: input.recipient_email } : {}),
+    ...(input.subject ? { subject: input.subject } : {}),
+    ...(input.attachment_name ? { attachment_name: input.attachment_name } : {}),
+    ...(input.attachment_md5_hash ? { attachment_md5_hash: input.attachment_md5_hash } : {}),
+    ...(input.body_link ? { body_link: input.body_link } : {}),
+    ...(input.sender_ip ? { sender_ip: input.sender_ip } : {}),
+    ...(input.judgement ? { judgement: input.judgement } : {}),
+  };
+
+  return await abnormalApi(config, "POST", "/v1/search", body);
+}
+
+async function remediate_abnormal_messages(input: RemediateAbnormalMessagesInput): Promise<unknown> {
+  if (env.MOCK_MODE) {
+    return mockRemediateAbnormalMessages();
+  }
+
+  // search_filters is Omit<SearchAbnormalMessagesInput,...> which satisfies Record<string,unknown>
+  validateRemediateInput({
+    messages: input.messages,
+    remediate_all: input.remediate_all,
+    search_filters: input.search_filters as Record<string, unknown> | undefined,
+  });
+
+  const messageCount = input.remediate_all ? "remediate_all" : String(input.messages?.length ?? 0);
+  logger.info(`Abnormal remediation: ${input.action} (${messageCount} messages, reason: ${input.remediation_reason})`, "abnormal", {
+    toolName: "remediate_abnormal_messages",
+    action: input.action,
+    reason: input.remediation_reason,
+    messageCount,
+    justification: input.justification,
+  });
+
+  const config = await getAbnormalConfig();
+  const body: Record<string, unknown> = {
+    action: input.action,
+    remediation_reason: input.remediation_reason,
+  };
+
+  if (input.remediate_all && input.search_filters) {
+    body.remediate_all = true;
+    body.search_filters = input.search_filters;
+  } else if (input.messages) {
+    body.messages = input.messages;
+  }
+
+  return await abnormalApi(config, "POST", "/v1/search/remediate", body);
+}
+
+async function get_abnormal_remediation_status({ activity_log_id }: GetAbnormalRemediationStatusInput): Promise<unknown> {
+  if (env.MOCK_MODE) {
+    return mockGetAbnormalRemediationStatus(activity_log_id);
+  }
+
+  if (!validateActivityLogId(activity_log_id)) {
+    throw new Error("Invalid activity_log_id — expected a non-empty alphanumeric string (max 128 chars).");
+  }
+
+  const config = await getAbnormalConfig();
+  return await abnormalApi(config, "GET", `/v1/search/activities/${encodeURIComponent(activity_log_id)}`);
+}
+
 // ── Context Retrieval ─────────────────────────────────────────
 
 // Anthropic tool_use_id format: "toolu_" followed by alphanumerics
@@ -1561,6 +1705,9 @@ const executors: Record<string, (input: Record<string, unknown>) => Promise<unkn
   list_indicators: (input) => list_indicators(input as unknown as ListIndicatorsInput),
   delete_indicator: (input) => delete_indicator(input as unknown as DeleteIndicatorInput),
   lookup_asset: (input) => lookup_asset(input as unknown as LookupAssetInput),
+  search_abnormal_messages: (input) => search_abnormal_messages(input as unknown as SearchAbnormalMessagesInput),
+  remediate_abnormal_messages: (input) => remediate_abnormal_messages(input as unknown as RemediateAbnormalMessagesInput),
+  get_abnormal_remediation_status: (input) => get_abnormal_remediation_status(input as unknown as GetAbnormalRemediationStatusInput),
 };
 
 export interface ExecuteToolContext {
@@ -2045,6 +2192,69 @@ function mockLookupAsset(search: string): unknown {
         },
       ],
     },
+    _mock: true,
+  };
+}
+
+function mockSearchAbnormalMessages(): unknown {
+  return {
+    total_count: 3,
+    page_number: 1,
+    messages: [
+      {
+        message_id: "msg-a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+        subject: "Urgent: Verify your account credentials",
+        sender_email: "security-alert@evil-domain.com",
+        sender_name: "IT Security Team",
+        recipient_email: "jsmith@goodwin.com",
+        received_time: "2026-03-24T14:30:00Z",
+        judgement: "attack",
+        attack_type: "Credential Phishing",
+        has_attachments: false,
+      },
+      {
+        message_id: "msg-b2c3d4e5-f6a7-8901-bcde-f12345678901",
+        subject: "Urgent: Verify your account credentials",
+        sender_email: "security-alert@evil-domain.com",
+        sender_name: "IT Security Team",
+        recipient_email: "bwilliams@goodwin.com",
+        received_time: "2026-03-24T14:31:00Z",
+        judgement: "attack",
+        attack_type: "Credential Phishing",
+        has_attachments: false,
+      },
+      {
+        message_id: "msg-c3d4e5f6-a7b8-9012-cdef-123456789012",
+        subject: "Invoice #INV-2026-3847 — Payment Required",
+        sender_email: "billing@spoofed-vendor.com",
+        sender_name: "Accounts Payable",
+        recipient_email: "finance-team@goodwin.com",
+        received_time: "2026-03-24T15:10:00Z",
+        judgement: "attack",
+        attack_type: "Invoice/Payment Fraud",
+        has_attachments: true,
+      },
+    ],
+    _mock: true,
+  };
+}
+
+function mockRemediateAbnormalMessages(): unknown {
+  return {
+    activity_log_id: "act-d4e5f6a7-b8c9-0123-def4-567890abcdef",
+    status: "pending",
+    message: "Remediation submitted successfully.",
+    _mock: true,
+  };
+}
+
+function mockGetAbnormalRemediationStatus(activityLogId: string): unknown {
+  return {
+    activity_log_id: activityLogId || "act-d4e5f6a7-b8c9-0123-def4-567890abcdef",
+    status: "completed",
+    action: "delete",
+    message_count: 3,
+    completed_at: "2026-03-24T15:45:00Z",
     _mock: true,
   };
 }

@@ -343,6 +343,36 @@ export interface LookupAssetInput {
   search_type?: "name" | "ip" | "serial";
 }
 
+export interface SearchAbnormalMessagesInput {
+  sender_email?: string;
+  sender_name?: string;
+  recipient_email?: string;
+  subject?: string;
+  attachment_name?: string;
+  attachment_md5_hash?: string;
+  body_link?: string;
+  sender_ip?: string;
+  judgement?: "attack" | "borderline" | "spam" | "graymail" | "safe";
+  source?: "abnormal" | "quarantine";
+  start_time?: string;
+  end_time?: string;
+  page_number?: number;
+  page_size?: number;
+}
+
+export interface RemediateAbnormalMessagesInput {
+  action: "delete" | "move_to_inbox" | "submit_to_d360";
+  remediation_reason: "false_negative" | "misdirected" | "unsolicited" | "other";
+  messages?: { message_id: string; recipient_email: string }[];
+  remediate_all?: boolean;
+  search_filters?: Omit<SearchAbnormalMessagesInput, "page_number" | "page_size">;
+  justification: string;
+}
+
+export interface GetAbnormalRemediationStatusInput {
+  activity_log_id: string;
+}
+
 export interface GetFullToolResultInput {
   tool_use_id: string;
 }

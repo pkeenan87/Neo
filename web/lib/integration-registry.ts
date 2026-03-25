@@ -151,6 +151,28 @@ export const INTEGRATIONS: IntegrationInfo[] = [
       },
     ],
   },
+  {
+    slug: "abnormal-security",
+    name: "Abnormal Security",
+    iconName: "MailWarning",
+    imageSrc: "/abnormal-logo.png",
+    description:
+      "Email threat detection and response. Search messages across the mailbox estate and bulk-remediate phishing campaigns.",
+    capabilities: [
+      "search_abnormal_messages",
+      "remediate_abnormal_messages",
+      "get_abnormal_remediation_status",
+    ],
+    secrets: [
+      {
+        key: "ABNORMAL_API_TOKEN",
+        label: "API Token",
+        description:
+          "Abnormal Security REST API bearer token for Search & Respond.",
+        required: true,
+      },
+    ],
+  },
 ];
 
 export function getIntegration(slug: string): IntegrationInfo | undefined {

@@ -20,6 +20,10 @@ This guide covers all configuration options for the Neo web server and CLI clien
 - [Azure App Registration](#azure-app-registration)
   - [Server App Registration](#server-app-registration)
   - [CLI Public Client Setup](#cli-public-client-setup)
+- [Third-Party Integrations](#third-party-integrations)
+  - [Lansweeper (Asset Management)](#lansweeper-asset-management)
+  - [Abnormal Security (Email Threat Detection)](#abnormal-security-email-threat-detection)
+  - [ThreatLocker (Application Allowlisting)](#threatlocker-application-allowlisting)
 - [Skills Configuration](#skills-configuration)
   - [Skills Directory](#skills-directory)
   - [Skill File Format](#skill-file-format)
@@ -120,6 +124,10 @@ INJECTION_GUARD_MODE=monitor
 | `ORG_CONTEXT` | No | Free-text organizational context injected into the system prompt (domains, SAM formats, VPN ranges, etc.). Supports `\n` for newlines. Also editable by admins in Settings > Organization. |
 | `USAGE_LIMIT_2H_INPUT_TOKENS` | No | Per-user input token cap for the 2-hour rolling window (default: 670,000 — approx. $10 of Opus) |
 | `USAGE_LIMIT_WEEKLY_INPUT_TOKENS` | No | Per-user input token cap for the weekly rolling window (default: 6,700,000 — approx. $100 of Opus) |
+| `KEY_VAULT_URL` | No | Azure Key Vault URL. When set, tool integration secrets are read from Key Vault (with env var fallback). Uses Managed Identity auth. |
+| `LANSWEEPER_API_TOKEN` | No | Lansweeper Personal Access Token (from Settings > Developer Tools). Required when `MOCK_MODE=false` and Lansweeper integration is used. Can be stored in Key Vault. |
+| `LANSWEEPER_SITE_ID` | No | Lansweeper site identifier (GUID). Required alongside `LANSWEEPER_API_TOKEN`. Can be stored in Key Vault. |
+| `ABNORMAL_API_TOKEN` | No | Abnormal Security REST API bearer token for Search & Respond. Required when `MOCK_MODE=false` and Abnormal integration is used. Can be stored in Key Vault. |
 
 **Constants** (hardcoded in `web/lib/config.ts`, not environment variables):
 
@@ -451,6 +459,53 @@ To enable Entra ID login from the CLI, add a public client redirect URI to the s
 5. Click **Save**.
 
 No client secret is needed for the CLI — it uses PKCE (Proof Key for Code Exchange).
+
+---
+
+## Third-Party Integrations
+
+Neo supports integrations with external security platforms beyond Microsoft. Each integration requires an API token stored either as an environment variable or in Azure Key Vault (recommended for production). When `KEY_VAULT_URL` is configured, secrets are read from Key Vault first with env var fallback.
+
+Manage integration secrets in the web UI at **Settings > Integrations** (admin-only), or set them in `.env` / Key Vault directly.
+
+### Lansweeper (Asset Management)
+
+Provides the `lookup_asset` tool — look up IT assets by hostname, IP, or serial number. Returns asset identity, ownership tags (Business Owner, BIA Tier, Role, Technology Owner), primary user, and vulnerability summary.
+
+| Secret | Description |
+|--------|-------------|
+| `LANSWEEPER_API_TOKEN` | Personal Access Token from Lansweeper Settings > Developer Tools |
+| `LANSWEEPER_SITE_ID` | Lansweeper site identifier (GUID) for API queries |
+
+**API endpoint**: `https://api.lansweeper.com/api/v2/graphql`
+
+### Abnormal Security (Email Threat Detection)
+
+Provides three tools for email threat investigation and response:
+
+| Tool | Type | Description |
+|------|------|-------------|
+| `search_abnormal_messages` | Read-only | Search messages by sender, recipient, subject, attachment, judgement, time range |
+| `remediate_abnormal_messages` | Destructive | Bulk delete, move to inbox, or submit messages to Detection360 |
+| `get_abnormal_remediation_status` | Read-only | Check status of a previously submitted remediation action |
+
+| Secret | Description |
+|--------|-------------|
+| `ABNORMAL_API_TOKEN` | Abnormal Security REST API bearer token for Search & Respond |
+
+**API endpoint**: `https://api.abnormalsecurity.com`
+
+### ThreatLocker (Application Allowlisting)
+
+Provides tools for reviewing and actioning application approval requests.
+
+| Secret | Description |
+|--------|-------------|
+| `THREATLOCKER_API_KEY` | ThreatLocker Portal API key |
+| `THREATLOCKER_INSTANCE` | Portal API instance name (e.g., `us`) |
+| `THREATLOCKER_ORG_ID` | Managed organization GUID |
+
+**API endpoint**: `https://portalapi.<instance>.threatlocker.com/portalapi`
 
 ---
 

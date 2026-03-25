@@ -507,6 +507,131 @@ export const TOOLS: Tool[] = [
       required: ["search"],
     },
   },
+  {
+    name: "search_abnormal_messages",
+    description:
+      "Search across all messages in Abnormal Security by sender, recipient, subject, attachment, judgement, and more. " +
+      "Returns a paginated message list with total count. Use this before remediation to identify affected messages.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        sender_email: {
+          type: "string",
+          description: "Filter by sender email address",
+        },
+        sender_name: {
+          type: "string",
+          description: "Filter by sender display name",
+        },
+        recipient_email: {
+          type: "string",
+          description: "Filter by recipient email address",
+        },
+        subject: {
+          type: "string",
+          description: "Filter by message subject (partial match)",
+        },
+        attachment_name: {
+          type: "string",
+          description: "Filter by attachment file name",
+        },
+        attachment_md5_hash: {
+          type: "string",
+          description: "Filter by attachment MD5 hash (32-character hex string)",
+        },
+        body_link: {
+          type: "string",
+          description: "Filter by URL found in message body",
+        },
+        sender_ip: {
+          type: "string",
+          description: "Filter by sender IP address",
+        },
+        judgement: {
+          type: "string",
+          enum: ["attack", "borderline", "spam", "graymail", "safe"],
+          description: "Filter by Abnormal's message judgement classification",
+        },
+        source: {
+          type: "string",
+          enum: ["abnormal", "quarantine"],
+          description: "Search source — 'abnormal' for detected messages, 'quarantine' for quarantined (default: abnormal)",
+        },
+        start_time: {
+          type: "string",
+          description: "Start of time range (ISO 8601). Defaults to 48 hours ago if omitted.",
+        },
+        end_time: {
+          type: "string",
+          description: "End of time range (ISO 8601). Defaults to now if omitted.",
+        },
+        page_number: {
+          type: "number",
+          description: "Page number for pagination (default: 1)",
+        },
+        page_size: {
+          type: "number",
+          description: "Results per page (default: 50, max: 1000)",
+        },
+      },
+      required: [],
+    },
+  },
+  {
+    name: "remediate_abnormal_messages",
+    description:
+      "⚠️ DESTRUCTIVE — Bulk remediate messages via Abnormal Security. Actions: delete messages, move to inbox, or submit to Detection360. " +
+      "Provide either an explicit list of message IDs or use remediate_all with search filters. " +
+      "Always search first to confirm the scope before remediating.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        action: {
+          type: "string",
+          enum: ["delete", "move_to_inbox", "submit_to_d360"],
+          description: "Remediation action to take on the messages",
+        },
+        remediation_reason: {
+          type: "string",
+          enum: ["false_negative", "misdirected", "unsolicited", "other"],
+          description: "Reason for the remediation",
+        },
+        messages: {
+          type: "array",
+          description: "Explicit list of messages to remediate. Each item needs message_id and recipient_email.",
+        },
+        remediate_all: {
+          type: "boolean",
+          description: "If true, remediate all messages matching the search_filters. Requires search_filters.",
+        },
+        search_filters: {
+          type: "object",
+          description: "Search filters to identify messages when using remediate_all (same fields as search_abnormal_messages).",
+        },
+        justification: {
+          type: "string",
+          description: "Reason for the remediation — written to audit log",
+        },
+      },
+      required: ["action", "remediation_reason", "justification"],
+    },
+  },
+  {
+    name: "get_abnormal_remediation_status",
+    description:
+      "Check the status of a previously submitted Abnormal Security remediation action. " +
+      "Returns whether the remediation is pending, in progress, completed, or failed.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        activity_log_id: {
+          type: "string",
+          description: "The activity log ID returned by a previous remediate_abnormal_messages call",
+        },
+      },
+      required: ["activity_log_id"],
+    },
+  },
   // Read-only but returns sensitive data that was intentionally truncated from
   // context. Available to all roles since it only accesses the current session.
   {
@@ -538,4 +663,5 @@ export const DESTRUCTIVE_TOOLS = new Set([
   "block_indicator",
   "import_indicators",
   "delete_indicator",
+  "remediate_abnormal_messages",
 ]);

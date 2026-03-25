@@ -22,12 +22,15 @@ This guide covers day-to-day usage of Neo for both regular users (readers) and a
   - [Triage Incidents](#triage-incidents)
   - [Investigate a User](#investigate-a-user)
   - [Investigate a Host](#investigate-a-host)
+  - [Look Up an Asset](#look-up-an-asset)
+  - [Search Email Threats](#search-email-threats)
   - [Run a Custom KQL Query](#run-a-custom-kql-query)
   - [Multi-Step Investigation](#multi-step-investigation)
 - [Common Tasks — Admin](#common-tasks--admin)
   - [Contain a Compromised Account](#contain-a-compromised-account)
   - [Isolate a Machine](#isolate-a-machine)
   - [Release an Isolated Machine](#release-an-isolated-machine)
+  - [Remediate Email Threats](#remediate-email-threats)
   - [Full Incident Response Workflow](#full-incident-response-workflow)
 - [Skills](#skills)
   - [Using Skills](#using-skills)
@@ -413,6 +416,43 @@ The agent will:
 4. Check which user was logged in.
 5. Assess severity and recommend containment if needed.
 
+### Look Up an Asset
+
+**Basic asset lookup**:
+```
+🔐 You: Look up asset YOURPC01 in Lansweeper
+```
+
+The agent will call `lookup_asset` to retrieve:
+- Asset identity (name, type, IP, MAC, OS, manufacturer/model)
+- Ownership tags (Business Owner, BIA Tier, Role, Technology Owner)
+- Primary user (most frequently logged-in)
+- Vulnerability summary (count, severity breakdown, top CVEs)
+
+**Lookup by IP**:
+```
+🔐 You: Who owns the device at 10.0.1.42?
+```
+
+**Lookup by serial number**:
+```
+🔐 You: Look up serial number DLAT5540-X9K2M in Lansweeper
+```
+
+### Search Email Threats
+
+**Search for phishing messages**:
+```
+🔐 You: Search Abnormal Security for attack messages from sender security-alert@evil-domain.com in the last 48 hours
+```
+
+The agent will call `search_abnormal_messages` and return a paginated list of matching messages with sender, recipient, subject, judgement, and timestamps.
+
+**Search by attachment hash**:
+```
+🔐 You: Search Abnormal for messages with attachment MD5 hash d41d8cd98f00b204e9800998ecf8427e
+```
+
 ### Run a Custom KQL Query
 
 You can ask the agent to run specific KQL queries:
@@ -500,6 +540,25 @@ Full isolation blocks all network traffic except the XDR management channel.
 After remediation:
 ```
 🔐 You: Release LAPTOP-JS4729 from isolation. Remediation is complete.
+```
+
+### Remediate Email Threats
+
+**Search and delete phishing messages**:
+```
+🔐 You: Find all messages from security-alert@evil-domain.com and delete them
+```
+
+The agent will:
+1. Search Abnormal Security for matching messages.
+2. Show you the results and total count.
+3. Call `remediate_abnormal_messages` with the delete action.
+4. Pause for your confirmation before executing.
+5. Return the activity log ID for tracking.
+
+**Check remediation status**:
+```
+🔐 You: Check the status of remediation act-d4e5f6a7-b8c9-0123-def4-567890abcdef
 ```
 
 ### Full Incident Response Workflow
@@ -743,6 +802,10 @@ Neo includes built-in protection against prompt injection attacks. This is trans
 | `import_indicators` | Batch import up to 500 custom indicators into Defender for Endpoint. Requires confirmation. | Admin |
 | `list_indicators` | List current custom indicators in Defender for Endpoint, filterable by type. | All |
 | `delete_indicator` | Delete a custom indicator from Defender for Endpoint by ID. Requires confirmation. | Admin |
+| `lookup_asset` | Look up an IT asset in Lansweeper by hostname, IP address, or serial number. Returns asset identity, ownership tags, primary user, and vulnerability summary. | All |
+| `search_abnormal_messages` | Search messages across the Abnormal Security platform by sender, recipient, subject, attachment, judgement, and time range. Returns paginated message list. | All |
+| `remediate_abnormal_messages` | Bulk remediate messages via Abnormal Security: delete, move to inbox, or submit to Detection360. Requires confirmation. | Admin |
+| `get_abnormal_remediation_status` | Check the status of a previously submitted Abnormal Security remediation action. | All |
 
 ### Role Permissions
 
