@@ -116,7 +116,7 @@ See [docs/configuration.md](docs/configuration.md) for Entra ID setup and all co
 | `get_xdr_alert` | Read-only | Get full alert details from Defender/CrowdStrike |
 | `search_xdr_by_host` | Read-only | Search alerts by hostname |
 | `get_machine_isolation_status` | Read-only | Check real-time isolation status and health of a machine via Defender |
-| `search_user_messages` | Destructive | Search a user's Exchange mailbox for messages (reads any mailbox — admin only) |
+| `search_user_messages` | Read-only | Search a user's Exchange mailbox for messages by sender, subject, or content |
 | `get_user_info` | Read-only | Look up Entra ID user details and risk |
 | `get_full_tool_result` | Read-only | Retrieve full content of a previously truncated tool result |
 | `reset_user_password` | Destructive | Force password reset + session revocation |

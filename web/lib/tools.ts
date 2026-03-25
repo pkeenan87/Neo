@@ -509,7 +509,6 @@ export const DESTRUCTIVE_TOOLS = new Set([
   "dismiss_user_risk",
   "isolate_machine",
   "unisolate_machine",
-  "search_user_messages",
   "report_message_as_phishing",
   "approve_threatlocker_request",
   "deny_threatlocker_request",

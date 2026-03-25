@@ -727,7 +727,7 @@ Neo includes built-in protection against prompt injection attacks. This is trans
 | `get_xdr_alert` | Retrieve full alert details from Defender for Endpoint or CrowdStrike. Includes process tree, file hashes, network connections. | All |
 | `search_xdr_by_host` | Search for all recent alerts on a hostname or IP. Useful for host-based investigations. | All |
 | `get_machine_isolation_status` | Check real-time network isolation status and health of a machine via Defender for Endpoint. Returns isolation state, last action details, health status, and risk score. | All |
-| `search_user_messages` | Search a user's Exchange Online mailbox for messages by sender, subject, body content, or date range. Returns message IDs needed for reporting. Requires confirmation. | Admin |
+| `search_user_messages` | Search a user's Exchange Online mailbox for messages by sender, subject, body content, or date range. Returns message IDs needed for reporting. | All |
 | `get_user_info` | Look up an Entra ID user: account status, MFA, groups, devices, risk level. | All |
 | `get_full_tool_result` | Retrieve the full, untruncated content of a previous tool result that was truncated to fit the context window. | All |
 | `reset_user_password` | Force password reset. Optionally revokes all sessions and refresh tokens. Requires confirmation and justification. | Admin |
