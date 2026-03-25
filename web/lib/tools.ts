@@ -484,6 +484,29 @@ export const TOOLS: Tool[] = [
       required: ["indicator_id", "justification"],
     },
   },
+  {
+    name: "lookup_asset",
+    description:
+      "Look up an IT asset by hostname, IP address, or serial number in Lansweeper. " +
+      "Returns a combined profile: asset identity (name, type, IP, OS, manufacturer/model), " +
+      "ownership tags (Business Owner, BIA Tier, Role, Technology Owner), " +
+      "primary user (most frequently logged-in), and vulnerability summary (count, severity breakdown, top CVEs).",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        search: {
+          type: "string",
+          description: "The hostname, IP address, or serial number to look up",
+        },
+        search_type: {
+          type: "string",
+          enum: ["name", "ip", "serial"],
+          description: "Hint for how to interpret the search value. Auto-detected if omitted (IPv4 → ip, otherwise → name). Use 'serial' explicitly for serial number lookups.",
+        },
+      },
+      required: ["search"],
+    },
+  },
   // Read-only but returns sensitive data that was intentionally truncated from
   // context. Available to all roles since it only accesses the current session.
   {

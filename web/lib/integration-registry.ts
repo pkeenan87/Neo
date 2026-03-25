@@ -126,6 +126,31 @@ export const INTEGRATIONS: IntegrationInfo[] = [
       },
     ],
   },
+  {
+    slug: "lansweeper",
+    name: "Lansweeper",
+    iconName: "Monitor",
+    imageSrc: "/lansweeper-logo.png",
+    description:
+      "IT asset management platform. Look up device profiles, ownership tags, primary users, and vulnerability data.",
+    capabilities: ["lookup_asset"],
+    secrets: [
+      {
+        key: "LANSWEEPER_API_TOKEN",
+        label: "API Token",
+        description:
+          "Personal Access Token from Lansweeper Settings > Developer Tools.",
+        required: true,
+      },
+      {
+        key: "LANSWEEPER_SITE_ID",
+        label: "Site ID",
+        description:
+          "The Lansweeper site identifier (GUID) for API queries.",
+        required: true,
+      },
+    ],
+  },
 ];
 
 export function getIntegration(slug: string): IntegrationInfo | undefined {

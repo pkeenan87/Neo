@@ -338,6 +338,11 @@ export interface DeleteIndicatorInput {
   justification: string;
 }
 
+export interface LookupAssetInput {
+  search: string;
+  search_type?: "name" | "ip" | "serial";
+}
+
 export interface GetFullToolResultInput {
   tool_use_id: string;
 }

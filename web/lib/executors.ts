@@ -23,10 +23,18 @@ import type {
   ImportIndicatorsInput,
   ListIndicatorsInput,
   DeleteIndicatorInput,
+  LookupAssetInput,
   GetFullToolResultInput,
   Message,
 } from "./types";
 import type { IndicatorType } from "./types";
+import {
+  detectSearchType,
+  extractCustomTags,
+  identifyPrimaryUser,
+  buildVulnSummary,
+} from "./lansweeper-helpers";
+import type { VulnSummary } from "./lansweeper-helpers";
 
 // ── Input Validation Helpers ──────────────────────────────────
 
@@ -1179,6 +1187,320 @@ async function delete_indicator({ indicator_id, justification }: DeleteIndicator
   return { deleted: true, indicatorId: indicator_id, justification };
 }
 
+// ── Lansweeper ───────────────────────────────────────────────
+
+const LANSWEEPER_MAX_VULN_PAGES = 20; // 2,000 vulnerabilities max
+
+async function getLansweeperConfig(): Promise<{ apiToken: string; siteId: string }> {
+  const apiToken = await getToolSecret("LANSWEEPER_API_TOKEN");
+  const siteId = await getToolSecret("LANSWEEPER_SITE_ID");
+
+  if (!apiToken || !siteId) {
+    throw new Error(
+      "Lansweeper integration not configured — go to Settings > Integrations to add your API token and site ID.",
+    );
+  }
+
+  return { apiToken, siteId };
+}
+
+async function lansweeperGraphQL(
+  config: { apiToken: string },
+  query: string,
+  variables: Record<string, unknown> = {},
+): Promise<unknown> {
+  const res = await fetch("https://api.lansweeper.com/api/v2/graphql", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${config.apiToken}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ query, variables }),
+  });
+
+  if (!res.ok) {
+    const errText = await res.text();
+    logger.error(`Lansweeper API error (${res.status}): ${errText.slice(0, 500)}`, "lansweeper");
+    throw new Error(`Lansweeper API request failed (HTTP ${res.status}). Check server logs for details.`);
+  }
+
+  const json = await res.json() as { data?: unknown; errors?: { message: string }[] };
+
+  if (json.errors && json.errors.length > 0) {
+    const msgs = json.errors.map((e) => e.message).join("; ");
+    logger.error(`Lansweeper GraphQL error: ${msgs}`, "lansweeper");
+    throw new Error("Lansweeper GraphQL query failed. Check server logs for details.");
+  }
+
+  return json.data;
+}
+
+async function searchAsset(
+  config: { apiToken: string; siteId: string },
+  search: string,
+  type: "name" | "ip" | "serial",
+): Promise<{ total: number; items: Record<string, unknown>[] }> {
+  const conditions: { operator: string; path: string; value: string }[] = [];
+
+  if (type === "ip") {
+    conditions.push({ operator: "LIKE", path: "assetBasicInfo.ipAddress", value: search });
+  } else if (type === "serial") {
+    conditions.push({ operator: "EQUAL", path: "assetCustom.serialNumber", value: search });
+  } else {
+    conditions.push(
+      { operator: "EQUAL", path: "assetBasicInfo.name", value: search },
+      { operator: "LIKE", path: "assetBasicInfo.ipAddress", value: search },
+    );
+  }
+
+  const query = `
+    query SearchAsset($siteId: ID!, $conditions: [AssetFilterConditionInput!]!) {
+      site(id: $siteId) {
+        assetResources(
+          assetPagination: { limit: 5, page: FIRST }
+          fields: [
+            "assetBasicInfo.name"
+            "assetBasicInfo.ipAddress"
+            "assetBasicInfo.type"
+            "assetBasicInfo.userName"
+            "assetCustom.serialNumber"
+            "url"
+          ]
+          filters: { conjunction: OR, conditions: $conditions }
+        ) {
+          total
+          items
+        }
+      }
+    }
+  `;
+
+  const data = await lansweeperGraphQL(config, query, { siteId: config.siteId, conditions }) as {
+    site: { assetResources: { total: number; items: Record<string, unknown>[] } };
+  };
+
+  return data.site.assetResources;
+}
+
+async function getAssetDetails(
+  config: { apiToken: string; siteId: string },
+  assetKey: string,
+): Promise<Record<string, unknown>> {
+  const query = `
+    query AssetDetails($siteId: ID!, $assetKey: String!) {
+      site(id: $siteId) {
+        assetDetails(key: $assetKey) {
+          key
+          url
+          assetBasicInfo {
+            name
+            type
+            domain
+            ipAddress
+            mac
+            userName
+            userDomain
+            description
+            lastSeen
+            firstSeen
+          }
+          assetCustom {
+            manufacturer
+            model
+            serialNumber
+            stateName
+            location
+            department
+            fields {
+              name
+              value
+              fieldKey
+            }
+          }
+          operatingSystem {
+            caption
+            version
+            buildNumber
+          }
+          loggedOnUsers {
+            userName
+            fullName
+            numberOfLogons
+            lastLogon
+          }
+          userRelations {
+            userKey
+            relationType
+          }
+        }
+      }
+    }
+  `;
+
+  const data = await lansweeperGraphQL(config, query, { siteId: config.siteId, assetKey }) as {
+    site: { assetDetails: Record<string, unknown> };
+  };
+
+  return data.site.assetDetails;
+}
+
+async function getAssetVulnerabilities(
+  config: { apiToken: string; siteId: string },
+  assetKey: string,
+): Promise<{ total: number; items: Record<string, unknown>[]; capped: boolean }> {
+  const allItems: Record<string, unknown>[] = [];
+  let cursor: string | null = null;
+  let total = 0;
+  let pageCount = 0;
+  let capped = false;
+
+  for (;;) {
+    if (++pageCount > LANSWEEPER_MAX_VULN_PAGES) {
+      logger.warn(`Vulnerability pagination capped at ${LANSWEEPER_MAX_VULN_PAGES} pages for asset ${assetKey}`, "lansweeper");
+      capped = true;
+      break;
+    }
+
+    const query = `
+      query AssetVulns($siteId: ID!, $assetKey: String!, $pagination: VulnerabilityPaginationInput!) {
+        site(id: $siteId) {
+          vulnerabilities(
+            pagination: $pagination
+            filters: {
+              conjunction: AND
+              conditions: [
+                { operator: EQUAL, path: "assetKey", value: $assetKey }
+              ]
+            }
+          ) {
+            total
+            pagination {
+              next
+            }
+            items {
+              cve
+              riskScore
+              severity
+              baseScore
+              attackVector
+              attackComplexity
+              publishedOn
+              updatedOn
+              isActive
+              cause {
+                category
+                affectedProduct
+                vendor
+              }
+            }
+          }
+        }
+      }
+    `;
+
+    const pagination = cursor
+      ? { limit: 100, page: "NEXT", cursor }
+      : { limit: 100, page: "FIRST" };
+
+    const data = await lansweeperGraphQL(config, query, {
+      siteId: config.siteId,
+      assetKey,
+      pagination,
+    }) as {
+      site: {
+        vulnerabilities: {
+          total: number;
+          pagination: { next: string | null };
+          items: Record<string, unknown>[];
+        };
+      };
+    };
+
+    const vulns = data.site.vulnerabilities;
+    if (typeof vulns.total !== "number") break;
+    total = vulns.total;
+    allItems.push(...vulns.items);
+
+    if (!vulns.pagination.next || allItems.length >= total) break;
+    cursor = vulns.pagination.next;
+  }
+
+  return { total, items: allItems, capped };
+}
+
+async function lookup_asset({ search, search_type }: LookupAssetInput): Promise<unknown> {
+  if (env.MOCK_MODE) {
+    return mockLookupAsset(search);
+  }
+
+  if (!search || search.length > 256) {
+    throw new Error("search must be between 1 and 256 characters.");
+  }
+
+  const config = await getLansweeperConfig();
+  const type = detectSearchType(search, search_type);
+  const results = await searchAsset(config, search, type);
+
+  if (results.total === 0) {
+    return { message: `No assets found matching "${search}" (searched by ${type}).`, results: [] };
+  }
+
+  // Multiple matches — return disambiguation list
+  if (results.total > 1) {
+    return {
+      message: `Found ${results.total} assets matching "${search}". Please specify which asset:`,
+      matches: results.items,
+    };
+  }
+
+  // Exactly one match — get full details
+  const asset = results.items[0];
+  const assetKey = (asset.key ?? asset._id) as string;
+  const details = await getAssetDetails(config, assetKey);
+
+  // Fetch vulnerabilities (graceful degradation)
+  let vulnSummary: VulnSummary | string;
+  try {
+    const vulnData = await getAssetVulnerabilities(config, assetKey);
+    const summary = buildVulnSummary(vulnData.items);
+    if (vulnData.capped) {
+      summary.totalCount = vulnData.total;
+    }
+    vulnSummary = summary;
+  } catch {
+    vulnSummary = "Vulnerability data unavailable (may require Lansweeper Pro/Enterprise plan or View Vulnerabilities permission).";
+  }
+
+  const assetBasicInfo = details.assetBasicInfo as Record<string, unknown> ?? {};
+  const assetCustom = details.assetCustom as Record<string, unknown> ?? {};
+  const os = details.operatingSystem as Record<string, unknown> ?? {};
+
+  const tags = extractCustomTags(assetCustom.fields as { name: string; value: string }[] | undefined);
+  const primaryUser = identifyPrimaryUser(
+    details.loggedOnUsers as { userName: string; fullName?: string; numberOfLogons?: number; lastLogon?: string }[] | undefined,
+    assetBasicInfo.userName as string | undefined,
+  );
+
+  return {
+    assetIdentity: {
+      name: assetBasicInfo.name,
+      type: assetBasicInfo.type,
+      ipAddress: assetBasicInfo.ipAddress,
+      mac: assetBasicInfo.mac,
+      domain: assetBasicInfo.domain,
+      manufacturer: assetCustom.manufacturer,
+      model: assetCustom.model,
+      serialNumber: assetCustom.serialNumber,
+      os: os.caption ? `${os.caption} ${os.version ?? ""} (Build ${os.buildNumber ?? "unknown"})` : null,
+      lastSeen: assetBasicInfo.lastSeen,
+      lansweeperUrl: details.url,
+    },
+    tags,
+    primaryUser,
+    vulnerabilities: vulnSummary,
+  };
+}
+
 // ── Context Retrieval ─────────────────────────────────────────
 
 // Anthropic tool_use_id format: "toolu_" followed by alphanumerics
@@ -1238,6 +1560,7 @@ const executors: Record<string, (input: Record<string, unknown>) => Promise<unkn
   import_indicators: (input) => import_indicators(input as unknown as ImportIndicatorsInput),
   list_indicators: (input) => list_indicators(input as unknown as ListIndicatorsInput),
   delete_indicator: (input) => delete_indicator(input as unknown as DeleteIndicatorInput),
+  lookup_asset: (input) => lookup_asset(input as unknown as LookupAssetInput),
 };
 
 export interface ExecuteToolContext {
@@ -1657,4 +1980,71 @@ function mockListIndicators(indicatorType?: IndicatorType): unknown {
     : all;
 
   return { indicators: filtered, count: filtered.length, _mock: true };
+}
+
+function mockLookupAsset(search: string): unknown {
+  return {
+    assetIdentity: {
+      name: search || "YOURPC01",
+      type: "Windows",
+      ipAddress: "10.0.1.42",
+      mac: "AA:BB:CC:DD:EE:FF",
+      domain: "goodwin.local",
+      manufacturer: "Dell Inc.",
+      model: "Latitude 5540",
+      serialNumber: "DLAT5540-X9K2M",
+      os: "Microsoft Windows 11 Enterprise 23H2 (Build 22631)",
+      lastSeen: "2026-03-24T18:30:00Z",
+      lansweeperUrl: "https://app.lansweeper.com/asset/YOURPC01",
+    },
+    tags: {
+      businessOwner: "Jane Martinez",
+      biaTier: "Tier 2 — Business Important",
+      role: "Developer Workstation",
+      technologyOwner: "IT Desktop Engineering",
+    },
+    primaryUser: {
+      userName: "jsmith",
+      fullName: "John Smith",
+      numberOfLogons: 487,
+      lastLogon: "2026-03-24T17:45:00Z",
+    },
+    vulnerabilities: {
+      totalCount: 12,
+      bySeverity: { critical: 1, high: 3, medium: 5, low: 3 },
+      topCves: [
+        {
+          cve: "CVE-2026-21001",
+          riskScore: 9.8,
+          severity: "Critical",
+          baseScore: 9.8,
+          attackVector: "NETWORK",
+          attackComplexity: "LOW",
+          isActive: true,
+          cause: { category: "OS", affectedProduct: "Windows 11", vendor: "Microsoft" },
+        },
+        {
+          cve: "CVE-2026-18742",
+          riskScore: 8.1,
+          severity: "High",
+          baseScore: 8.1,
+          attackVector: "NETWORK",
+          attackComplexity: "HIGH",
+          isActive: true,
+          cause: { category: "Application", affectedProduct: "Chrome", vendor: "Google" },
+        },
+        {
+          cve: "CVE-2026-14023",
+          riskScore: 6.5,
+          severity: "Medium",
+          baseScore: 6.5,
+          attackVector: "LOCAL",
+          attackComplexity: "LOW",
+          isActive: true,
+          cause: { category: "Driver", affectedProduct: "Intel Graphics Driver", vendor: "Intel" },
+        },
+      ],
+    },
+    _mock: true,
+  };
 }
