@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { resolveAuth } from "@/lib/auth-helpers";
 import { getIntegration } from "@/lib/integration-registry";
 import { getAzureToken, getMSGraphToken } from "@/lib/auth";
+import { getToolSecret } from "@/lib/secrets";
 
 const PROBES: Record<string, () => Promise<void>> = {
   "microsoft-sentinel": async () => {
@@ -12,6 +13,44 @@ const PROBES: Record<string, () => Promise<void>> = {
   },
   "microsoft-entra-id": async () => {
     await getMSGraphToken();
+  },
+  "threatlocker": async () => {
+    const apiKey = await getToolSecret("THREATLOCKER_API_KEY");
+    const instance = await getToolSecret("THREATLOCKER_INSTANCE");
+    const orgId = await getToolSecret("THREATLOCKER_ORG_ID");
+    if (!apiKey || !instance || !orgId) throw new Error("Missing ThreatLocker credentials");
+    const res = await fetch(
+      `https://portalapi.${instance}.threatlocker.com/portalapi/ApprovalRequest/ApprovalRequestGetByParameters`,
+      {
+        method: "POST",
+        headers: { authorization: apiKey, "Content-Type": "application/json", managedOrganizationId: orgId },
+        body: JSON.stringify({ pageSize: 1, statusIds: [1] }),
+      },
+    );
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  },
+  "lansweeper": async () => {
+    const apiToken = await getToolSecret("LANSWEEPER_API_TOKEN");
+    const siteId = await getToolSecret("LANSWEEPER_SITE_ID");
+    if (!apiToken || !siteId) throw new Error("Missing Lansweeper credentials");
+    const res = await fetch("https://api.lansweeper.com/api/v2/graphql", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${apiToken}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ query: `query { site(id: "${siteId}") { name } }` }),
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const json = await res.json() as { errors?: { message: string }[] };
+    if (json.errors?.length) throw new Error(json.errors[0].message);
+  },
+  "abnormal-security": async () => {
+    const apiToken = await getToolSecret("ABNORMAL_API_TOKEN");
+    if (!apiToken) throw new Error("Missing Abnormal Security credentials");
+    const res = await fetch("https://api.abnormalsecurity.com/v1/search", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${apiToken}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ source: "abnormal", page_size: 1 }),
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
   },
 };
 
