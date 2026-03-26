@@ -32,6 +32,8 @@ import type {
   GetVendorActivityInput,
   ListVendorCasesInput,
   GetVendorCaseInput,
+  GetEmployeeProfileInput,
+  GetEmployeeLoginHistoryInput,
   GetFullToolResultInput,
   Message,
 } from "./types";
@@ -1532,13 +1534,15 @@ async function getAbnormalConfig(): Promise<{ apiToken: string }> {
   return { apiToken };
 }
 
+const ABNORMAL_BASE_URL = "https://api.abnormalsecurity.com";
+
 async function abnormalApi(
   config: { apiToken: string },
   method: "GET" | "POST",
   path: string,
   body?: Record<string, unknown>,
 ): Promise<unknown> {
-  const res = await fetch(`https://api.abnormalsecurity.com${path}`, {
+  const res = await fetch(`${ABNORMAL_BASE_URL}${path}`, {
     method,
     headers: {
       Authorization: `Bearer ${config.apiToken}`,
@@ -1661,11 +1665,12 @@ function validateVendorDomain(domain: string): void {
 }
 
 async function get_vendor_risk({ vendor_domain }: GetVendorRiskInput): Promise<unknown> {
+  validateVendorDomain(vendor_domain);
+
   if (env.MOCK_MODE) {
     return mockGetVendorRisk(vendor_domain);
   }
 
-  validateVendorDomain(vendor_domain);
   const config = await getAbnormalConfig();
   return await abnormalApi(config, "GET", `/v1/vendors/${encodeURIComponent(vendor_domain)}`);
 }
@@ -1682,11 +1687,12 @@ async function list_vendors({ page_size = 25, page_number = 1 }: ListVendorsInpu
 }
 
 async function get_vendor_activity({ vendor_domain, page_size = 25, page_number = 1 }: GetVendorActivityInput): Promise<unknown> {
+  validateVendorDomain(vendor_domain);
+
   if (env.MOCK_MODE) {
     return mockGetVendorActivity(vendor_domain, page_size, page_number);
   }
 
-  validateVendorDomain(vendor_domain);
   const config = await getAbnormalConfig();
   const ps = Math.max(1, Math.min(page_size, 100));
   const pn = Math.max(1, page_number);
@@ -1700,6 +1706,9 @@ async function list_vendor_cases({ filter, filter_value }: ListVendorCasesInput)
   if (!filter && filter_value) {
     throw new Error("filter is required when filter_value is provided.");
   }
+  if (filter_value && isNaN(new Date(filter_value).getTime())) {
+    throw new Error(`filter_value must be a valid ISO-8601 datetime string, got: ${filter_value}`);
+  }
 
   if (env.MOCK_MODE) {
     return mockListVendorCases();
@@ -1708,11 +1717,7 @@ async function list_vendor_cases({ filter, filter_value }: ListVendorCasesInput)
   const config = await getAbnormalConfig();
   let path = "/v1/vendor-cases";
   if (filter && filter_value) {
-    const parsed = new Date(filter_value);
-    if (isNaN(parsed.getTime())) {
-      throw new Error(`filter_value must be a valid ISO-8601 datetime string, got: ${filter_value}`);
-    }
-    const expression = `${filter} gte ${parsed.toISOString()}`;
+    const expression = `${filter} gte ${new Date(filter_value).toISOString()}`;
     path += `?filter=${encodeURIComponent(expression)}`;
   }
   return await abnormalApi(config, "GET", path);
@@ -1729,6 +1734,100 @@ async function get_vendor_case({ case_id }: GetVendorCaseInput): Promise<unknown
 
   const config = await getAbnormalConfig();
   return await abnormalApi(config, "GET", `/v1/vendor-cases/${encodeURIComponent(case_id)}`);
+}
+
+// ── Abnormal Security: Employee Risk Profile ─────────────────
+
+// RFC 4180-compliant CSV line splitter — handles quoted fields with commas
+function splitCsvLine(line: string): string[] {
+  const fields: string[] = [];
+  let current = "";
+  let inQuotes = false;
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i];
+    if (ch === '"') {
+      if (inQuotes && line[i + 1] === '"') {
+        current += '"';
+        i++;
+      } else {
+        inQuotes = !inQuotes;
+      }
+    } else if (ch === "," && !inQuotes) {
+      fields.push(current.trim());
+      current = "";
+    } else {
+      current += ch;
+    }
+  }
+  fields.push(current.trim());
+  return fields;
+}
+
+function parseCsvToJson(csv: string): Record<string, string>[] {
+  const lines = csv.trim().split("\n");
+  if (lines.length < 2) return [];
+  const headers = splitCsvLine(lines[0]);
+  return lines.slice(1).map((line) => {
+    const values = splitCsvLine(line);
+    const obj: Record<string, string> = {};
+    headers.forEach((h, i) => { obj[h] = values[i] ?? ""; });
+    return obj;
+  });
+}
+
+async function get_employee_profile({ email }: GetEmployeeProfileInput): Promise<unknown> {
+  if (env.MOCK_MODE) {
+    return mockGetEmployeeProfile(email);
+  }
+
+  if (!validateSenderEmail(email)) {
+    throw new Error(`Invalid email format: ${email}`);
+  }
+
+  const config = await getAbnormalConfig();
+  const encoded = encodeURIComponent(email);
+
+  const [infoResult, analysisResult] = await Promise.allSettled([
+    abnormalApi(config, "GET", `/v1/employee/${encoded}`),
+    abnormalApi(config, "GET", `/v1/employee/${encoded}/identity-analysis`),
+  ]);
+
+  return {
+    employee: infoResult.status === "fulfilled" ? infoResult.value : null,
+    genome: analysisResult.status === "fulfilled" ? analysisResult.value : null,
+    _partial: infoResult.status === "rejected" || analysisResult.status === "rejected",
+  };
+}
+
+async function get_employee_login_history({ email }: GetEmployeeLoginHistoryInput): Promise<unknown> {
+  if (env.MOCK_MODE) {
+    return mockGetEmployeeLoginHistory(email);
+  }
+
+  if (!validateSenderEmail(email)) {
+    throw new Error(`Invalid email format: ${email}`);
+  }
+
+  const config = await getAbnormalConfig();
+  const encoded = encodeURIComponent(email);
+
+  // Login CSV returns plain text, not JSON — fetch directly instead of abnormalApi
+  const res = await fetch(`${ABNORMAL_BASE_URL}/v1/employee/${encoded}/login-csv`, {
+    headers: {
+      Authorization: `Bearer ${config.apiToken}`,
+    },
+  });
+
+  if (!res.ok) {
+    const errText = await res.text();
+    logger.error(`Abnormal API error (${res.status}): ${errText.slice(0, 500)}`, "abnormal");
+    throw new Error(`Abnormal Security API request failed (HTTP ${res.status}). Check server logs for details.`);
+  }
+
+  const csvText = await res.text();
+  const logins = parseCsvToJson(csvText);
+
+  return { email, logins, count: logins.length };
 }
 
 // ── Context Retrieval ─────────────────────────────────────────
@@ -1799,6 +1898,8 @@ const executors: Record<string, (input: Record<string, unknown>) => Promise<unkn
   get_vendor_activity: (input) => get_vendor_activity(input as unknown as GetVendorActivityInput),
   list_vendor_cases: (input) => list_vendor_cases(input as unknown as ListVendorCasesInput),
   get_vendor_case: (input) => get_vendor_case(input as unknown as GetVendorCaseInput),
+  get_employee_profile: (input) => get_employee_profile(input as unknown as GetEmployeeProfileInput),
+  get_employee_login_history: (input) => get_employee_login_history(input as unknown as GetEmployeeLoginHistoryInput),
 };
 
 export interface ExecuteToolContext {
@@ -2470,6 +2571,74 @@ function mockGetVendorCase(caseId: string): unknown {
         threatId: "threat-def456",
       },
     ],
+    _mock: true,
+  };
+}
+
+function mockGetEmployeeProfile(email: string): unknown {
+  return {
+    employee: {
+      name: "John Smith",
+      email,
+      title: "Associate Attorney",
+      manager: "Sarah Johnson",
+    },
+    genome: {
+      histograms: [
+        {
+          key: "ip_address",
+          name: "Login IP Addresses",
+          description: "Most common IP addresses used for sign-in",
+          values: [
+            { text: "198.51.100.10", ratio: 0.65, raw_count: 142 },
+            { text: "203.0.113.42", ratio: 0.25, raw_count: 55 },
+            { text: "10.1.50.100", ratio: 0.10, raw_count: 22 },
+          ],
+        },
+        {
+          key: "sign_in_location",
+          name: "Sign-in Locations",
+          description: "Geographic locations of sign-in events",
+          values: [
+            { text: "Boston, MA, US", ratio: 0.80, raw_count: 175 },
+            { text: "New York, NY, US", ratio: 0.15, raw_count: 33 },
+            { text: "Remote VPN", ratio: 0.05, raw_count: 11 },
+          ],
+        },
+        {
+          key: "device",
+          name: "Devices",
+          description: "Devices used for sign-in",
+          values: [
+            { text: "DESKTOP-JS4729", ratio: 0.70, raw_count: 153 },
+            { text: "iPhone 15 Pro", ratio: 0.30, raw_count: 66 },
+          ],
+        },
+        {
+          key: "browser",
+          name: "Browsers",
+          description: "Browsers used for sign-in",
+          values: [
+            { text: "Microsoft Edge 122", ratio: 0.60, raw_count: 131 },
+            { text: "Outlook Mobile", ratio: 0.30, raw_count: 66 },
+            { text: "Chrome 123", ratio: 0.10, raw_count: 22 },
+          ],
+        },
+      ],
+    },
+    _mock: true,
+  };
+}
+
+function mockGetEmployeeLoginHistory(email: string): unknown {
+  return {
+    email,
+    logins: [
+      { timestamp: "2026-03-24T09:15:00Z", ip: "198.51.100.10", location: "Boston, MA, US", device: "DESKTOP-JS4729", browser: "Edge 122" },
+      { timestamp: "2026-03-24T08:30:00Z", ip: "198.51.100.10", location: "Boston, MA, US", device: "iPhone 15 Pro", browser: "Outlook Mobile" },
+      { timestamp: "2026-03-23T17:45:00Z", ip: "203.0.113.42", location: "New York, NY, US", device: "DESKTOP-JS4729", browser: "Chrome 123" },
+    ],
+    count: 3,
     _mock: true,
   };
 }

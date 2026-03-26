@@ -397,6 +397,14 @@ export interface GetVendorCaseInput {
   case_id: string;
 }
 
+export interface GetEmployeeProfileInput {
+  email: string;
+}
+
+export interface GetEmployeeLoginHistoryInput {
+  email: string;
+}
+
 export interface GetFullToolResultInput {
   tool_use_id: string;
 }

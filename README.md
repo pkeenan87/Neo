@@ -137,6 +137,8 @@ See [docs/configuration.md](docs/configuration.md) for Entra ID setup and all co
 | `get_vendor_activity` | Read-only | Get vendor event timeline with suspicious activity |
 | `list_vendor_cases` | Read-only | List vendor compromise cases |
 | `get_vendor_case` | Read-only | Get full vendor case details with insights |
+| `get_employee_profile` | Read-only | Get employee org context and behavioral baseline (Genome) |
+| `get_employee_login_history` | Read-only | Get employee 30-day login history |
 
 Read-only tools execute automatically. Destructive tools pause for human confirmation before executing.
 

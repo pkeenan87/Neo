@@ -728,6 +728,38 @@ export const TOOLS: Tool[] = [
       required: ["case_id"],
     },
   },
+  {
+    name: "get_employee_profile",
+    description:
+      "Get an employee's organizational context and behavioral baseline from Abnormal Security. " +
+      "Returns name, title, manager, and Genome data including common login IPs, sign-in locations, devices, and browsers with frequency ratios.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        email: {
+          type: "string",
+          description: "The employee's email address",
+        },
+      },
+      required: ["email"],
+    },
+  },
+  {
+    name: "get_employee_login_history",
+    description:
+      "Get an employee's 30-day login history from Abnormal Security. " +
+      "Returns structured login events with IP addresses, locations, timestamps, and devices. Useful for post-compromise forensics.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        email: {
+          type: "string",
+          description: "The employee's email address",
+        },
+      },
+      required: ["email"],
+    },
+  },
   // Read-only but returns sensitive data that was intentionally truncated from
   // context. Available to all roles since it only accesses the current session.
   {
