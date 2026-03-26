@@ -46,7 +46,12 @@ const TOOL_COLORS = {
   block_indicator:             chalk.red.bold,
   import_indicators:           chalk.red.bold,
   list_indicators:             chalk.yellow,
-  delete_indicator:            chalk.red.bold
+  delete_indicator:            chalk.red.bold,
+  get_vendor_risk:             chalk.green,
+  list_vendors:                chalk.green,
+  get_vendor_activity:         chalk.green,
+  list_vendor_cases:           chalk.green,
+  get_vendor_case:             chalk.green
 };
 
 const username = os.userInfo().username;

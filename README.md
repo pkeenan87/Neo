@@ -132,6 +132,11 @@ See [docs/configuration.md](docs/configuration.md) for Entra ID setup and all co
 | `import_indicators` | Destructive | Batch import up to 500 indicators into Defender |
 | `list_indicators` | Read-only | List current custom indicators in Defender |
 | `delete_indicator` | Destructive | Delete a custom indicator from Defender by ID |
+| `get_vendor_risk` | Read-only | Assess vendor email compromise risk via Abnormal Security |
+| `list_vendors` | Read-only | List all vendors with risk levels |
+| `get_vendor_activity` | Read-only | Get vendor event timeline with suspicious activity |
+| `list_vendor_cases` | Read-only | List vendor compromise cases |
+| `get_vendor_case` | Read-only | Get full vendor case details with insights |
 
 Read-only tools execute automatically. Destructive tools pause for human confirmation before executing.
 

@@ -373,6 +373,30 @@ export interface GetAbnormalRemediationStatusInput {
   activity_log_id: string;
 }
 
+export interface GetVendorRiskInput {
+  vendor_domain: string;
+}
+
+export interface ListVendorsInput {
+  page_size?: number;
+  page_number?: number;
+}
+
+export interface GetVendorActivityInput {
+  vendor_domain: string;
+  page_size?: number;
+  page_number?: number;
+}
+
+export interface ListVendorCasesInput {
+  filter?: "firstObservedTime" | "lastModifiedTime";
+  filter_value?: string;
+}
+
+export interface GetVendorCaseInput {
+  case_id: string;
+}
+
 export interface GetFullToolResultInput {
   tool_use_id: string;
 }

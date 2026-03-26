@@ -632,6 +632,102 @@ export const TOOLS: Tool[] = [
       required: ["activity_log_id"],
     },
   },
+  {
+    name: "get_vendor_risk",
+    description:
+      "Assess vendor email compromise (VEC) risk for a domain using Abnormal Security. " +
+      "Returns risk level, vendor contacts, internal contacts, countries, IP addresses, and community intelligence flags.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        vendor_domain: {
+          type: "string",
+          description: "The vendor domain to assess (e.g., 'example.com')",
+        },
+      },
+      required: ["vendor_domain"],
+    },
+  },
+  {
+    name: "list_vendors",
+    description:
+      "List all known vendors with their risk levels from Abnormal Security. Paginated.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        page_size: {
+          type: "number",
+          description: "Results per page (default: 25, max: 100)",
+        },
+        page_number: {
+          type: "number",
+          description: "Page number (default: 1)",
+        },
+      },
+      required: [],
+    },
+  },
+  {
+    name: "get_vendor_activity",
+    description:
+      "Get the event timeline for a vendor domain from Abnormal Security. " +
+      "Shows suspicious domains, attack goals, actions taken, and engagement status.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        vendor_domain: {
+          type: "string",
+          description: "The vendor domain to get activity for",
+        },
+        page_size: {
+          type: "number",
+          description: "Results per page (default: 25, max: 100)",
+        },
+        page_number: {
+          type: "number",
+          description: "Page number (default: 1)",
+        },
+      },
+      required: ["vendor_domain"],
+    },
+  },
+  {
+    name: "list_vendor_cases",
+    description:
+      "List vendor compromise cases from Abnormal Security. Filterable by first observed or last modified time. " +
+      "Cases include insights like look-alike domains, young sender domains, and inconsistent registrars.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        filter: {
+          type: "string",
+          enum: ["firstObservedTime", "lastModifiedTime"],
+          description: "Time-based filter field (optional)",
+        },
+        filter_value: {
+          type: "string",
+          description: "ISO-8601 datetime to filter from (optional, used with filter)",
+        },
+      },
+      required: [],
+    },
+  },
+  {
+    name: "get_vendor_case",
+    description:
+      "Get full details of a vendor compromise case from Abnormal Security. " +
+      "Includes insights (look-alike domains, young domains, inconsistent registrars) and message timeline with sender, recipient, subject, and threat judgement.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        case_id: {
+          type: "string",
+          description: "The vendor case ID to retrieve",
+        },
+      },
+      required: ["case_id"],
+    },
+  },
   // Read-only but returns sensitive data that was intentionally truncated from
   // context. Available to all roles since it only accesses the current session.
   {

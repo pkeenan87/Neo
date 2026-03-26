@@ -806,6 +806,11 @@ Neo includes built-in protection against prompt injection attacks. This is trans
 | `search_abnormal_messages` | Search messages across the Abnormal Security platform by sender, recipient, subject, attachment, judgement, and time range. Returns paginated message list. | All |
 | `remediate_abnormal_messages` | Bulk remediate messages via Abnormal Security: delete, move to inbox, or submit to Detection360. Requires confirmation. | Admin |
 | `get_abnormal_remediation_status` | Check the status of a previously submitted Abnormal Security remediation action. | All |
+| `get_vendor_risk` | Assess vendor email compromise (VEC) risk for a domain using Abnormal Security. | All |
+| `list_vendors` | List all known vendors with risk levels from Abnormal Security. | All |
+| `get_vendor_activity` | Get the event timeline for a vendor domain from Abnormal Security. | All |
+| `list_vendor_cases` | List vendor compromise cases with insights from Abnormal Security. | All |
+| `get_vendor_case` | Get full details of a vendor compromise case including insights and message timeline. | All |
 
 ### Role Permissions
 

@@ -27,6 +27,11 @@ import type {
   SearchAbnormalMessagesInput,
   RemediateAbnormalMessagesInput,
   GetAbnormalRemediationStatusInput,
+  GetVendorRiskInput,
+  ListVendorsInput,
+  GetVendorActivityInput,
+  ListVendorCasesInput,
+  GetVendorCaseInput,
   GetFullToolResultInput,
   Message,
 } from "./types";
@@ -1645,6 +1650,87 @@ async function get_abnormal_remediation_status({ activity_log_id }: GetAbnormalR
   return await abnormalApi(config, "GET", `/v1/search/activities/${encodeURIComponent(activity_log_id)}`);
 }
 
+// ── Abnormal Security: Vendor Risk Assessment ───────────────
+
+const VENDOR_DOMAIN_RE = /^[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?)*\.[a-zA-Z]{2,}$/;
+
+function validateVendorDomain(domain: string): void {
+  if (!VENDOR_DOMAIN_RE.test(domain)) {
+    throw new Error(`Invalid vendor domain format: ${domain}`);
+  }
+}
+
+async function get_vendor_risk({ vendor_domain }: GetVendorRiskInput): Promise<unknown> {
+  if (env.MOCK_MODE) {
+    return mockGetVendorRisk(vendor_domain);
+  }
+
+  validateVendorDomain(vendor_domain);
+  const config = await getAbnormalConfig();
+  return await abnormalApi(config, "GET", `/v1/vendors/${encodeURIComponent(vendor_domain)}`);
+}
+
+async function list_vendors({ page_size = 25, page_number = 1 }: ListVendorsInput): Promise<unknown> {
+  if (env.MOCK_MODE) {
+    return mockListVendors(page_size, page_number);
+  }
+
+  const config = await getAbnormalConfig();
+  const ps = Math.max(1, Math.min(page_size, 100));
+  const pn = Math.max(1, page_number);
+  return await abnormalApi(config, "GET", `/v1/vendors?pageSize=${ps}&pageNumber=${pn}`);
+}
+
+async function get_vendor_activity({ vendor_domain, page_size = 25, page_number = 1 }: GetVendorActivityInput): Promise<unknown> {
+  if (env.MOCK_MODE) {
+    return mockGetVendorActivity(vendor_domain, page_size, page_number);
+  }
+
+  validateVendorDomain(vendor_domain);
+  const config = await getAbnormalConfig();
+  const ps = Math.max(1, Math.min(page_size, 100));
+  const pn = Math.max(1, page_number);
+  return await abnormalApi(config, "GET", `/v1/vendors/${encodeURIComponent(vendor_domain)}/activity?pageSize=${ps}&pageNumber=${pn}`);
+}
+
+async function list_vendor_cases({ filter, filter_value }: ListVendorCasesInput): Promise<unknown> {
+  if (filter && !filter_value) {
+    throw new Error("filter_value is required when filter is provided.");
+  }
+  if (!filter && filter_value) {
+    throw new Error("filter is required when filter_value is provided.");
+  }
+
+  if (env.MOCK_MODE) {
+    return mockListVendorCases();
+  }
+
+  const config = await getAbnormalConfig();
+  let path = "/v1/vendor-cases";
+  if (filter && filter_value) {
+    const parsed = new Date(filter_value);
+    if (isNaN(parsed.getTime())) {
+      throw new Error(`filter_value must be a valid ISO-8601 datetime string, got: ${filter_value}`);
+    }
+    const expression = `${filter} gte ${parsed.toISOString()}`;
+    path += `?filter=${encodeURIComponent(expression)}`;
+  }
+  return await abnormalApi(config, "GET", path);
+}
+
+async function get_vendor_case({ case_id }: GetVendorCaseInput): Promise<unknown> {
+  if (!case_id || case_id.trim() === "") {
+    throw new Error("case_id is required and must be a non-empty string");
+  }
+
+  if (env.MOCK_MODE) {
+    return mockGetVendorCase(case_id);
+  }
+
+  const config = await getAbnormalConfig();
+  return await abnormalApi(config, "GET", `/v1/vendor-cases/${encodeURIComponent(case_id)}`);
+}
+
 // ── Context Retrieval ─────────────────────────────────────────
 
 // Anthropic tool_use_id format: "toolu_" followed by alphanumerics
@@ -1708,6 +1794,11 @@ const executors: Record<string, (input: Record<string, unknown>) => Promise<unkn
   search_abnormal_messages: (input) => search_abnormal_messages(input as unknown as SearchAbnormalMessagesInput),
   remediate_abnormal_messages: (input) => remediate_abnormal_messages(input as unknown as RemediateAbnormalMessagesInput),
   get_abnormal_remediation_status: (input) => get_abnormal_remediation_status(input as unknown as GetAbnormalRemediationStatusInput),
+  get_vendor_risk: (input) => get_vendor_risk(input as unknown as GetVendorRiskInput),
+  list_vendors: (input) => list_vendors(input as unknown as ListVendorsInput),
+  get_vendor_activity: (input) => get_vendor_activity(input as unknown as GetVendorActivityInput),
+  list_vendor_cases: (input) => list_vendor_cases(input as unknown as ListVendorCasesInput),
+  get_vendor_case: (input) => get_vendor_case(input as unknown as GetVendorCaseInput),
 };
 
 export interface ExecuteToolContext {
@@ -2255,6 +2346,130 @@ function mockGetAbnormalRemediationStatus(activityLogId: string): unknown {
     action: "delete",
     message_count: 3,
     completed_at: "2026-03-24T15:45:00Z",
+    _mock: true,
+  };
+}
+
+function mockGetVendorRisk(domain: string): unknown {
+  return {
+    vendorDomain: domain,
+    riskLevel: "High",
+    vendorContacts: [
+      { email: "billing@" + domain, name: "Billing Department" },
+      { email: "support@" + domain, name: "Support Team" },
+    ],
+    companyContacts: [
+      { email: "jsmith@goodwin.com", name: "John Smith" },
+      { email: "mkim@goodwin.com", name: "Maria Kim" },
+    ],
+    vendorCountries: ["US", "DE"],
+    vendorIpAddresses: ["203.0.113.42", "198.51.100.10"],
+    analysis: [
+      "Vendor Compromise Seen in Abnormal Community",
+      "Suspicious mail-server configuration change detected",
+    ],
+    _mock: true,
+  };
+}
+
+function mockListVendors(pageSize: number = 25, pageNumber: number = 1): unknown {
+  return {
+    vendors: [
+      { vendorDomain: "acme-billing.com", riskLevel: "High" },
+      { vendorDomain: "legal-services.net", riskLevel: "Medium" },
+      { vendorDomain: "trusted-partner.com", riskLevel: "Low" },
+    ],
+    totalCount: 3,
+    pageSize,
+    pageNumber,
+    _mock: true,
+  };
+}
+
+function mockGetVendorActivity(domain: string, pageSize: number = 25, pageNumber: number = 1): unknown {
+  return {
+    vendorDomain: domain,
+    events: [
+      {
+        eventTimestamp: "2026-03-20T14:30:00Z",
+        eventType: "SuspiciousEmail",
+        suspiciousDomain: "acme-bi11ing.com",
+        domainIp: "185.220.101.42",
+        attackGoal: "Invoice Fraud",
+        actionTaken: "Blocked",
+        hasEngagement: false,
+        recipient: "jsmith@goodwin.com",
+        threatId: "threat-abc123",
+      },
+      {
+        eventTimestamp: "2026-03-19T09:15:00Z",
+        eventType: "DomainSpoof",
+        suspiciousDomain: "acme-billing.co",
+        domainIp: "192.0.2.99",
+        attackGoal: "Credential Harvest",
+        actionTaken: "Warned",
+        hasEngagement: true,
+        recipient: "mkim@goodwin.com",
+        threatId: "threat-def456",
+      },
+    ],
+    pageSize,
+    pageNumber,
+    _mock: true,
+  };
+}
+
+function mockListVendorCases(): unknown {
+  return {
+    vendorCases: [
+      {
+        caseId: "vc-001",
+        vendorDomain: "acme-billing.com",
+        firstObservedTime: "2026-03-18T00:00:00Z",
+        lastModifiedTime: "2026-03-20T14:30:00Z",
+        status: "Active",
+      },
+      {
+        caseId: "vc-002",
+        vendorDomain: "legal-services.net",
+        firstObservedTime: "2026-03-15T00:00:00Z",
+        lastModifiedTime: "2026-03-19T09:00:00Z",
+        status: "Resolved",
+      },
+    ],
+    totalCount: 2,
+    _mock: true,
+  };
+}
+
+function mockGetVendorCase(caseId: string): unknown {
+  return {
+    caseId,
+    vendorDomain: "acme-billing.com",
+    status: "Active",
+    insights: [
+      "Look-alike domain detected: acme-bi11ing.com (uses digit '1' instead of 'l')",
+      "Young sender domain: registered 14 days ago",
+      "Inconsistent registrar: domain transferred from GoDaddy to obscure registrar",
+    ],
+    timeline: [
+      {
+        timestamp: "2026-03-20T14:30:00Z",
+        sender: "invoice@acme-bi11ing.com",
+        recipient: "jsmith@goodwin.com",
+        subject: "Updated Wire Instructions - Invoice #4829",
+        judgement: "Malicious",
+        threatId: "threat-abc123",
+      },
+      {
+        timestamp: "2026-03-19T09:15:00Z",
+        sender: "support@acme-billing.co",
+        recipient: "mkim@goodwin.com",
+        subject: "Action Required: Verify Payment Details",
+        judgement: "Suspicious",
+        threatId: "threat-def456",
+      },
+    ],
     _mock: true,
   };
 }

@@ -162,6 +162,11 @@ export const INTEGRATIONS: IntegrationInfo[] = [
       "search_abnormal_messages",
       "remediate_abnormal_messages",
       "get_abnormal_remediation_status",
+      "get_vendor_risk",
+      "list_vendors",
+      "get_vendor_activity",
+      "list_vendor_cases",
+      "get_vendor_case",
     ],
     secrets: [
       {
