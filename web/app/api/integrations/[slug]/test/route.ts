@@ -45,10 +45,9 @@ const PROBES: Record<string, () => Promise<void>> = {
   "abnormal-security": async () => {
     const apiToken = await getToolSecret("ABNORMAL_API_TOKEN");
     if (!apiToken) throw new Error("Missing Abnormal Security credentials");
-    const res = await fetch("https://api.abnormalsecurity.com/v1/search", {
-      method: "POST",
-      headers: { Authorization: `Bearer ${apiToken}`, "Content-Type": "application/json" },
-      body: JSON.stringify({ source: "abnormal", page_size: 1 }),
+    // Use a lightweight GET endpoint to verify credentials
+    const res = await fetch("https://api.abnormalsecurity.com/v1/threats?pageSize=1&pageNumber=1", {
+      headers: { Authorization: `Bearer ${apiToken}` },
     });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
   },
@@ -83,10 +82,12 @@ export async function POST(
   try {
     await probe();
     return NextResponse.json({ success: true });
-  } catch {
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.error(`[integration-probe] ${slug} failed:`, message);
     return NextResponse.json({
       success: false,
-      error: "Connection test failed. Verify your credentials are correct.",
+      error: `Connection test failed: ${message}`,
     });
   }
 }
