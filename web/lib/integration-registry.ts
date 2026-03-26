@@ -87,7 +87,7 @@ export const INTEGRATIONS: IntegrationInfo[] = [
     imageSrc: "/microsoft-logo.png",
     description:
       "Identity and access management. Look up user details, check MFA status, and reset passwords.",
-    capabilities: ["get_user_info", "reset_user_password"],
+    capabilities: ["get_user_info", "reset_user_password", "list_ca_policies", "get_ca_policy", "list_named_locations"],
     secrets: [...AZURE_AD_SECRETS],
   },
   {

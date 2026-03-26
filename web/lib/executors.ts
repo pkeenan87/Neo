@@ -39,6 +39,9 @@ import type {
   ListAtoCasesInput,
   GetAtoCaseInput,
   ActionAtoCaseInput,
+  ListCaPoliciesInput,
+  GetCaPolicyInput,
+  ListNamedLocationsInput,
   GetFullToolResultInput,
   Message,
 } from "./types";
@@ -343,6 +346,180 @@ async function dismiss_user_risk({ upn, justification }: DismissUserRiskInput): 
   });
 
   return { dismissed: true, upn, justification };
+}
+
+// ── Conditional Access Policy Analyzer ────────────────────────
+
+async function resolveGraphNames(
+  token: string,
+  guids: string[],
+  type: "user" | "group" | "application",
+): Promise<Record<string, string>> {
+  const map: Record<string, string> = {};
+  if (guids.length === 0) return map;
+
+  // Cap at 50 to avoid throttling
+  const batch = guids.slice(0, 50);
+  const endpoint = type === "user" ? "users" : type === "group" ? "groups" : "servicePrincipals";
+
+  const results = await Promise.allSettled(
+    batch.map(async (id) => {
+      const res = await fetch(`https://graph.microsoft.com/v1.0/${endpoint}/${encodeURIComponent(id)}?$select=displayName`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (!res.ok) return null;
+      const data = await res.json();
+      return { id, name: (data as Record<string, unknown>).displayName as string };
+    }),
+  );
+
+  for (const r of results) {
+    if (r.status === "fulfilled" && r.value) {
+      map[r.value.id] = r.value.name;
+    }
+  }
+  return map;
+}
+
+const SPECIAL_USER_VALUES = new Set(["All", "GuestsOrExternalUsers", "None"]);
+const SPECIAL_APP_VALUES = new Set(["All", "None", "Office365"]);
+
+function collectGuidsFromConditions(conditions: Record<string, unknown> | undefined): {
+  userIds: Set<string>; groupIds: Set<string>; appIds: Set<string>;
+} {
+  const userIds = new Set<string>();
+  const groupIds = new Set<string>();
+  const appIds = new Set<string>();
+  if (!conditions) return { userIds, groupIds, appIds };
+
+  const users = conditions.users as Record<string, unknown> | undefined;
+  if (users) {
+    for (const arr of [users.includeUsers, users.excludeUsers] as (string[] | undefined)[]) {
+      for (const id of (arr ?? [])) if (!SPECIAL_USER_VALUES.has(id)) userIds.add(id);
+    }
+    for (const arr of [users.includeGroups, users.excludeGroups] as (string[] | undefined)[]) {
+      for (const id of (arr ?? [])) groupIds.add(id);
+    }
+  }
+  const apps = conditions.applications as Record<string, unknown> | undefined;
+  if (apps) {
+    for (const arr of [apps.includeApplications, apps.excludeApplications] as (string[] | undefined)[]) {
+      for (const id of (arr ?? [])) if (!SPECIAL_APP_VALUES.has(id)) appIds.add(id);
+    }
+  }
+  return { userIds, groupIds, appIds };
+}
+
+async function resolvePolicyNames(
+  token: string,
+  conditions: Record<string, unknown> | undefined,
+): Promise<{ users: Record<string, string>; groups: Record<string, string>; applications: Record<string, string> }> {
+  const { userIds, groupIds, appIds } = collectGuidsFromConditions(conditions);
+  const [users, groups, applications] = await Promise.all([
+    resolveGraphNames(token, [...userIds], "user"),
+    resolveGraphNames(token, [...groupIds], "group"),
+    resolveGraphNames(token, [...appIds], "application"),
+  ]);
+  return { users, groups, applications };
+}
+
+async function list_ca_policies({ resolve_names = false }: ListCaPoliciesInput): Promise<unknown> {
+  if (env.MOCK_MODE) {
+    return mockListCaPolicies();
+  }
+
+  const token = await getMSGraphToken();
+
+  // Use beta endpoint — superset of v1.0, handles preview feature policies
+  const res = await fetch("https://graph.microsoft.com/beta/identity/conditionalAccess/policies", {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+
+  if (!res.ok) {
+    const errText = await res.text();
+    throw new Error(`List CA policies failed (${res.status}): ${errText}`);
+  }
+
+  const data = await res.json();
+  const policies = (data as Record<string, unknown>).value ?? [];
+
+  if (resolve_names && Array.isArray(policies)) {
+    // Collect unique GUIDs from conditions across all policies and resolve
+    const allGuids = { userIds: new Set<string>(), groupIds: new Set<string>(), appIds: new Set<string>() };
+    for (const policy of policies as Record<string, unknown>[]) {
+      const { userIds, groupIds, appIds } = collectGuidsFromConditions(
+        (policy.conditions as Record<string, unknown> | undefined),
+      );
+      userIds.forEach((id) => allGuids.userIds.add(id));
+      groupIds.forEach((id) => allGuids.groupIds.add(id));
+      appIds.forEach((id) => allGuids.appIds.add(id));
+    }
+
+    const [userNames, groupNames, appNames] = await Promise.all([
+      resolveGraphNames(token, [...allGuids.userIds], "user"),
+      resolveGraphNames(token, [...allGuids.groupIds], "group"),
+      resolveGraphNames(token, [...allGuids.appIds], "application"),
+    ]);
+
+    return {
+      policies,
+      resolvedNames: { users: userNames, groups: groupNames, applications: appNames },
+    };
+  }
+
+  return { policies };
+}
+
+async function get_ca_policy({ policy_id, resolve_names = false }: GetCaPolicyInput): Promise<unknown> {
+  if (!policy_id || policy_id.trim() === "") {
+    throw new Error("policy_id is required and must be a non-empty string");
+  }
+
+  if (env.MOCK_MODE) {
+    return mockGetCaPolicy(policy_id);
+  }
+
+  const token = await getMSGraphToken();
+
+  const res = await fetch(
+    `https://graph.microsoft.com/beta/identity/conditionalAccess/policies/${encodeURIComponent(policy_id)}`,
+    { headers: { Authorization: `Bearer ${token}` } },
+  );
+
+  if (!res.ok) {
+    const errText = await res.text();
+    throw new Error(`Get CA policy failed (${res.status}): ${errText}`);
+  }
+
+  const policy = await res.json();
+
+  if (resolve_names) {
+    const policyObj = policy as Record<string, unknown>;
+    const resolvedNames = await resolvePolicyNames(token, policyObj.conditions as Record<string, unknown> | undefined);
+    return { policy, resolvedNames };
+  }
+
+  return { policy };
+}
+
+async function list_named_locations(_input: ListNamedLocationsInput): Promise<unknown> {
+  if (env.MOCK_MODE) {
+    return mockListNamedLocations();
+  }
+
+  const token = await getMSGraphToken();
+
+  const res = await fetch("https://graph.microsoft.com/v1.0/identity/conditionalAccess/namedLocations", {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+
+  if (!res.ok) {
+    const errText = await res.text();
+    throw new Error(`List named locations failed (${res.status}): ${errText}`);
+  }
+
+  const data = await res.json();
+  return { locations: (data as Record<string, unknown>).value ?? [] };
 }
 
 async function isolate_machine({ hostname, machine_id, platform, isolation_type = "Full", justification }: IsolateMachineInput): Promise<unknown> {
@@ -2040,6 +2217,9 @@ const executors: Record<string, (input: Record<string, unknown>) => Promise<unkn
   get_user_info: (input) => get_user_info(input as unknown as UserInfoInput),
   reset_user_password: (input) => reset_user_password(input as unknown as ResetPasswordInput),
   dismiss_user_risk: (input) => dismiss_user_risk(input as unknown as DismissUserRiskInput),
+  list_ca_policies: (input) => list_ca_policies(input as unknown as ListCaPoliciesInput),
+  get_ca_policy: (input) => get_ca_policy(input as unknown as GetCaPolicyInput),
+  list_named_locations: (input) => list_named_locations(input as unknown as ListNamedLocationsInput),
   isolate_machine: (input) => isolate_machine(input as unknown as IsolateMachineInput),
   unisolate_machine: (input) => unisolate_machine(input as unknown as UnisolateMachineInput),
   get_machine_isolation_status: (input) => get_machine_isolation_status(input as unknown as MachineIsolationStatusInput),
@@ -2979,6 +3159,92 @@ function mockGetAtoCase(caseId: string): unknown {
         },
       ],
     },
+    _mock: true,
+  };
+}
+
+function mockListCaPolicies(): unknown {
+  return {
+    policies: [
+      {
+        id: "ca-001",
+        displayName: "Require MFA for All Users",
+        state: "enabled",
+        conditions: {
+          users: { includeUsers: ["All"], excludeUsers: [], includeGroups: [], excludeGroups: ["grp-break-glass"] },
+          applications: { includeApplications: ["All"], excludeApplications: [] },
+          clientAppTypes: ["browser", "mobileAppsAndDesktopClients"],
+          locations: { includeLocations: ["All"], excludeLocations: ["AllTrusted"] },
+        },
+        grantControls: { operator: "OR", builtInControls: ["mfa"] },
+        sessionControls: null,
+      },
+      {
+        id: "ca-002",
+        displayName: "Block Legacy Authentication",
+        state: "enabled",
+        conditions: {
+          users: { includeUsers: ["All"], excludeUsers: [] },
+          applications: { includeApplications: ["All"], excludeApplications: [] },
+          clientAppTypes: ["exchangeActiveSync", "other"],
+        },
+        grantControls: { operator: "OR", builtInControls: ["block"] },
+      },
+      {
+        id: "ca-003",
+        displayName: "Require Compliant Device for Admins",
+        state: "enabledForReportingButNotEnforced",
+        conditions: {
+          users: { includeUsers: [], includeRoles: ["role-global-admin", "role-security-admin"] },
+          applications: { includeApplications: ["All"], excludeApplications: [] },
+        },
+        grantControls: { operator: "AND", builtInControls: ["mfa", "compliantDevice"] },
+        sessionControls: { signInFrequency: { value: 4, type: "hours" } },
+      },
+    ],
+    _mock: true,
+  };
+}
+
+function mockGetCaPolicy(policyId: string): unknown {
+  return {
+    policy: {
+      id: policyId,
+      displayName: "Require MFA for All Users",
+      state: "enabled",
+      conditions: {
+        users: { includeUsers: ["All"], excludeUsers: [], includeGroups: [], excludeGroups: ["grp-break-glass"] },
+        applications: { includeApplications: ["All"], excludeApplications: [] },
+        clientAppTypes: ["browser", "mobileAppsAndDesktopClients"],
+        locations: { includeLocations: ["All"], excludeLocations: ["AllTrusted"] },
+      },
+      grantControls: { operator: "OR", builtInControls: ["mfa"] },
+    },
+    _mock: true,
+  };
+}
+
+function mockListNamedLocations(): unknown {
+  return {
+    locations: [
+      {
+        "@odata.type": "#microsoft.graph.ipNamedLocation",
+        id: "loc-001",
+        displayName: "Corporate Office IPs",
+        isTrusted: true,
+        ipRanges: [
+          { "@odata.type": "#microsoft.graph.iPv4CidrRange", cidrAddress: "198.51.100.0/24" },
+          { "@odata.type": "#microsoft.graph.iPv4CidrRange", cidrAddress: "203.0.113.0/24" },
+        ],
+      },
+      {
+        "@odata.type": "#microsoft.graph.countryNamedLocation",
+        id: "loc-002",
+        displayName: "Blocked Countries",
+        countriesAndRegions: ["RU", "CN", "KP", "IR"],
+        includeUnknownCountriesAndRegions: true,
+      },
+    ],
     _mock: true,
   };
 }

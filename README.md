@@ -121,6 +121,9 @@ See [docs/configuration.md](docs/configuration.md) for Entra ID setup and all co
 | `get_full_tool_result` | Read-only | Retrieve full content of a previously truncated tool result |
 | `reset_user_password` | Destructive | Force password reset + session revocation |
 | `dismiss_user_risk` | Destructive | Dismiss user risk in Entra ID Identity Protection |
+| `list_ca_policies` | Read-only | List all Conditional Access policies |
+| `get_ca_policy` | Read-only | Get CA policy details by ID |
+| `list_named_locations` | Read-only | List named locations (IP ranges, countries) for CA |
 | `isolate_machine` | Destructive | Network-isolate an endpoint |
 | `unisolate_machine` | Destructive | Release an isolated machine |
 | `report_message_as_phishing` | Destructive | Report a message as phishing/junk in a user's mailbox |

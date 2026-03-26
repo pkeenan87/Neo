@@ -202,6 +202,53 @@ export const TOOLS: Tool[] = [
     },
   },
   {
+    name: "list_ca_policies",
+    description:
+      "List all Conditional Access policies from Microsoft Entra ID. Returns policy names, states (enabled/disabled/report-only), " +
+      "conditions (users, apps, locations, platforms, risk levels), grant controls (MFA, block, compliant device), and session controls. " +
+      "Set resolve_names to true to resolve GUIDs to display names (slower).",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        resolve_names: {
+          type: "boolean",
+          description: "Resolve user/group/role/app GUIDs to display names (default: false — faster without resolution)",
+        },
+      },
+      required: [],
+    },
+  },
+  {
+    name: "get_ca_policy",
+    description:
+      "Get full details of a specific Conditional Access policy by ID from Microsoft Entra ID.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        policy_id: {
+          type: "string",
+          description: "The Conditional Access policy ID",
+        },
+        resolve_names: {
+          type: "boolean",
+          description: "Resolve user/group/role/app GUIDs to display names (default: false)",
+        },
+      },
+      required: ["policy_id"],
+    },
+  },
+  {
+    name: "list_named_locations",
+    description:
+      "List all named locations configured in Conditional Access. Returns IP-based locations (CIDR ranges with trusted flag) " +
+      "and country-based locations. Useful for resolving location GUIDs referenced in CA policies.",
+    input_schema: {
+      type: "object" as const,
+      properties: {},
+      required: [],
+    },
+  },
+  {
     name: "isolate_machine",
     description: "⚠️ DESTRUCTIVE — Network-isolate an endpoint using Microsoft Defender for Endpoint or CrowdStrike RTR. The machine will lose all network connectivity except the XDR management channel.",
     input_schema: {

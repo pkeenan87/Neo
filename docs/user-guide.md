@@ -791,6 +791,9 @@ Neo includes built-in protection against prompt injection attacks. This is trans
 | `get_full_tool_result` | Retrieve the full, untruncated content of a previous tool result that was truncated to fit the context window. | All |
 | `reset_user_password` | Force password reset. Optionally revokes all sessions and refresh tokens. Requires confirmation and justification. | Admin |
 | `dismiss_user_risk` | Dismiss risk state for a user in Entra ID Identity Protection. Re-enables login for users blocked by conditional access risk policies. Requires confirmation. | Admin |
+| `list_ca_policies` | List all Conditional Access policies with states, conditions, and grant controls. Optional GUID-to-name resolution. | All |
+| `get_ca_policy` | Get full details of a specific Conditional Access policy by ID. | All |
+| `list_named_locations` | List named locations (IP ranges and countries) used in Conditional Access policies. | All |
 | `isolate_machine` | Network-isolate a machine via Defender or CrowdStrike. Requires confirmation and justification. | Admin |
 | `unisolate_machine` | Release a previously isolated machine. Requires confirmation and justification. | Admin |
 | `report_message_as_phishing` | Report a message in a user's mailbox as phishing or junk via Microsoft Graph. Requires confirmation and justification. | Admin |

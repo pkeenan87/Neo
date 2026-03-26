@@ -432,6 +432,19 @@ export interface ActionAtoCaseInput {
   justification: string;
 }
 
+export interface ListCaPoliciesInput {
+  resolve_names?: boolean;
+}
+
+export interface GetCaPolicyInput {
+  policy_id: string;
+  resolve_names?: boolean;
+}
+
+export interface ListNamedLocationsInput {
+  // no required params
+}
+
 export interface GetFullToolResultInput {
   tool_use_id: string;
 }
