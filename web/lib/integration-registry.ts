@@ -102,6 +102,11 @@ export const INTEGRATIONS: IntegrationInfo[] = [
       "get_threatlocker_approval",
       "approve_threatlocker_request",
       "deny_threatlocker_request",
+      "search_threatlocker_computers",
+      "get_threatlocker_computer",
+      "set_maintenance_mode",
+      "schedule_bulk_maintenance",
+      "enable_secured_mode",
     ],
     secrets: [
       {

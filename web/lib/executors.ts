@@ -42,6 +42,11 @@ import type {
   ListCaPoliciesInput,
   GetCaPolicyInput,
   ListNamedLocationsInput,
+  SearchThreatLockerComputersInput,
+  GetThreatLockerComputerInput,
+  SetMaintenanceModeInput,
+  ScheduleBulkMaintenanceInput,
+  EnableSecuredModeInput,
   GetFullToolResultInput,
   Message,
 } from "./types";
@@ -1122,6 +1127,329 @@ async function deny_threatlocker_request({
     denied: true,
     approvalRequestId: approval_request_id,
     justification,
+  };
+}
+
+// ── ThreatLocker Maintenance Mode ────────────────────────────
+
+const MAINTENANCE_MODE_MAP: Record<string, number> = {
+  monitor: 1, installation: 2, learning: 3, secured: 8,
+  network_monitor: 17, storage_monitor: 18,
+};
+
+const BULK_MODE_MAP: Record<string, number> = {
+  monitor: 1, learning: 3, disable_tamper: 6, installation: 2,
+};
+
+const SEARCH_BY_MAP: Record<string, number> = {
+  name: 1, username: 2, ip: 4,
+};
+
+async function search_threatlocker_computers({
+  search_text,
+  search_by = "name",
+  page_size = 25,
+}: SearchThreatLockerComputersInput): Promise<unknown> {
+  if (!search_text || search_text.trim() === "") {
+    throw new Error("search_text is required");
+  }
+
+  if (env.MOCK_MODE) {
+    return mockSearchThreatLockerComputers(search_text);
+  }
+
+  const { apiKey, baseUrl, orgId } = await getThreatLockerConfig();
+  const ps = Math.max(1, Math.min(page_size, 50));
+
+  const res = await fetch(`${baseUrl}/Computer/ComputerGetByAllParameters`, {
+    method: "POST",
+    headers: {
+      authorization: apiKey,
+      "Content-Type": "application/json",
+      managedOrganizationId: orgId,
+    },
+    body: JSON.stringify({
+      orderBy: "computername",
+      pageNumber: 1,
+      pageSize: ps,
+      searchBy: SEARCH_BY_MAP[search_by] ?? 1,
+      searchText: search_text.slice(0, 200),
+    }),
+  });
+
+  if (!res.ok) {
+    const errText = await res.text();
+    throw new Error(`ThreatLocker computer search failed (${res.status}): ${errText}`);
+  }
+
+  return await res.json();
+}
+
+async function get_threatlocker_computer({ computer_id }: GetThreatLockerComputerInput): Promise<unknown> {
+  validateGuid(computer_id, "computer_id");
+
+  if (env.MOCK_MODE) {
+    return mockGetThreatLockerComputer(computer_id);
+  }
+
+  const { apiKey, baseUrl, orgId } = await getThreatLockerConfig();
+
+  const res = await fetch(
+    `${baseUrl}/Computer/ComputerGetForEditById?computerId=${encodeURIComponent(computer_id)}`,
+    {
+      headers: {
+        authorization: apiKey,
+        managedOrganizationId: orgId,
+      },
+    },
+  );
+
+  if (!res.ok) {
+    const errText = await res.text();
+    throw new Error(`ThreatLocker get computer failed (${res.status}): ${errText}`);
+  }
+
+  return await res.json();
+}
+
+async function set_maintenance_mode({
+  computer_id,
+  organization_id,
+  mode,
+  duration_hours,
+  end_time,
+  learning_type = "autogroup",
+}: SetMaintenanceModeInput): Promise<unknown> {
+  validateGuid(computer_id, "computer_id");
+  validateGuid(organization_id, "organization_id");
+
+  if (!(mode in MAINTENANCE_MODE_MAP)) {
+    throw new Error(`Invalid mode: ${mode}. Valid modes: ${Object.keys(MAINTENANCE_MODE_MAP).join(", ")}`);
+  }
+
+  // For secured mode, delegate to enable_secured_mode
+  if (mode === "secured") {
+    return enable_secured_mode({ computers: [{ computer_id, organization_id }] });
+  }
+
+  // Calculate end time
+  let endDateTime: string;
+  if (end_time) {
+    validateIsoDatetime(end_time, "end_time");
+    if (new Date(end_time).getTime() < Date.now()) {
+      throw new Error("end_time is in the past");
+    }
+    endDateTime = new Date(end_time).toISOString();
+  } else if (duration_hours && duration_hours > 0) {
+    endDateTime = new Date(Date.now() + duration_hours * 60 * 60 * 1000).toISOString();
+  } else {
+    // Default 1 hour
+    endDateTime = new Date(Date.now() + 60 * 60 * 1000).toISOString();
+  }
+
+  const startDateTime = new Date().toISOString();
+
+  // Determine applicationId
+  const VALID_LEARNING_TYPES = ["autocomp", "autogroup", "autosystem"] as const;
+  let applicationId = "";
+  if (mode === "learning") {
+    if (!VALID_LEARNING_TYPES.includes(learning_type as typeof VALID_LEARNING_TYPES[number])) {
+      throw new Error(`Invalid learning_type: ${learning_type}. Valid types: ${VALID_LEARNING_TYPES.join(", ")}`);
+    }
+    applicationId = learning_type;
+  }
+
+  if (env.MOCK_MODE) {
+    return {
+      success: true,
+      computerId: computer_id,
+      mode,
+      maintenanceTypeId: MAINTENANCE_MODE_MAP[mode],
+      startDateTime,
+      endDateTime,
+      _mock: true,
+    };
+  }
+
+  const { apiKey, baseUrl, orgId } = await getThreatLockerConfig();
+
+  const res = await fetch(`${baseUrl}/Computer/ComputerUpdateMaintenanceMode`, {
+    method: "POST",
+    headers: {
+      authorization: apiKey,
+      "Content-Type": "application/json",
+      managedOrganizationId: orgId,
+    },
+    body: JSON.stringify({
+      applicationId,
+      computerDetailDto: {
+        computerId: computer_id,
+        organizationId: organization_id,
+        maintenanceTypeId: MAINTENANCE_MODE_MAP[mode],
+        maintenanceEndDate: endDateTime,
+        startDateTime,
+      },
+    }),
+  });
+
+  if (!res.ok) {
+    const errText = await res.text();
+    throw new Error(`ThreatLocker set maintenance mode failed (${res.status}): ${errText}`);
+  }
+
+  logger.info("ThreatLocker maintenance mode set", "threatlocker", {
+    toolName: "set_maintenance_mode",
+    mode,
+  });
+
+  return {
+    success: true,
+    computerId: computer_id,
+    mode,
+    maintenanceTypeId: MAINTENANCE_MODE_MAP[mode],
+    startDateTime,
+    endDateTime,
+  };
+}
+
+async function schedule_bulk_maintenance({
+  computers,
+  mode,
+  start_time,
+  end_time,
+  permit_end = false,
+}: ScheduleBulkMaintenanceInput): Promise<unknown> {
+  if (!Array.isArray(computers) || computers.length === 0) {
+    throw new Error("computers array is required and must not be empty");
+  }
+  for (const c of computers) {
+    validateGuid(c.computer_id, "computer_id");
+    validateGuid(c.organization_id, "organization_id");
+    validateGuid(c.computer_group_id, "computer_group_id");
+  }
+  if (!(mode in BULK_MODE_MAP)) {
+    throw new Error(`Invalid bulk mode: ${mode}. Valid modes: ${Object.keys(BULK_MODE_MAP).join(", ")}`);
+  }
+  validateIsoDatetime(start_time, "start_time");
+  validateIsoDatetime(end_time, "end_time");
+
+  const startMs = new Date(start_time).getTime();
+  const endMs = new Date(end_time).getTime();
+  if (endMs <= startMs) {
+    throw new Error("end_time must be after start_time");
+  }
+  if (endMs <= Date.now()) {
+    throw new Error("end_time must be in the future");
+  }
+
+  if (env.MOCK_MODE) {
+    return {
+      success: true,
+      count: computers.length,
+      mode,
+      startTime: start_time,
+      endTime: end_time,
+      _mock: true,
+    };
+  }
+
+  const { apiKey, baseUrl, orgId } = await getThreatLockerConfig();
+
+  let applicationId = "";
+  if (mode === "learning") {
+    applicationId = "autogroup";
+  }
+
+  const res = await fetch(`${baseUrl}/Computer/ComputerDisableProtection`, {
+    method: "POST",
+    headers: {
+      authorization: apiKey,
+      "Content-Type": "application/json",
+      managedOrganizationId: orgId,
+    },
+    body: JSON.stringify({
+      computerDetailDtos: computers.map((c) => ({
+        computerId: c.computer_id,
+        organizationId: c.organization_id,
+        computerGroupId: c.computer_group_id,
+      })),
+      startDate: new Date(start_time).toISOString(),
+      endDate: new Date(end_time).toISOString(),
+      maintenanceModeType: BULK_MODE_MAP[mode],
+      permitEnd: permit_end,
+      applicationId,
+    }),
+  });
+
+  if (!res.ok) {
+    const errText = await res.text();
+    throw new Error(`ThreatLocker schedule bulk maintenance failed (${res.status}): ${errText}`);
+  }
+
+  logger.info("ThreatLocker bulk maintenance scheduled", "threatlocker", {
+    toolName: "schedule_bulk_maintenance",
+    mode,
+    count: computers.length,
+  });
+
+  return {
+    success: true,
+    count: computers.length,
+    mode,
+    startTime: new Date(start_time).toISOString(),
+    endTime: new Date(end_time).toISOString(),
+  };
+}
+
+async function enable_secured_mode({ computers }: EnableSecuredModeInput): Promise<unknown> {
+  if (!Array.isArray(computers) || computers.length === 0) {
+    throw new Error("computers array is required and must not be empty");
+  }
+  for (const c of computers) {
+    validateGuid(c.computer_id, "computer_id");
+    validateGuid(c.organization_id, "organization_id");
+  }
+
+  if (env.MOCK_MODE) {
+    return {
+      success: true,
+      count: computers.length,
+      mode: "secured",
+      _mock: true,
+    };
+  }
+
+  const { apiKey, baseUrl, orgId } = await getThreatLockerConfig();
+
+  const res = await fetch(`${baseUrl}/Computer/ComputerEnableProtection`, {
+    method: "POST",
+    headers: {
+      authorization: apiKey,
+      "Content-Type": "application/json",
+      managedOrganizationId: orgId,
+    },
+    body: JSON.stringify({
+      computerDetailDtos: computers.map((c) => ({
+        computerId: c.computer_id,
+        organizationId: c.organization_id,
+      })),
+    }),
+  });
+
+  if (!res.ok) {
+    const errText = await res.text();
+    throw new Error(`ThreatLocker enable secured mode failed (${res.status}): ${errText}`);
+  }
+
+  logger.info("ThreatLocker secured mode enabled", "threatlocker", {
+    toolName: "enable_secured_mode",
+    count: computers.length,
+  });
+
+  return {
+    success: true,
+    count: computers.length,
+    mode: "secured",
   };
 }
 
@@ -2229,6 +2557,11 @@ const executors: Record<string, (input: Record<string, unknown>) => Promise<unkn
   get_threatlocker_approval: (input) => get_threatlocker_approval(input as unknown as GetThreatLockerApprovalInput),
   approve_threatlocker_request: (input) => approve_threatlocker_request(input as unknown as ApproveThreatLockerRequestInput),
   deny_threatlocker_request: (input) => deny_threatlocker_request(input as unknown as DenyThreatLockerRequestInput),
+  search_threatlocker_computers: (input) => search_threatlocker_computers(input as unknown as SearchThreatLockerComputersInput),
+  get_threatlocker_computer: (input) => get_threatlocker_computer(input as unknown as GetThreatLockerComputerInput),
+  set_maintenance_mode: (input) => set_maintenance_mode(input as unknown as SetMaintenanceModeInput),
+  schedule_bulk_maintenance: (input) => schedule_bulk_maintenance(input as unknown as ScheduleBulkMaintenanceInput),
+  enable_secured_mode: (input) => enable_secured_mode(input as unknown as EnableSecuredModeInput),
   block_indicator: (input) => block_indicator(input as unknown as BlockIndicatorInput),
   import_indicators: (input) => import_indicators(input as unknown as ImportIndicatorsInput),
   list_indicators: (input) => list_indicators(input as unknown as ListIndicatorsInput),
@@ -3245,6 +3578,52 @@ function mockListNamedLocations(): unknown {
         includeUnknownCountriesAndRegions: true,
       },
     ],
+    _mock: true,
+  };
+}
+
+function mockSearchThreatLockerComputers(searchText: string): unknown {
+  return {
+    computers: [
+      {
+        computerId: "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+        computerName: searchText.toUpperCase(),
+        organizationId: "org-guid-placeholder",
+        computerGroupId: "group-guid-placeholder",
+        userName: "jsmith",
+        lastCheckIn: "2026-03-26T10:00:00Z",
+        computerMode: "Secured",
+        osType: "Windows 11",
+      },
+      {
+        computerId: "b2c3d4e5-f6a7-8901-bcde-f12345678901",
+        computerName: searchText.toUpperCase() + "-02",
+        organizationId: "org-guid-placeholder",
+        computerGroupId: "group-guid-placeholder",
+        userName: "mkim",
+        lastCheckIn: "2026-03-26T09:30:00Z",
+        computerMode: "Secured",
+        osType: "Windows 10",
+      },
+    ],
+    totalCount: 2,
+    _mock: true,
+  };
+}
+
+function mockGetThreatLockerComputer(computerId: string): unknown {
+  return {
+    computerId,
+    computerName: "DESKTOP-JS4729",
+    organizationId: "org-guid-placeholder",
+    computerGroupId: "group-guid-placeholder",
+    userName: "jsmith",
+    lastCheckIn: "2026-03-26T10:00:00Z",
+    computerMode: "Secured",
+    maintenanceTypeId: 8,
+    osType: "Windows 11",
+    ipAddress: "10.1.50.42",
+    agentVersion: "10.5.2",
     _mock: true,
   };
 }

@@ -801,6 +801,11 @@ Neo includes built-in protection against prompt injection attacks. This is trans
 | `get_threatlocker_approval` | Get full details of a specific ThreatLocker approval request by ID. | All |
 | `approve_threatlocker_request` | Approve a ThreatLocker application approval request. Requires confirmation and justification. | Admin |
 | `deny_threatlocker_request` | Deny (ignore) a ThreatLocker application approval request. Requires confirmation and justification. | Admin |
+| `search_threatlocker_computers` | Search for ThreatLocker computers by hostname, username, or IP. | All |
+| `get_threatlocker_computer` | Get full details of a ThreatLocker computer including current maintenance mode. | All |
+| `set_maintenance_mode` | Set a computer's ThreatLocker maintenance mode (learning, installation, monitor, secured). Requires confirmation. | Admin |
+| `schedule_bulk_maintenance` | Schedule maintenance mode on multiple ThreatLocker computers. Requires confirmation. | Admin |
+| `enable_secured_mode` | Return ThreatLocker computers to secured mode. Requires confirmation. | Admin |
 | `block_indicator` | Create a custom indicator in Defender for Endpoint to block, warn, or audit a domain, IP, URL, or file hash. Requires confirmation. | Admin |
 | `import_indicators` | Batch import up to 500 custom indicators into Defender for Endpoint. Requires confirmation. | Admin |
 | `list_indicators` | List current custom indicators in Defender for Endpoint, filterable by type. | All |

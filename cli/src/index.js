@@ -46,6 +46,11 @@ const TOOL_COLORS = {
   get_threatlocker_approval:  chalk.green,
   approve_threatlocker_request: chalk.red.bold,
   deny_threatlocker_request:   chalk.red.bold,
+  search_threatlocker_computers: chalk.green,
+  get_threatlocker_computer:   chalk.green,
+  set_maintenance_mode:        chalk.red.bold,
+  schedule_bulk_maintenance:   chalk.red.bold,
+  enable_secured_mode:         chalk.red.bold,
   block_indicator:             chalk.red.bold,
   import_indicators:           chalk.red.bold,
   list_indicators:             chalk.yellow,
@@ -191,7 +196,10 @@ const TOOL_DESCRIPTIONS = {
   block_indicator:              (input) => `Block ${chalk.bold(input.indicator_type)} indicator: ${chalk.bold(input.value)}`,
   import_indicators:            (input) => `Import ${chalk.bold(String(input.indicators?.length ?? 0))} indicators into Defender`,
   delete_indicator:             (input) => `Delete Defender indicator #${chalk.bold(String(input.indicator_id))} — ${input.justification || "no reason given"}`,
-  action_ato_case:              (input) => `Mark ATO case ${chalk.bold(input.case_id)} as ${chalk.bold(input.action)}`
+  action_ato_case:              (input) => `Mark ATO case ${chalk.bold(input.case_id)} as ${chalk.bold(input.action)}`,
+  set_maintenance_mode:         (input) => `Set ${chalk.bold(input.computer_id)} to ${chalk.bold(input.mode)} mode`,
+  schedule_bulk_maintenance:    (input) => `Schedule ${chalk.bold(input.mode)} for ${chalk.bold(String(input.computers?.length ?? 0))} computers`,
+  enable_secured_mode:          (input) => `Enable secured mode on ${chalk.bold(String(input.computers?.length ?? 0))} computers`
 };
 
 async function promptForConfirmation(rl, tool) {

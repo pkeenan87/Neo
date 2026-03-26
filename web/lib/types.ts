@@ -445,6 +445,40 @@ export interface ListNamedLocationsInput {
   // no required params
 }
 
+export interface SearchThreatLockerComputersInput {
+  search_text: string;
+  search_by?: "name" | "username" | "ip";
+  page_size?: number;
+}
+
+export interface GetThreatLockerComputerInput {
+  computer_id: string;
+}
+
+export type MaintenanceMode = "learning" | "installation" | "monitor" | "secured" | "network_monitor" | "storage_monitor";
+export type BulkMaintenanceMode = "learning" | "installation" | "monitor" | "disable_tamper";
+
+export interface SetMaintenanceModeInput {
+  computer_id: string;
+  organization_id: string;
+  mode: MaintenanceMode;
+  duration_hours?: number;
+  end_time?: string;
+  learning_type?: "autocomp" | "autogroup" | "autosystem";
+}
+
+export interface ScheduleBulkMaintenanceInput {
+  computers: { computer_id: string; organization_id: string; computer_group_id: string }[];
+  mode: BulkMaintenanceMode;
+  start_time: string;
+  end_time: string;
+  permit_end?: boolean;
+}
+
+export interface EnableSecuredModeInput {
+  computers: { computer_id: string; organization_id: string }[];
+}
+
 export interface GetFullToolResultInput {
   tool_use_id: string;
 }

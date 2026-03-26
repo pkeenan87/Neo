@@ -419,6 +419,149 @@ export const TOOLS: Tool[] = [
     },
   },
   {
+    name: "search_threatlocker_computers",
+    description:
+      "Search for computers in ThreatLocker by hostname, username, or last check-in IP. " +
+      "Returns computer IDs needed for maintenance mode actions.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        search_text: {
+          type: "string",
+          description: "Computer name, username, or IP address to search for",
+        },
+        search_by: {
+          type: "string",
+          enum: ["name", "username", "ip"],
+          description: "Search field (default: name)",
+        },
+        page_size: {
+          type: "number",
+          description: "Results per page (default: 25)",
+        },
+      },
+      required: ["search_text"],
+    },
+  },
+  {
+    name: "get_threatlocker_computer",
+    description:
+      "Get full details of a ThreatLocker computer including current maintenance mode, group, and options.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        computer_id: {
+          type: "string",
+          description: "The computer GUID",
+        },
+      },
+      required: ["computer_id"],
+    },
+  },
+  {
+    name: "set_maintenance_mode",
+    description:
+      "⚠️ DESTRUCTIVE — Set a ThreatLocker computer's maintenance mode. " +
+      "Supports learning, installation, monitor, secured, network monitor, and storage monitor modes. " +
+      "Specify duration in hours or an absolute end time.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        computer_id: {
+          type: "string",
+          description: "The computer GUID",
+        },
+        organization_id: {
+          type: "string",
+          description: "The organization GUID",
+        },
+        mode: {
+          type: "string",
+          enum: ["learning", "installation", "monitor", "secured", "network_monitor", "storage_monitor"],
+          description: "Maintenance mode to set",
+        },
+        duration_hours: {
+          type: "number",
+          description: "Duration in hours (calculates end time from now)",
+        },
+        end_time: {
+          type: "string",
+          description: "Absolute end time (ISO-8601). Takes precedence over duration_hours.",
+        },
+        learning_type: {
+          type: "string",
+          enum: ["autocomp", "autogroup", "autosystem"],
+          description: "Learning mode type (default: autogroup). Only used when mode is 'learning'.",
+        },
+      },
+      required: ["computer_id", "organization_id", "mode"],
+    },
+  },
+  {
+    name: "schedule_bulk_maintenance",
+    description:
+      "⚠️ DESTRUCTIVE — Schedule maintenance mode on multiple ThreatLocker computers with a start and end time window.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        computers: {
+          type: "array",
+          description: "Array of computers, each with computer_id, organization_id, and computer_group_id",
+          items: {
+            type: "object",
+            properties: {
+              computer_id: { type: "string", description: "Computer GUID" },
+              organization_id: { type: "string", description: "Organization GUID" },
+              computer_group_id: { type: "string", description: "Computer group GUID" },
+            },
+            required: ["computer_id", "organization_id", "computer_group_id"],
+          },
+        },
+        mode: {
+          type: "string",
+          enum: ["learning", "installation", "monitor", "disable_tamper"],
+          description: "Maintenance mode to schedule",
+        },
+        start_time: {
+          type: "string",
+          description: "Schedule start time (ISO-8601)",
+        },
+        end_time: {
+          type: "string",
+          description: "Schedule end time (ISO-8601)",
+        },
+        permit_end: {
+          type: "boolean",
+          description: "Allow end user to end maintenance early from their computer (default: false)",
+        },
+      },
+      required: ["computers", "mode", "start_time", "end_time"],
+    },
+  },
+  {
+    name: "enable_secured_mode",
+    description:
+      "⚠️ DESTRUCTIVE — Return ThreatLocker computers to Secured mode (end maintenance mode).",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        computers: {
+          type: "array",
+          description: "Array of computers, each with computer_id and organization_id",
+          items: {
+            type: "object",
+            properties: {
+              computer_id: { type: "string", description: "Computer GUID" },
+              organization_id: { type: "string", description: "Organization GUID" },
+            },
+            required: ["computer_id", "organization_id"],
+          },
+        },
+      },
+      required: ["computers"],
+    },
+  },
+  {
     name: "block_indicator",
     description:
       "⚠️ DESTRUCTIVE — Create a custom indicator in Microsoft Defender for Endpoint. " +
@@ -945,6 +1088,9 @@ export const DESTRUCTIVE_TOOLS = new Set([
   "report_message_as_phishing",
   "approve_threatlocker_request",
   "deny_threatlocker_request",
+  "set_maintenance_mode",
+  "schedule_bulk_maintenance",
+  "enable_secured_mode",
   "block_indicator",
   "import_indicators",
   "delete_indicator",
