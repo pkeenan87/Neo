@@ -47,6 +47,18 @@ import type {
   SetMaintenanceModeInput,
   ScheduleBulkMaintenanceInput,
   EnableSecuredModeInput,
+  ListAppOmniServicesInput,
+  GetAppOmniServiceInput,
+  ListAppOmniFindingsInput,
+  GetAppOmniFindingInput,
+  ListAppOmniFindingOccurrencesInput,
+  ListAppOmniInsightsInput,
+  ListAppOmniPolicyIssuesInput,
+  ListAppOmniIdentitiesInput,
+  GetAppOmniIdentityInput,
+  ListAppOmniDiscoveredAppsInput,
+  GetAppOmniAuditLogsInput,
+  ActionAppOmniFindingInput,
   GetFullToolResultInput,
   Message,
 } from "./types";
@@ -2499,6 +2511,728 @@ async function action_ato_case({ case_id, action, justification }: ActionAtoCase
   return result;
 }
 
+// ── AppOmni ──────────────────────────────────────────────────
+
+const AO_SUBDOMAIN_RE = /^[a-z0-9]([a-z0-9-]*[a-z0-9])?$/;
+
+const VALID_DETAILED_STATUSES = new Set(["new", "in_research", "in_remediation", "done"]);
+const VALID_EXCEPTION_REASONS = new Set([
+  "risk_accepted", "false_positive", "compensating_controls", "not_applicable", "confirmed_intended",
+]);
+
+async function getAppOmniConfig(): Promise<{ accessToken: string; baseUrl: string }> {
+  const accessToken = await getToolSecret("APPOMNI_ACCESS_TOKEN");
+  let subdomain = await getToolSecret("APPOMNI_SUBDOMAIN");
+
+  if (!accessToken || !subdomain) {
+    throw new Error(
+      "AppOmni integration not configured — go to Settings > Integrations to add your access token and subdomain.",
+    );
+  }
+
+  // Normalize: strip full URL to just subdomain
+  subdomain = subdomain.replace(/^https?:\/\//, "").replace(/\.appomni\.com.*$/, "").replace(/\/$/, "");
+
+  if (!AO_SUBDOMAIN_RE.test(subdomain)) {
+    throw new Error(
+      "APPOMNI_SUBDOMAIN contains invalid characters. Expected a lowercase subdomain (e.g., 'acme').",
+    );
+  }
+
+  return { accessToken, baseUrl: `https://${subdomain}.appomni.com` };
+}
+
+async function appOmniApi(
+  config: { accessToken: string; baseUrl: string },
+  method: "GET" | "PATCH",
+  path: string,
+  params?: Record<string, string | number | string[] | number[] | undefined>,
+  body?: Record<string, unknown>,
+): Promise<unknown> {
+  const url = new URL(`${config.baseUrl}/api/v1${path}`);
+
+  if (params) {
+    for (const [k, v] of Object.entries(params)) {
+      if (v === undefined || v === null) continue;
+      if (Array.isArray(v)) {
+        url.searchParams.set(k, JSON.stringify(v));
+      } else {
+        url.searchParams.set(k, String(v));
+      }
+    }
+  }
+
+  const res = await fetch(url.toString(), {
+    method,
+    headers: {
+      Authorization: `Bearer ${config.accessToken}`,
+      "Content-Type": "application/json",
+    },
+    ...(body ? { body: JSON.stringify(body) } : {}),
+  });
+
+  if (!res.ok) {
+    const errText = await res.text();
+    if (res.status === 401) {
+      throw new Error("AppOmni access token expired or invalid — regenerate in AppOmni Settings > API Settings.");
+    }
+    if (res.status === 403) {
+      throw new Error("AppOmni API: insufficient permissions for this request.");
+    }
+    if (res.status === 429) {
+      throw new Error("AppOmni API: rate limited — try again later.");
+    }
+    logger.error(`AppOmni API error (${res.status}): ${errText.slice(0, 500)}`, "appomni");
+    throw new Error(`AppOmni API request failed (HTTP ${res.status}). Check server logs for details.`);
+  }
+
+  return await res.json();
+}
+
+function validatePositiveInt(value: number, fieldName: string): void {
+  if (!Number.isInteger(value) || value <= 0) {
+    throw new Error(`${fieldName} must be a positive integer, got: ${value}`);
+  }
+}
+
+async function list_appomni_services({
+  service_type,
+  search,
+  score_gte,
+  score_lte,
+  limit = 50,
+  offset = 0,
+}: ListAppOmniServicesInput): Promise<unknown> {
+  const lim = Math.max(1, Math.min(limit, 50));
+  const off = Math.max(0, offset);
+
+  if (env.MOCK_MODE) {
+    return mockListAppOmniServices();
+  }
+
+  const config = await getAppOmniConfig();
+  return await appOmniApi(config, "GET", "/core/monitoredservice/", {
+    annotations: "1",
+    limit: String(lim),
+    offset: String(off),
+    ...(service_type && { service_type }),
+    ...(search && { search }),
+    ...(score_gte !== undefined && { score__gte: String(score_gte) }),
+    ...(score_lte !== undefined && { score__lte: String(score_lte) }),
+  });
+}
+
+async function get_appomni_service({ service_id, service_type }: GetAppOmniServiceInput): Promise<unknown> {
+  validatePositiveInt(service_id, "service_id");
+  if (!service_type || service_type.trim() === "") {
+    throw new Error("service_type is required");
+  }
+
+  if (env.MOCK_MODE) {
+    return mockGetAppOmniService(service_id, service_type);
+  }
+
+  const config = await getAppOmniConfig();
+  const st = encodeURIComponent(service_type);
+  return await appOmniApi(config, "GET", `/core/monitoredservice/${st}/${st}org/${service_id}`);
+}
+
+async function list_appomni_findings({
+  status,
+  risk_score_gte,
+  risk_score_lte,
+  monitored_service_ids,
+  category,
+  compliance_framework,
+  source_type,
+  first_opened_gte,
+  first_opened_lte,
+  limit = 100,
+  offset = 0,
+}: ListAppOmniFindingsInput): Promise<unknown> {
+  const lim = Math.max(1, Math.min(limit, 100));
+  const off = Math.max(0, offset);
+  if (first_opened_gte) validateIsoDatetime(first_opened_gte, "first_opened_gte");
+  if (first_opened_lte) validateIsoDatetime(first_opened_lte, "first_opened_lte");
+
+  if (env.MOCK_MODE) {
+    return mockListAppOmniFindings();
+  }
+
+  const config = await getAppOmniConfig();
+  return await appOmniApi(config, "GET", "/findings/finding/", {
+    limit: String(lim),
+    offset: String(off),
+    ...(status && { status }),
+    ...(risk_score_gte !== undefined && { risk_score__gte: String(risk_score_gte) }),
+    ...(risk_score_lte !== undefined && { risk_score__lte: String(risk_score_lte) }),
+    ...(monitored_service_ids?.length && { monitored_service__in: monitored_service_ids }),
+    ...(category && { category__in: JSON.stringify([category]) }),
+    ...(compliance_framework && { compliance_frameworks__in: JSON.stringify([compliance_framework]) }),
+    ...(source_type && { source_type }),
+    ...(first_opened_gte && { first_opened__gte: first_opened_gte }),
+    ...(first_opened_lte && { first_opened__lte: first_opened_lte }),
+  });
+}
+
+async function get_appomni_finding({ finding_id }: GetAppOmniFindingInput): Promise<unknown> {
+  if (!finding_id || finding_id.trim() === "") {
+    throw new Error("finding_id is required");
+  }
+
+  if (env.MOCK_MODE) {
+    return mockGetAppOmniFinding(finding_id);
+  }
+
+  const config = await getAppOmniConfig();
+  return await appOmniApi(config, "GET", `/findings/finding/${encodeURIComponent(finding_id)}/`);
+}
+
+async function list_appomni_finding_occurrences({
+  finding_id,
+  status,
+  detailed_status,
+  monitored_service_ids,
+  limit = 100,
+  offset = 0,
+}: ListAppOmniFindingOccurrencesInput): Promise<unknown> {
+  const lim = Math.max(1, Math.min(limit, 100));
+  const off = Math.max(0, offset);
+
+  if (env.MOCK_MODE) {
+    return mockListAppOmniFindingOccurrences();
+  }
+
+  const config = await getAppOmniConfig();
+  return await appOmniApi(config, "GET", "/findings/occurrence/", {
+    limit: String(lim),
+    offset: String(off),
+    ...(finding_id && { finding_id }),
+    ...(status && { status }),
+    ...(detailed_status && { detailed_status_name__in: JSON.stringify([detailed_status]) }),
+    ...(monitored_service_ids?.length && { monitored_service__in: monitored_service_ids }),
+  });
+}
+
+async function list_appomni_insights({
+  status,
+  monitored_service_ids,
+  first_seen_gte,
+  last_seen_gte,
+  limit = 50,
+  offset = 0,
+}: ListAppOmniInsightsInput): Promise<unknown> {
+  const lim = Math.max(1, Math.min(limit, 500));
+  const off = Math.max(0, offset);
+  if (first_seen_gte) validateIsoDatetime(first_seen_gte, "first_seen_gte");
+  if (last_seen_gte) validateIsoDatetime(last_seen_gte, "last_seen_gte");
+
+  if (env.MOCK_MODE) {
+    return mockListAppOmniInsights();
+  }
+
+  const config = await getAppOmniConfig();
+  return await appOmniApi(config, "GET", "/insights/discoveredinsight/", {
+    limit: String(lim),
+    offset: String(off),
+    ...(status?.length && { status: JSON.stringify(status) }),
+    ...(monitored_service_ids?.length && { monitored_service__in: monitored_service_ids }),
+    ...(first_seen_gte && { first_seen__gte: first_seen_gte }),
+    ...(last_seen_gte && { last_seen__gte: last_seen_gte }),
+  });
+}
+
+async function list_appomni_policy_issues({
+  policy_ids,
+  service_org_ids,
+  service_type,
+  limit = 50,
+  offset = 0,
+}: ListAppOmniPolicyIssuesInput): Promise<unknown> {
+  const lim = Math.max(1, Math.min(limit, 50));
+  const off = Math.max(0, offset);
+
+  if (env.MOCK_MODE) {
+    return mockListAppOmniPolicyIssues();
+  }
+
+  const config = await getAppOmniConfig();
+  return await appOmniApi(config, "GET", "/core/ruleevent/", {
+    limit: String(lim),
+    offset: String(off),
+    ...(policy_ids?.length && { policy__in: policy_ids }),
+    ...(service_org_ids?.length && { service_org__in: service_org_ids }),
+    ...(service_type && { service_org__type__in: JSON.stringify([service_type]) }),
+  });
+}
+
+async function list_appomni_identities({
+  identity_status,
+  permission_level,
+  service_types,
+  search,
+  last_login_gte,
+  last_login_lte,
+  limit = 25,
+  offset = 0,
+}: ListAppOmniIdentitiesInput): Promise<unknown> {
+  const lim = Math.max(1, Math.min(limit, 50));
+  const off = Math.max(0, offset);
+  if (last_login_gte) validateIsoDatetime(last_login_gte, "last_login_gte");
+  if (last_login_lte) validateIsoDatetime(last_login_lte, "last_login_lte");
+
+  if (env.MOCK_MODE) {
+    return mockListAppOmniIdentities();
+  }
+
+  const config = await getAppOmniConfig();
+  return await appOmniApi(config, "GET", "/core/unifiedidentity/annotated_list/", {
+    limit: String(lim),
+    offset: String(off),
+    ...(identity_status?.length && { identity_status__in: JSON.stringify(identity_status) }),
+    ...(permission_level?.length && { permission_level__in: JSON.stringify(permission_level) }),
+    ...(service_types?.length && { service_types__in: JSON.stringify(service_types) }),
+    ...(search && { search }),
+    ...(last_login_gte && { last_login__gte: last_login_gte }),
+    ...(last_login_lte && { last_login__lte: last_login_lte }),
+  });
+}
+
+async function get_appomni_identity({ identity_id }: GetAppOmniIdentityInput): Promise<unknown> {
+  validatePositiveInt(identity_id, "identity_id");
+
+  if (env.MOCK_MODE) {
+    return mockGetAppOmniIdentity(identity_id);
+  }
+
+  const config = await getAppOmniConfig();
+  const [detailResult, usersResult] = await Promise.allSettled([
+    appOmniApi(config, "GET", `/core/unifiedidentity/${identity_id}/`),
+    appOmniApi(config, "GET", `/core/unifiedidentity/${identity_id}/users`),
+  ]);
+
+  const response: Record<string, unknown> = {};
+  const errors: string[] = [];
+
+  if (detailResult.status === "fulfilled") {
+    response.identity = detailResult.value;
+  } else {
+    errors.push(`Identity details: ${detailResult.reason instanceof Error ? detailResult.reason.message : String(detailResult.reason)}`);
+  }
+
+  if (usersResult.status === "fulfilled") {
+    response.linked_users = usersResult.value;
+  } else {
+    errors.push(`Linked users: ${usersResult.reason instanceof Error ? usersResult.reason.message : String(usersResult.reason)}`);
+  }
+
+  if (errors.length > 0) {
+    response._partial = true;
+    response._errors = errors;
+  }
+
+  return response;
+}
+
+async function list_appomni_discovered_apps({
+  status,
+  criticality,
+  owner,
+  search,
+  limit = 50,
+  offset = 0,
+}: ListAppOmniDiscoveredAppsInput): Promise<unknown> {
+  const lim = Math.max(1, Math.min(limit, 50));
+  const off = Math.max(0, offset);
+
+  if (env.MOCK_MODE) {
+    return mockListAppOmniDiscoveredApps();
+  }
+
+  const config = await getAppOmniConfig();
+  return await appOmniApi(config, "GET", "/discovery/apps/", {
+    limit: String(lim),
+    offset: String(off),
+    ...(status && { status }),
+    ...(criticality && { criticality }),
+    ...(owner && { owner }),
+    ...(search && { search }),
+    ordering: "-cached_last_seen",
+  });
+}
+
+async function get_appomni_audit_logs({
+  since,
+  before,
+  action_type,
+  monitored_service_id,
+  user_id,
+  policy_id,
+  limit = 50,
+  offset = 0,
+}: GetAppOmniAuditLogsInput): Promise<unknown> {
+  const lim = Math.max(1, Math.min(limit, 50));
+  const off = Math.max(0, offset);
+  if (since) validateIsoDatetime(since, "since");
+  if (before) validateIsoDatetime(before, "before");
+
+  if (env.MOCK_MODE) {
+    return mockGetAppOmniAuditLogs();
+  }
+
+  const config = await getAppOmniConfig();
+  return await appOmniApi(config, "GET", "/core/auditlogs/", {
+    limit: String(lim),
+    offset: String(off),
+    ...(since && { since }),
+    ...(before && { before }),
+    ...(action_type && { action_type }),
+    ...(monitored_service_id && { monitored_service: String(monitored_service_id) }),
+    ...(user_id && { user: String(user_id) }),
+    ...(policy_id && { policy: String(policy_id) }),
+  });
+}
+
+async function action_appomni_finding({
+  action,
+  occurrence_ids,
+  detailed_status,
+  reason,
+  expires,
+  message,
+}: ActionAppOmniFindingInput): Promise<unknown> {
+  if (!Array.isArray(occurrence_ids) || occurrence_ids.length === 0) {
+    throw new Error("occurrence_ids is required and must be a non-empty array");
+  }
+  for (const id of occurrence_ids) {
+    if (!id || typeof id !== "string" || id.trim() === "") {
+      throw new Error("Each occurrence_id must be a non-empty string");
+    }
+  }
+
+  if (action === "update_status") {
+    if (!detailed_status || !VALID_DETAILED_STATUSES.has(detailed_status)) {
+      throw new Error(
+        `detailed_status is required for update_status. Valid values: ${[...VALID_DETAILED_STATUSES].join(", ")}`,
+      );
+    }
+
+    if (env.MOCK_MODE) {
+      return {
+        success: true,
+        action: "update_status",
+        occurrence_count: occurrence_ids.length,
+        detailed_status,
+        _mock: true,
+      };
+    }
+
+    const config = await getAppOmniConfig();
+    const result = await appOmniApi(
+      config,
+      "PATCH",
+      "/findings/occurrence/update_detailed_status/",
+      undefined,
+      { ids: occurrence_ids, detailed_status },
+    );
+
+    logger.info("AppOmni finding status updated", "appomni", {
+      toolName: "action_appomni_finding",
+      action: "update_status",
+      detailed_status,
+    });
+
+    return result;
+  }
+
+  if (action === "close_exception") {
+    if (!reason || !VALID_EXCEPTION_REASONS.has(reason)) {
+      throw new Error(
+        `reason is required for close_exception. Valid values: ${[...VALID_EXCEPTION_REASONS].join(", ")}`,
+      );
+    }
+    if (expires) {
+      validateIsoDatetime(expires, "expires");
+    }
+
+    if (env.MOCK_MODE) {
+      return {
+        success: true,
+        action: "close_exception",
+        occurrence_count: occurrence_ids.length,
+        reason,
+        expires: expires ?? null,
+        _mock: true,
+      };
+    }
+
+    const config = await getAppOmniConfig();
+    const result = await appOmniApi(
+      config,
+      "PATCH",
+      "/findings/occurrence/close_by_exception/",
+      undefined,
+      {
+        ids: occurrence_ids,
+        reason,
+        ...(expires && { expires }),
+        ...(message && { message }),
+      },
+    );
+
+    logger.info("AppOmni finding closed by exception", "appomni", {
+      toolName: "action_appomni_finding",
+      action: "close_exception",
+      reason,
+    });
+
+    return result;
+  }
+
+  throw new Error(`Invalid action: ${action}. Must be "update_status" or "close_exception".`);
+}
+
+// ── AppOmni Mock Data ────────────────────────────────────────
+
+function mockListAppOmniServices(): unknown {
+  return {
+    count: 5,
+    results: [
+      { id: 101, name: "Goodwin M365", monitored_service_type: "m365", score: 82, integration_connected: true, open_issues_count: 12, total_users_count: 1450, inactive_user_count: 89, elevated_perm_user_count: 34 },
+      { id: 102, name: "Goodwin Salesforce", monitored_service_type: "sfdc", score: 71, integration_connected: true, open_issues_count: 28, total_users_count: 620, inactive_user_count: 45, elevated_perm_user_count: 18 },
+      { id: 103, name: "Goodwin Box", monitored_service_type: "box", score: 90, integration_connected: true, open_issues_count: 3, total_users_count: 890, inactive_user_count: 120, elevated_perm_user_count: 8 },
+      { id: 104, name: "Goodwin Slack", monitored_service_type: "slack", score: 65, integration_connected: true, open_issues_count: 19, total_users_count: 1380, inactive_user_count: 210, elevated_perm_user_count: 42 },
+      { id: 105, name: "Goodwin Zoom", monitored_service_type: "zoom", score: 88, integration_connected: true, open_issues_count: 5, total_users_count: 1100, inactive_user_count: 65, elevated_perm_user_count: 12 },
+    ],
+    _mock: true,
+  };
+}
+
+function mockGetAppOmniService(serviceId: number, serviceType: string): unknown {
+  return {
+    id: serviceId,
+    name: `Goodwin ${serviceType.toUpperCase()}`,
+    monitored_service_type: serviceType,
+    score: 82,
+    integration_connected: true,
+    initial_ingest_complete: true,
+    last_run_insights: "2026-03-26T08:00:00Z",
+    total_users_count: 1450,
+    inactive_user_count: 89,
+    elevated_perm_user_count: 34,
+    preferences: { auto_scan: true, scan_interval_hours: 24 },
+    _mock: true,
+  };
+}
+
+function mockListAppOmniFindings(): unknown {
+  return {
+    count: 3,
+    results: [
+      {
+        id: "f1a2b3c4-d5e6-7890-abcd-ef1234567890",
+        appomni_risk_level: "High",
+        appomni_risk_score: 8,
+        description: "MFA not enabled for admin users",
+        status: "open",
+        source_type: "scanner",
+        compliance_frameworks: [1, 2],
+        monitored_service: 101,
+        num_occurrences_open: 5,
+        first_opened: "2026-03-20T10:00:00Z",
+      },
+      {
+        id: "f2a3b4c5-d6e7-8901-bcde-f12345678901",
+        appomni_risk_level: "Medium",
+        appomni_risk_score: 5,
+        description: "External sharing enabled for sensitive documents",
+        status: "open",
+        source_type: "insight",
+        compliance_frameworks: [1],
+        monitored_service: 103,
+        num_occurrences_open: 12,
+        first_opened: "2026-03-18T14:30:00Z",
+      },
+      {
+        id: "f3a4b5c6-d7e8-9012-cdef-123456789012",
+        appomni_risk_level: "Critical",
+        appomni_risk_score: 10,
+        description: "Service account with global admin privileges and no MFA",
+        status: "open",
+        source_type: "scanner",
+        compliance_frameworks: [1, 2, 3],
+        monitored_service: 101,
+        num_occurrences_open: 1,
+        first_opened: "2026-03-25T09:15:00Z",
+      },
+    ],
+    _mock: true,
+  };
+}
+
+function mockGetAppOmniFinding(findingId: string): unknown {
+  return {
+    id: findingId,
+    appomni_risk_level: "High",
+    appomni_risk_score: 8,
+    description: "MFA not enabled for admin users",
+    status: "open",
+    source_type: "scanner",
+    compliance_controls: [
+      { control_id: "AC-2", framework: "NIST 800-53", title: "Account Management" },
+      { control_id: "CC6.1", framework: "SOC2", title: "Logical and Physical Access Controls" },
+    ],
+    monitored_service: 101,
+    num_occurrences_open: 5,
+    num_occurrences_closed: 2,
+    first_opened: "2026-03-20T10:00:00Z",
+    last_scanned: "2026-03-26T08:00:00Z",
+    _mock: true,
+  };
+}
+
+function mockListAppOmniFindingOccurrences(): unknown {
+  return {
+    count: 3,
+    results: [
+      {
+        id: "occ-1111-2222-3333-444455556666",
+        status: "open",
+        detailed_status_label: "New",
+        context: { user_id: "admin1@goodwin.com", user_name: "John Admin" },
+        finding_id: "f1a2b3c4-d5e6-7890-abcd-ef1234567890",
+        first_opened: "2026-03-20T10:00:00Z",
+      },
+      {
+        id: "occ-2222-3333-4444-555566667777",
+        status: "open",
+        detailed_status_label: "In Research",
+        context: { user_id: "admin2@goodwin.com", user_name: "Jane Admin" },
+        finding_id: "f1a2b3c4-d5e6-7890-abcd-ef1234567890",
+        first_opened: "2026-03-21T08:30:00Z",
+      },
+      {
+        id: "occ-3333-4444-5555-666677778888",
+        status: "open",
+        detailed_status_label: "New",
+        context: { user_id: "svc-backup@goodwin.com", user_name: "Backup Service Account" },
+        finding_id: "f3a4b5c6-d7e8-9012-cdef-123456789012",
+        first_opened: "2026-03-25T09:15:00Z",
+      },
+    ],
+    _mock: true,
+  };
+}
+
+function mockListAppOmniInsights(): unknown {
+  return {
+    count: 2,
+    results: [
+      {
+        id: 102455,
+        label: "Data records exposed to anonymous world",
+        status: "open",
+        first_seen: "2026-03-10T03:45:00Z",
+        last_seen: "2026-03-26T08:00:00Z",
+        monitored_service: 102,
+      },
+      {
+        id: 102456,
+        label: "Overprivileged external users with edit access",
+        status: "open",
+        first_seen: "2026-03-15T12:00:00Z",
+        last_seen: "2026-03-25T18:00:00Z",
+        monitored_service: 103,
+      },
+    ],
+    _mock: true,
+  };
+}
+
+function mockListAppOmniPolicyIssues(): unknown {
+  return {
+    count: 2,
+    results: [
+      {
+        id: 12345,
+        policy_name: "Baseline Posture Settings",
+        rule_name: "MFA not enabled for admin users",
+        severity: "high",
+        status: "open",
+        created: "2026-03-20T10:00:00Z",
+      },
+      {
+        id: 12346,
+        policy_name: "Data Access Controls",
+        rule_name: "Public sharing links enabled",
+        severity: "medium",
+        status: "open",
+        created: "2026-03-18T14:30:00Z",
+      },
+    ],
+    _mock: true,
+  };
+}
+
+function mockListAppOmniIdentities(): unknown {
+  return {
+    count: 4,
+    results: [
+      { id: 180452, name: "John Smith", identity_signature: "jsmith@goodwin.com", identity_status: "active", permission_level: "admin", last_login: "2026-03-26T09:00:00Z", services_linked_count: 4 },
+      { id: 180453, name: "Mary Kim", identity_signature: "mkim@goodwin.com", identity_status: "active", permission_level: "elevated", last_login: "2026-03-26T08:30:00Z", services_linked_count: 3 },
+      { id: 180454, name: "Bob Wilson", identity_signature: "bwilson@goodwin.com", identity_status: "inactive", permission_level: "standard", last_login: "2026-01-15T14:00:00Z", services_linked_count: 2 },
+      { id: 180455, name: "SVC-Backup", identity_signature: "svc-backup@goodwin.com", identity_status: "active", permission_level: "admin", last_login: "2026-03-26T02:00:00Z", services_linked_count: 1 },
+    ],
+    _mock: true,
+  };
+}
+
+function mockGetAppOmniIdentity(identityId: number): unknown {
+  return {
+    identity: {
+      id: identityId,
+      name: "John Smith",
+      identity_signature: "jsmith@goodwin.com",
+      identity_status: "active",
+      identity_id: "8590914a-a00a-4d0a-a9f4-626803eb9c1e",
+    },
+    linked_users: {
+      count: 3,
+      results: [
+        { id: 442, service_type: "m365", service_org_name: "Goodwin M365", permission_level: "admin", active: true, last_login: "2026-03-26T09:00:00Z" },
+        { id: 443, service_type: "sfdc", service_org_name: "Goodwin Salesforce", permission_level: "elevated", active: true, last_login: "2026-03-25T16:00:00Z" },
+        { id: 444, service_type: "slack", service_org_name: "Goodwin Slack", permission_level: "standard", active: true, last_login: "2026-03-26T08:45:00Z" },
+      ],
+    },
+    _mock: true,
+  };
+}
+
+function mockListAppOmniDiscoveredApps(): unknown {
+  return {
+    count: 4,
+    results: [
+      { saas_application: { name: "Notion", saas_domain: "notion.so", company_name: "Notion Labs", categories: "['Productivity', 'Collaboration']" }, status: "approved", criticality: "medium", cached_last_seen: "2026-03-26T07:00:00Z" },
+      { saas_application: { name: "Figma", saas_domain: "figma.com", company_name: "Figma Inc", categories: "['Design', 'Collaboration']" }, status: "approved", criticality: "low", cached_last_seen: "2026-03-26T06:00:00Z" },
+      { saas_application: { name: "Shadow IT App", saas_domain: "sketchy-saas.io", company_name: "Unknown", categories: "['Unknown']" }, status: "pending", criticality: "high", cached_last_seen: "2026-03-25T22:00:00Z" },
+      { saas_application: { name: "Unauthorized File Share", saas_domain: "filedrop.xyz", company_name: "Unknown", categories: "['File Sharing']" }, status: "rejected", criticality: "high", cached_last_seen: "2026-03-24T18:00:00Z" },
+    ],
+    _mock: true,
+  };
+}
+
+function mockGetAppOmniAuditLogs(): unknown {
+  return {
+    count: 3,
+    results: [
+      { identifier: "24e94fd4-7d17-4302-9e98-1b9e468187a1", user_id: 21, action_at: "2026-03-26T09:30:00Z", action_type: "policy_scan_ended", service_name: "Goodwin M365", policy_name: "Baseline Posture" },
+      { identifier: "35f05ge5-8e28-5413-af09-2c0f579298b2", user_id: 21, action_at: "2026-03-26T08:00:00Z", action_type: "user_login_saml", service_name: null, policy_name: null },
+      { identifier: "46g16hf6-9f39-6524-bg10-3d1g680309c3", user_id: 45, action_at: "2026-03-25T17:00:00Z", action_type: "rule_exception_created", service_name: "Goodwin Salesforce", policy_name: "Data Access Controls" },
+    ],
+    _mock: true,
+  };
+}
+
 // ── Context Retrieval ─────────────────────────────────────────
 
 // Anthropic tool_use_id format: "toolu_" followed by alphanumerics
@@ -2582,6 +3316,18 @@ const executors: Record<string, (input: Record<string, unknown>) => Promise<unkn
   list_ato_cases: (input) => list_ato_cases(input as unknown as ListAtoCasesInput),
   get_ato_case: (input) => get_ato_case(input as unknown as GetAtoCaseInput),
   action_ato_case: (input) => action_ato_case(input as unknown as ActionAtoCaseInput),
+  list_appomni_services: (input) => list_appomni_services(input as unknown as ListAppOmniServicesInput),
+  get_appomni_service: (input) => get_appomni_service(input as unknown as GetAppOmniServiceInput),
+  list_appomni_findings: (input) => list_appomni_findings(input as unknown as ListAppOmniFindingsInput),
+  get_appomni_finding: (input) => get_appomni_finding(input as unknown as GetAppOmniFindingInput),
+  list_appomni_finding_occurrences: (input) => list_appomni_finding_occurrences(input as unknown as ListAppOmniFindingOccurrencesInput),
+  list_appomni_insights: (input) => list_appomni_insights(input as unknown as ListAppOmniInsightsInput),
+  list_appomni_policy_issues: (input) => list_appomni_policy_issues(input as unknown as ListAppOmniPolicyIssuesInput),
+  list_appomni_identities: (input) => list_appomni_identities(input as unknown as ListAppOmniIdentitiesInput),
+  get_appomni_identity: (input) => get_appomni_identity(input as unknown as GetAppOmniIdentityInput),
+  list_appomni_discovered_apps: (input) => list_appomni_discovered_apps(input as unknown as ListAppOmniDiscoveredAppsInput),
+  get_appomni_audit_logs: (input) => get_appomni_audit_logs(input as unknown as GetAppOmniAuditLogsInput),
+  action_appomni_finding: (input) => action_appomni_finding(input as unknown as ActionAppOmniFindingInput),
 };
 
 export interface ExecuteToolContext {

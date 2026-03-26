@@ -152,6 +152,18 @@ See [docs/configuration.md](docs/configuration.md) for Entra ID setup and all co
 | `list_ato_cases` | Read-only | List Account Takeover cases from Abnormal Security |
 | `get_ato_case` | Read-only | Get full ATO case with analysis timeline |
 | `action_ato_case` | Destructive | Take action on an ATO case (acknowledge/action required) |
+| `list_appomni_services` | Read-only | List monitored SaaS services with posture scores and user counts |
+| `get_appomni_service` | Read-only | Get detailed metadata and policy posture for a monitored service |
+| `list_appomni_findings` | Read-only | List posture findings (policy violations + insights) across SaaS estate |
+| `get_appomni_finding` | Read-only | Get full finding details with compliance controls and occurrences |
+| `list_appomni_finding_occurrences` | Read-only | List individual violation instances with user/resource context |
+| `list_appomni_insights` | Read-only | List data exposure and risk insights from AppOmni |
+| `list_appomni_policy_issues` | Read-only | List open policy issues (rule violations) from posture scans |
+| `list_appomni_identities` | Read-only | List unified identities across SaaS services with permission levels |
+| `get_appomni_identity` | Read-only | Get unified identity profile with all linked SaaS accounts |
+| `list_appomni_discovered_apps` | Read-only | List discovered SaaS apps with review status and criticality |
+| `get_appomni_audit_logs` | Read-only | Retrieve AppOmni platform audit logs |
+| `action_appomni_finding` | Destructive | Update finding occurrence status or close by exception |
 
 Read-only tools execute automatically. Destructive tools pause for human confirmation before executing.
 

@@ -132,6 +132,44 @@ export const INTEGRATIONS: IntegrationInfo[] = [
     ],
   },
   {
+    slug: "appomni",
+    name: "AppOmni",
+    iconName: "ShieldCheck",
+    imageSrc: "/appomni-logo.png",
+    description:
+      "SaaS Security Posture Management. Monitor connected SaaS applications for misconfigurations, excessive permissions, data exposure, and identity risks.",
+    capabilities: [
+      "list_appomni_services",
+      "get_appomni_service",
+      "list_appomni_findings",
+      "get_appomni_finding",
+      "list_appomni_finding_occurrences",
+      "list_appomni_insights",
+      "list_appomni_policy_issues",
+      "list_appomni_identities",
+      "get_appomni_identity",
+      "list_appomni_discovered_apps",
+      "get_appomni_audit_logs",
+      "action_appomni_finding",
+    ],
+    secrets: [
+      {
+        key: "APPOMNI_ACCESS_TOKEN",
+        label: "Access Token",
+        description:
+          "AppOmni API access token. Generate in AppOmni Settings > API Settings.",
+        required: true,
+      },
+      {
+        key: "APPOMNI_SUBDOMAIN",
+        label: "Subdomain",
+        description:
+          "Your AppOmni instance subdomain (e.g., 'acme' for acme.appomni.com).",
+        required: true,
+      },
+    ],
+  },
+  {
     slug: "lansweeper",
     name: "Lansweeper",
     iconName: "Monitor",

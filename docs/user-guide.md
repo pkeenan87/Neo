@@ -826,6 +826,18 @@ Neo includes built-in protection against prompt injection attacks. This is trans
 | `list_ato_cases` | List Account Takeover cases from Abnormal Security, filterable by last modified time. | All |
 | `get_ato_case` | Get full ATO case details with analysis timeline (impossible travel, mail rules, sign-ins, lateral phishing). | All |
 | `action_ato_case` | Take action on an ATO case (acknowledge or mark as action required). Requires confirmation. | Admin |
+| `list_appomni_services` | List monitored SaaS services with posture scores, user counts, and connection status. | All |
+| `get_appomni_service` | Get detailed metadata, sync status, and policy posture for a monitored service. | All |
+| `list_appomni_findings` | List posture findings (policy violations + insights) across the SaaS estate. | All |
+| `get_appomni_finding` | Get full finding details with compliance controls and occurrence counts. | All |
+| `list_appomni_finding_occurrences` | List individual violation instances with user/resource context. | All |
+| `list_appomni_insights` | List data exposure and risk insights from AppOmni. | All |
+| `list_appomni_policy_issues` | List open policy issues (rule violations) from posture scans. | All |
+| `list_appomni_identities` | List unified identities across SaaS services with permission levels. | All |
+| `get_appomni_identity` | Get unified identity profile with all linked SaaS accounts. | All |
+| `list_appomni_discovered_apps` | List discovered SaaS apps with review status and criticality. | All |
+| `get_appomni_audit_logs` | Retrieve AppOmni platform audit logs. | All |
+| `action_appomni_finding` | Update finding occurrence status or close by exception. Requires confirmation. | Admin |
 
 ### Role Permissions
 

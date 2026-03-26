@@ -479,6 +479,113 @@ export interface EnableSecuredModeInput {
   computers: { computer_id: string; organization_id: string }[];
 }
 
+// ── AppOmni Input Types ──────────────────────────────────────
+
+export interface ListAppOmniServicesInput {
+  service_type?: string;
+  search?: string;
+  score_gte?: number;
+  score_lte?: number;
+  limit?: number;
+  offset?: number;
+}
+
+export interface GetAppOmniServiceInput {
+  service_id: number;
+  service_type: string;
+}
+
+export type FindingDetailedStatus = "new" | "in_research" | "in_remediation" | "done";
+export type ExceptionReason = "risk_accepted" | "false_positive" | "compensating_controls" | "not_applicable" | "confirmed_intended";
+
+export interface ListAppOmniFindingsInput {
+  status?: "open" | "closed";
+  risk_score_gte?: number;
+  risk_score_lte?: number;
+  monitored_service_ids?: number[];
+  category?: string;
+  compliance_framework?: string;
+  source_type?: "scanner" | "insight";
+  first_opened_gte?: string;
+  first_opened_lte?: string;
+  limit?: number;
+  offset?: number;
+}
+
+export interface GetAppOmniFindingInput {
+  finding_id: string;
+}
+
+export interface ListAppOmniFindingOccurrencesInput {
+  finding_id?: string;
+  status?: "open" | "closed";
+  detailed_status?: FindingDetailedStatus;
+  monitored_service_ids?: number[];
+  limit?: number;
+  offset?: number;
+}
+
+export interface ListAppOmniInsightsInput {
+  status?: string[];
+  monitored_service_ids?: number[];
+  first_seen_gte?: string;
+  last_seen_gte?: string;
+  limit?: number;
+  offset?: number;
+}
+
+export interface ListAppOmniPolicyIssuesInput {
+  policy_ids?: number[];
+  service_org_ids?: number[];
+  service_type?: string;
+  limit?: number;
+  offset?: number;
+}
+
+export interface ListAppOmniIdentitiesInput {
+  identity_status?: string[];
+  permission_level?: string[];
+  service_types?: string[];
+  search?: string;
+  last_login_gte?: string;
+  last_login_lte?: string;
+  limit?: number;
+  offset?: number;
+}
+
+export interface GetAppOmniIdentityInput {
+  identity_id: number;
+}
+
+export interface ListAppOmniDiscoveredAppsInput {
+  status?: "approved" | "pending" | "rejected";
+  criticality?: "high" | "medium" | "low";
+  owner?: string;
+  search?: string;
+  limit?: number;
+  offset?: number;
+}
+
+export interface GetAppOmniAuditLogsInput {
+  since?: string;
+  before?: string;
+  action_type?: string;
+  monitored_service_id?: number;
+  user_id?: number;
+  policy_id?: number;
+  limit?: number;
+  offset?: number;
+}
+
+export interface ActionAppOmniFindingInput {
+  action: "update_status" | "close_exception";
+  occurrence_ids: string[];
+  detailed_status?: FindingDetailedStatus;
+  reason?: ExceptionReason;
+  expires?: string;
+  message?: string;
+}
+
 export interface GetFullToolResultInput {
   tool_use_id: string;
 }

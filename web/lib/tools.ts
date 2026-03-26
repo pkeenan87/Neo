@@ -1060,6 +1060,268 @@ export const TOOLS: Tool[] = [
       required: ["case_id", "action", "justification"],
     },
   },
+  // ── AppOmni ──────────────────────────────────────────────────
+  {
+    name: "list_appomni_services",
+    description:
+      "List all SaaS applications monitored by AppOmni with posture scores, user counts, and connection status.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        service_type: {
+          type: "string",
+          description: "Filter by SaaS type (e.g. m365, sfdc, box, gws, slack, zoom)",
+        },
+        search: { type: "string", description: "Search term to filter services" },
+        score_gte: { type: "number", description: "Minimum posture score (0–100)" },
+        score_lte: { type: "number", description: "Maximum posture score (0–100)" },
+        limit: { type: "number", description: "Max results per page (default 50, max 50)" },
+        offset: { type: "number", description: "Pagination offset" },
+      },
+      required: [],
+    },
+  },
+  {
+    name: "get_appomni_service",
+    description:
+      "Get detailed metadata, sync status, user stats, and policy posture for a specific monitored SaaS service.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        service_id: { type: "number", description: "Monitored service ID (integer)" },
+        service_type: { type: "string", description: "Service type slug (e.g. m365, sfdc, box)" },
+      },
+      required: ["service_id", "service_type"],
+    },
+  },
+  {
+    name: "list_appomni_findings",
+    description:
+      "List posture findings — unified view of policy violations and data exposure insights across the SaaS estate.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        status: { type: "string", enum: ["open", "closed"], description: "Filter by finding status" },
+        risk_score_gte: { type: "number", description: "Minimum risk score" },
+        risk_score_lte: { type: "number", description: "Maximum risk score" },
+        monitored_service_ids: {
+          type: "array",
+          items: { type: "number" },
+          description: "Filter by monitored service IDs",
+        },
+        category: { type: "string", description: "Filter by risk category (e.g. permissions, configuration, data_exposure)" },
+        compliance_framework: { type: "string", description: "Filter by compliance framework (e.g. SOC2, NIST, HIPAA)" },
+        source_type: { type: "string", enum: ["scanner", "insight"], description: "Filter by source type" },
+        first_opened_gte: { type: "string", description: "Findings opened on or after this ISO-8601 datetime" },
+        first_opened_lte: { type: "string", description: "Findings opened on or before this ISO-8601 datetime" },
+        limit: { type: "number", description: "Max results per page (default 100, max 100)" },
+        offset: { type: "number", description: "Pagination offset" },
+      },
+      required: [],
+    },
+  },
+  {
+    name: "get_appomni_finding",
+    description:
+      "Get full details of a posture finding including compliance controls, occurrence counts, and remediation context.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        finding_id: { type: "string", description: "Finding UUID" },
+      },
+      required: ["finding_id"],
+    },
+  },
+  {
+    name: "list_appomni_finding_occurrences",
+    description:
+      "List individual violation instances (occurrences) for posture findings, with user/resource context.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        finding_id: { type: "string", description: "Filter by finding UUID" },
+        status: { type: "string", enum: ["open", "closed"], description: "Filter by occurrence status" },
+        detailed_status: {
+          type: "string",
+          enum: ["new", "in_research", "in_remediation", "done"],
+          description: "Filter by detailed status",
+        },
+        monitored_service_ids: {
+          type: "array",
+          items: { type: "number" },
+          description: "Filter by monitored service IDs",
+        },
+        limit: { type: "number", description: "Max results per page (default 100, max 100)" },
+        offset: { type: "number", description: "Pagination offset" },
+      },
+      required: [],
+    },
+  },
+  {
+    name: "list_appomni_insights",
+    description:
+      "List data exposure and risk insights discovered by AppOmni across monitored SaaS services.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        status: {
+          type: "string",
+          description: "Comma-separated statuses to filter (open, dismissed, closed). E.g. 'open,dismissed'",
+        },
+        monitored_service_ids: {
+          type: "array",
+          items: { type: "number" },
+          description: "Filter by monitored service IDs",
+        },
+        first_seen_gte: { type: "string", description: "Insights first seen on or after this ISO-8601 datetime" },
+        last_seen_gte: { type: "string", description: "Insights last seen on or after this ISO-8601 datetime" },
+        limit: { type: "number", description: "Max results per page (default 50, max 500)" },
+        offset: { type: "number", description: "Pagination offset" },
+      },
+      required: [],
+    },
+  },
+  {
+    name: "list_appomni_policy_issues",
+    description:
+      "List open policy issues (rule events) — specific rule violations detected by posture policy scans.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        policy_ids: {
+          type: "array",
+          items: { type: "number" },
+          description: "Filter by policy IDs",
+        },
+        service_org_ids: {
+          type: "array",
+          items: { type: "number" },
+          description: "Filter by service organization IDs",
+        },
+        service_type: { type: "string", description: "Filter by service type" },
+        limit: { type: "number", description: "Max results per page (default 50, max 50)" },
+        offset: { type: "number", description: "Pagination offset" },
+      },
+      required: [],
+    },
+  },
+  {
+    name: "list_appomni_identities",
+    description:
+      "List unified identities across all monitored SaaS services — shows permission levels, activity, and linked accounts.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        identity_status: {
+          type: "string",
+          description: "Comma-separated statuses (e.g. 'active,inactive')",
+        },
+        permission_level: {
+          type: "string",
+          description: "Comma-separated levels (e.g. 'admin,elevated,standard')",
+        },
+        service_types: {
+          type: "string",
+          description: "Comma-separated service types (e.g. 'm365,sfdc,slack')",
+        },
+        search: { type: "string", description: "Search by username or email" },
+        last_login_gte: { type: "string", description: "Last login on or after this ISO-8601 datetime" },
+        last_login_lte: { type: "string", description: "Last login on or before this ISO-8601 datetime" },
+        limit: { type: "number", description: "Max results per page (default 25, max 50)" },
+        offset: { type: "number", description: "Pagination offset" },
+      },
+      required: [],
+    },
+  },
+  {
+    name: "get_appomni_identity",
+    description:
+      "Get a unified identity profile with all linked SaaS accounts, permission levels, and activity across services.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        identity_id: { type: "number", description: "Unified identity ID (integer)" },
+      },
+      required: ["identity_id"],
+    },
+  },
+  {
+    name: "list_appomni_discovered_apps",
+    description:
+      "List SaaS applications discovered by AppOmni's app discovery module with review status and criticality.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        status: { type: "string", enum: ["approved", "pending", "rejected"], description: "Filter by review status" },
+        criticality: { type: "string", enum: ["high", "medium", "low"], description: "Filter by criticality" },
+        owner: { type: "string", description: "Filter by owner email" },
+        search: { type: "string", description: "Search by app name" },
+        limit: { type: "number", description: "Max results per page (default 50, max 50)" },
+        offset: { type: "number", description: "Pagination offset" },
+      },
+      required: [],
+    },
+  },
+  {
+    name: "get_appomni_audit_logs",
+    description:
+      "Retrieve AppOmni platform audit logs — who changed what in the SSPM platform. Useful for investigating configuration changes.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        since: { type: "string", description: "Logs since this ISO-8601 datetime" },
+        before: { type: "string", description: "Logs before this ISO-8601 datetime" },
+        action_type: { type: "string", description: "Filter by action type (e.g. policy_scan_ended, user_login_saml)" },
+        monitored_service_id: { type: "number", description: "Filter by monitored service ID" },
+        user_id: { type: "number", description: "Filter by user ID" },
+        policy_id: { type: "number", description: "Filter by policy ID" },
+        limit: { type: "number", description: "Max results per page (default 50, max 50)" },
+        offset: { type: "number", description: "Pagination offset" },
+      },
+      required: [],
+    },
+  },
+  {
+    name: "action_appomni_finding",
+    description:
+      "⚠️ DESTRUCTIVE — Update finding occurrence status or close by exception. " +
+      "Use 'update_status' to set detailed status (new/in_research/in_remediation/done). " +
+      "Use 'close_exception' to close with a reason (risk_accepted/false_positive/compensating_controls/not_applicable/confirmed_intended).",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        action: {
+          type: "string",
+          enum: ["update_status", "close_exception"],
+          description: "Action to perform",
+        },
+        occurrence_ids: {
+          type: "array",
+          items: { type: "string" },
+          description: "Array of occurrence UUIDs to act on",
+        },
+        detailed_status: {
+          type: "string",
+          enum: ["new", "in_research", "in_remediation", "done"],
+          description: "Required when action is 'update_status'",
+        },
+        reason: {
+          type: "string",
+          enum: ["risk_accepted", "false_positive", "compensating_controls", "not_applicable", "confirmed_intended"],
+          description: "Required when action is 'close_exception'",
+        },
+        expires: {
+          type: "string",
+          description: "Optional ISO-8601 expiration date for exception (close_exception only)",
+        },
+        message: {
+          type: "string",
+          description: "Optional message/comment for the action",
+        },
+      },
+      required: ["action", "occurrence_ids"],
+    },
+  },
   // Read-only but returns sensitive data that was intentionally truncated from
   // context. Available to all roles since it only accesses the current session.
   {
@@ -1096,4 +1358,5 @@ export const DESTRUCTIVE_TOOLS = new Set([
   "delete_indicator",
   "remediate_abnormal_messages",
   "action_ato_case",
+  "action_appomni_finding",
 ]);

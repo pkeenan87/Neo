@@ -66,7 +66,19 @@ const TOOL_COLORS = {
   get_abnormal_threat:         chalk.green,
   list_ato_cases:              chalk.green,
   get_ato_case:                chalk.green,
-  action_ato_case:             chalk.red.bold
+  action_ato_case:             chalk.red.bold,
+  list_appomni_services:       chalk.magenta,
+  get_appomni_service:         chalk.magenta,
+  list_appomni_findings:       chalk.magenta,
+  get_appomni_finding:         chalk.magenta,
+  list_appomni_finding_occurrences: chalk.magenta,
+  list_appomni_insights:       chalk.magenta,
+  list_appomni_policy_issues:  chalk.magenta,
+  list_appomni_identities:     chalk.magenta,
+  get_appomni_identity:        chalk.magenta,
+  list_appomni_discovered_apps: chalk.magenta,
+  get_appomni_audit_logs:      chalk.magenta,
+  action_appomni_finding:      chalk.red.bold
 };
 
 const username = os.userInfo().username;
@@ -199,7 +211,8 @@ const TOOL_DESCRIPTIONS = {
   action_ato_case:              (input) => `Mark ATO case ${chalk.bold(input.case_id)} as ${chalk.bold(input.action)}`,
   set_maintenance_mode:         (input) => `Set ${chalk.bold(input.computer_id)} to ${chalk.bold(input.mode)} mode`,
   schedule_bulk_maintenance:    (input) => `Schedule ${chalk.bold(input.mode)} for ${chalk.bold(String(input.computers?.length ?? 0))} computers`,
-  enable_secured_mode:          (input) => `Enable secured mode on ${chalk.bold(String(input.computers?.length ?? 0))} computers`
+  enable_secured_mode:          (input) => `Enable secured mode on ${chalk.bold(String(input.computers?.length ?? 0))} computers`,
+  action_appomni_finding:       (input) => `${chalk.bold(input.action)} ${chalk.bold(String(input.occurrence_ids?.length ?? 0))} AppOmni finding occurrence(s)`
 };
 
 async function promptForConfirmation(rl, tool) {
