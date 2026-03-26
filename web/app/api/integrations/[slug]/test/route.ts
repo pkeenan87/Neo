@@ -46,7 +46,7 @@ const PROBES: Record<string, () => Promise<void>> = {
     const apiToken = await getToolSecret("ABNORMAL_API_TOKEN");
     if (!apiToken) throw new Error("Missing Abnormal Security credentials");
     // Use a lightweight GET endpoint to verify credentials
-    const res = await fetch("https://api.abnormalsecurity.com/v1/threats?pageSize=1&pageNumber=1", {
+    const res = await fetch("https://api.abnormalplatform.com/v1/threats?pageSize=1&pageNumber=1", {
       headers: { Authorization: `Bearer ${apiToken}` },
     });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);

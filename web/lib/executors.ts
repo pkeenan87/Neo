@@ -2056,7 +2056,7 @@ async function getAbnormalConfig(): Promise<{ apiToken: string }> {
   return { apiToken };
 }
 
-const ABNORMAL_BASE_URL = "https://api.abnormalsecurity.com";
+const ABNORMAL_BASE_URL = "https://api.abnormalplatform.com";
 
 async function abnormalApi(
   config: { apiToken: string },

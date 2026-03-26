@@ -494,7 +494,7 @@ Provides three tools for email threat investigation and response:
 |--------|-------------|
 | `ABNORMAL_API_TOKEN` | Abnormal Security REST API bearer token for Search & Respond |
 
-**API endpoint**: `https://api.abnormalsecurity.com`
+**API endpoint**: `https://api.abnormalplatform.com`
 
 ### ThreatLocker (Application Allowlisting)
 
