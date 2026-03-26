@@ -813,6 +813,8 @@ Neo includes built-in protection against prompt injection attacks. This is trans
 | `get_vendor_case` | Get full details of a vendor compromise case including insights and message timeline. | All |
 | `get_employee_profile` | Get an employee's organizational context and behavioral baseline (Genome) from Abnormal Security. | All |
 | `get_employee_login_history` | Get an employee's 30-day login history from Abnormal Security with IPs, locations, and devices. | All |
+| `list_abnormal_threats` | List recent email threats from Abnormal Security with time-based filtering. Defaults to last 24 hours. | All |
+| `get_abnormal_threat` | Get full details of an email threat including attack type, sender analysis, attachments, URLs, and remediation status. | All |
 
 ### Role Permissions
 

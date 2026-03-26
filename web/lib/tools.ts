@@ -760,6 +760,50 @@ export const TOOLS: Tool[] = [
       required: ["email"],
     },
   },
+  {
+    name: "list_abnormal_threats",
+    description:
+      "List recent email threats from Abnormal Security. Defaults to the last 24 hours. " +
+      "Shows threat IDs, attack types, and summaries for triage.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        start_time: {
+          type: "string",
+          description: "ISO-8601 start of time range (default: 24 hours ago)",
+        },
+        end_time: {
+          type: "string",
+          description: "ISO-8601 end of time range (default: now)",
+        },
+        page_size: {
+          type: "number",
+          description: "Results per page (default: 25, max: 100)",
+        },
+        page_number: {
+          type: "number",
+          description: "Page number (default: 1)",
+        },
+      },
+      required: [],
+    },
+  },
+  {
+    name: "get_abnormal_threat",
+    description:
+      "Get full details of a specific email threat from Abnormal Security. " +
+      "Includes attack type, strategy, vector, sender analysis, attachments, URLs, remediation status, and portal link.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        threat_id: {
+          type: "string",
+          description: "The threat ID to retrieve details for",
+        },
+      },
+      required: ["threat_id"],
+    },
+  },
   // Read-only but returns sensitive data that was intentionally truncated from
   // context. Available to all roles since it only accesses the current session.
   {

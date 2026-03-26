@@ -405,6 +405,17 @@ export interface GetEmployeeLoginHistoryInput {
   email: string;
 }
 
+export interface ListAbnormalThreatsInput {
+  start_time?: string;
+  end_time?: string;
+  page_size?: number;
+  page_number?: number;
+}
+
+export interface GetAbnormalThreatInput {
+  threat_id: string;
+}
+
 export interface GetFullToolResultInput {
   tool_use_id: string;
 }

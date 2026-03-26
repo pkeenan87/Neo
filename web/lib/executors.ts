@@ -34,6 +34,8 @@ import type {
   GetVendorCaseInput,
   GetEmployeeProfileInput,
   GetEmployeeLoginHistoryInput,
+  ListAbnormalThreatsInput,
+  GetAbnormalThreatInput,
   GetFullToolResultInput,
   Message,
 } from "./types";
@@ -1776,12 +1778,12 @@ function parseCsvToJson(csv: string): Record<string, string>[] {
 }
 
 async function get_employee_profile({ email }: GetEmployeeProfileInput): Promise<unknown> {
-  if (env.MOCK_MODE) {
-    return mockGetEmployeeProfile(email);
-  }
-
   if (!validateSenderEmail(email)) {
     throw new Error(`Invalid email format: ${email}`);
+  }
+
+  if (env.MOCK_MODE) {
+    return mockGetEmployeeProfile(email);
   }
 
   const config = await getAbnormalConfig();
@@ -1792,20 +1794,32 @@ async function get_employee_profile({ email }: GetEmployeeProfileInput): Promise
     abnormalApi(config, "GET", `/v1/employee/${encoded}/identity-analysis`),
   ]);
 
+  const errors: string[] = [];
+  if (infoResult.status === "rejected") {
+    const msg = infoResult.reason instanceof Error ? infoResult.reason.message : String(infoResult.reason);
+    errors.push(`employee info: ${msg}`);
+    logger.error(`Abnormal employee info failed for ${email}: ${msg}`, "abnormal");
+  }
+  if (analysisResult.status === "rejected") {
+    const msg = analysisResult.reason instanceof Error ? analysisResult.reason.message : String(analysisResult.reason);
+    errors.push(`identity analysis: ${msg}`);
+    logger.error(`Abnormal identity analysis failed for ${email}: ${msg}`, "abnormal");
+  }
+
   return {
     employee: infoResult.status === "fulfilled" ? infoResult.value : null,
     genome: analysisResult.status === "fulfilled" ? analysisResult.value : null,
-    _partial: infoResult.status === "rejected" || analysisResult.status === "rejected",
+    ...(errors.length > 0 && { _partial: true, _errors: errors }),
   };
 }
 
 async function get_employee_login_history({ email }: GetEmployeeLoginHistoryInput): Promise<unknown> {
-  if (env.MOCK_MODE) {
-    return mockGetEmployeeLoginHistory(email);
-  }
-
   if (!validateSenderEmail(email)) {
     throw new Error(`Invalid email format: ${email}`);
+  }
+
+  if (env.MOCK_MODE) {
+    return mockGetEmployeeLoginHistory(email);
   }
 
   const config = await getAbnormalConfig();
@@ -1828,6 +1842,57 @@ async function get_employee_login_history({ email }: GetEmployeeLoginHistoryInpu
   const logins = parseCsvToJson(csvText);
 
   return { email, logins, count: logins.length };
+}
+
+// ── Abnormal Security: Threat Triage ─────────────────────────
+
+function validateIsoDatetime(value: string, label: string): void {
+  if (isNaN(new Date(value).getTime())) {
+    throw new Error(`${label} must be a valid ISO-8601 datetime string, got: ${value}`);
+  }
+}
+
+async function list_abnormal_threats({
+  start_time,
+  end_time,
+  page_size = 25,
+  page_number = 1,
+}: ListAbnormalThreatsInput): Promise<unknown> {
+  if (start_time) validateIsoDatetime(start_time, "start_time");
+  if (end_time) validateIsoDatetime(end_time, "end_time");
+
+  if (env.MOCK_MODE) {
+    return mockListAbnormalThreats(page_size, page_number);
+  }
+
+  const config = await getAbnormalConfig();
+  const now = new Date();
+  const defaultStart = new Date(now.getTime() - 24 * 60 * 60 * 1000);
+  const start = start_time ? new Date(start_time).toISOString() : defaultStart.toISOString();
+  const end = end_time ? new Date(end_time).toISOString() : now.toISOString();
+
+  const ps = Math.max(1, Math.min(page_size, 100));
+  const pn = Math.max(1, page_number);
+  const expression = `receivedTime gte ${start} lte ${end}`;
+
+  return await abnormalApi(
+    config,
+    "GET",
+    `/v1/threats?filter=${encodeURIComponent(expression)}&pageSize=${ps}&pageNumber=${pn}`,
+  );
+}
+
+async function get_abnormal_threat({ threat_id }: GetAbnormalThreatInput): Promise<unknown> {
+  if (!threat_id || threat_id.trim() === "") {
+    throw new Error("threat_id is required and must be a non-empty string");
+  }
+
+  if (env.MOCK_MODE) {
+    return mockGetAbnormalThreat(threat_id);
+  }
+
+  const config = await getAbnormalConfig();
+  return await abnormalApi(config, "GET", `/v1/threats/${encodeURIComponent(threat_id)}`);
 }
 
 // ── Context Retrieval ─────────────────────────────────────────
@@ -1900,6 +1965,8 @@ const executors: Record<string, (input: Record<string, unknown>) => Promise<unkn
   get_vendor_case: (input) => get_vendor_case(input as unknown as GetVendorCaseInput),
   get_employee_profile: (input) => get_employee_profile(input as unknown as GetEmployeeProfileInput),
   get_employee_login_history: (input) => get_employee_login_history(input as unknown as GetEmployeeLoginHistoryInput),
+  list_abnormal_threats: (input) => list_abnormal_threats(input as unknown as ListAbnormalThreatsInput),
+  get_abnormal_threat: (input) => get_abnormal_threat(input as unknown as GetAbnormalThreatInput),
 };
 
 export interface ExecuteToolContext {
@@ -2639,6 +2706,80 @@ function mockGetEmployeeLoginHistory(email: string): unknown {
       { timestamp: "2026-03-23T17:45:00Z", ip: "203.0.113.42", location: "New York, NY, US", device: "DESKTOP-JS4729", browser: "Chrome 123" },
     ],
     count: 3,
+    _mock: true,
+  };
+}
+
+function mockListAbnormalThreats(pageSize: number = 25, pageNumber: number = 1): unknown {
+  return {
+    threats: [
+      {
+        threatId: "threat-abc123",
+        attackType: "BEC",
+        attackStrategy: "Invoice Fraud",
+        fromAddress: "cfo@acme-bi11ing.com",
+        recipientAddress: "jsmith@goodwin.com",
+        receivedTime: "2026-03-26T09:30:00Z",
+        autoRemediated: false,
+        remediationStatus: "Not Remediated",
+      },
+      {
+        threatId: "threat-def456",
+        attackType: "Phishing",
+        attackStrategy: "Credential Harvest",
+        fromAddress: "security@microsoft-verify.net",
+        recipientAddress: "mkim@goodwin.com",
+        receivedTime: "2026-03-26T08:15:00Z",
+        autoRemediated: true,
+        remediationStatus: "Auto-Remediated",
+      },
+      {
+        threatId: "threat-ghi789",
+        attackType: "Malware",
+        attackStrategy: "Payload Delivery",
+        fromAddress: "invoice@suspicious-sender.com",
+        recipientAddress: "lchen@goodwin.com",
+        receivedTime: "2026-03-25T22:45:00Z",
+        autoRemediated: false,
+        remediationStatus: "Not Remediated",
+      },
+    ],
+    totalCount: 3,
+    pageSize,
+    pageNumber,
+    _mock: true,
+  };
+}
+
+function mockGetAbnormalThreat(threatId: string): unknown {
+  return {
+    threatId,
+    attackType: "BEC",
+    attackStrategy: "Invoice Fraud",
+    attackVector: "Text",
+    summaryInsights: [
+      "Unusual Sender",
+      "Never-before-seen sender domain",
+      "Invoice/Payment Request Language",
+      "Urgency Indicators",
+    ],
+    fromAddress: "cfo@acme-bi11ing.com",
+    fromName: "Michael Johnson, CFO",
+    senderIpAddress: "185.220.101.42",
+    senderDomain: "acme-bi11ing.com",
+    recipientAddress: "jsmith@goodwin.com",
+    toAddresses: ["jsmith@goodwin.com"],
+    subject: "URGENT: Updated Wire Instructions - Invoice #4829",
+    receivedTime: "2026-03-26T09:30:00Z",
+    attachmentNames: ["Invoice_4829_Updated.pdf"],
+    urls: ["https://acme-bi11ing.com/wire-update"],
+    urlCount: 1,
+    autoRemediated: false,
+    postRemediated: false,
+    remediationStatus: "Not Remediated",
+    impersonatedParty: "External — Acme Billing CFO",
+    attackedParty: "Employee — John Smith",
+    abxPortalUrl: "https://portal.abnormalsecurity.com/threats/threat-abc123",
     _mock: true,
   };
 }

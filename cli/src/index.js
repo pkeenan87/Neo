@@ -53,7 +53,9 @@ const TOOL_COLORS = {
   list_vendor_cases:           chalk.green,
   get_vendor_case:             chalk.green,
   get_employee_profile:        chalk.green,
-  get_employee_login_history:  chalk.green
+  get_employee_login_history:  chalk.green,
+  list_abnormal_threats:       chalk.green,
+  get_abnormal_threat:         chalk.green
 };
 
 const username = os.userInfo().username;
