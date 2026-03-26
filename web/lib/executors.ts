@@ -36,6 +36,9 @@ import type {
   GetEmployeeLoginHistoryInput,
   ListAbnormalThreatsInput,
   GetAbnormalThreatInput,
+  ListAtoCasesInput,
+  GetAtoCaseInput,
+  ActionAtoCaseInput,
   GetFullToolResultInput,
   Message,
 } from "./types";
@@ -1860,9 +1863,11 @@ async function list_abnormal_threats({
 }: ListAbnormalThreatsInput): Promise<unknown> {
   if (start_time) validateIsoDatetime(start_time, "start_time");
   if (end_time) validateIsoDatetime(end_time, "end_time");
+  const ps = Math.max(1, Math.min(page_size, 100));
+  const pn = Math.max(1, page_number);
 
   if (env.MOCK_MODE) {
-    return mockListAbnormalThreats(page_size, page_number);
+    return mockListAbnormalThreats(ps, pn);
   }
 
   const config = await getAbnormalConfig();
@@ -1870,9 +1875,6 @@ async function list_abnormal_threats({
   const defaultStart = new Date(now.getTime() - 24 * 60 * 60 * 1000);
   const start = start_time ? new Date(start_time).toISOString() : defaultStart.toISOString();
   const end = end_time ? new Date(end_time).toISOString() : now.toISOString();
-
-  const ps = Math.max(1, Math.min(page_size, 100));
-  const pn = Math.max(1, page_number);
   const expression = `receivedTime gte ${start} lte ${end}`;
 
   return await abnormalApi(
@@ -1893,6 +1895,103 @@ async function get_abnormal_threat({ threat_id }: GetAbnormalThreatInput): Promi
 
   const config = await getAbnormalConfig();
   return await abnormalApi(config, "GET", `/v1/threats/${encodeURIComponent(threat_id)}`);
+}
+
+// ── Abnormal Security: ATO Case Investigator ─────────────────
+
+const VALID_ATO_ACTIONS = new Set(["action_required", "acknowledge"]);
+
+async function list_ato_cases({
+  filter_value,
+  page_size = 25,
+  page_number = 1,
+}: ListAtoCasesInput): Promise<unknown> {
+  if (filter_value) validateIsoDatetime(filter_value, "filter_value");
+  const ps = Math.max(1, Math.min(page_size, 100));
+  const pn = Math.max(1, page_number);
+
+  if (env.MOCK_MODE) {
+    return mockListAtoCases(ps, pn);
+  }
+
+  const config = await getAbnormalConfig();
+  let path = `/v1/cases?pageSize=${ps}&pageNumber=${pn}`;
+  if (filter_value) {
+    const expression = `lastModifiedTime gte ${new Date(filter_value).toISOString()}`;
+    path += `&filter=${encodeURIComponent(expression)}`;
+  }
+
+  return await abnormalApi(config, "GET", path);
+}
+
+async function get_ato_case({ case_id }: GetAtoCaseInput): Promise<unknown> {
+  if (!case_id || case_id.trim() === "") {
+    throw new Error("case_id is required and must be a non-empty string");
+  }
+
+  if (env.MOCK_MODE) {
+    return mockGetAtoCase(case_id);
+  }
+
+  const config = await getAbnormalConfig();
+  const encoded = encodeURIComponent(case_id);
+
+  const [detailsResult, timelineResult] = await Promise.allSettled([
+    abnormalApi(config, "GET", `/v1/cases/${encoded}`),
+    abnormalApi(config, "GET", `/v1/cases/${encoded}/analysis-and-timeline`),
+  ]);
+
+  const errors: string[] = [];
+  if (detailsResult.status === "rejected") {
+    const msg = detailsResult.reason instanceof Error ? detailsResult.reason.message : String(detailsResult.reason);
+    errors.push(`case details: ${msg}`);
+    logger.error(`Abnormal ATO case details failed for ${case_id}: ${msg}`, "abnormal");
+  }
+  if (timelineResult.status === "rejected") {
+    const msg = timelineResult.reason instanceof Error ? timelineResult.reason.message : String(timelineResult.reason);
+    errors.push(`analysis timeline: ${msg}`);
+    logger.error(`Abnormal ATO analysis timeline failed for ${case_id}: ${msg}`, "abnormal");
+  }
+
+  return {
+    caseDetails: detailsResult.status === "fulfilled" ? detailsResult.value : null,
+    analysisTimeline: timelineResult.status === "fulfilled" ? timelineResult.value : null,
+    ...(errors.length > 0 && { _partial: true, _errors: errors }),
+  };
+}
+
+async function action_ato_case({ case_id, action, justification }: ActionAtoCaseInput): Promise<unknown> {
+  if (!case_id || case_id.trim() === "") {
+    throw new Error("case_id is required and must be a non-empty string");
+  }
+  if (!VALID_ATO_ACTIONS.has(action)) {
+    throw new Error(`Invalid action — must be "action_required" or "acknowledge", got: ${action}`);
+  }
+
+  if (env.MOCK_MODE) {
+    const actionId = `act-mock-${Date.now()}`;
+    return {
+      actionId,
+      caseId: case_id,
+      action,
+      justification,
+      statusUrl: `${ABNORMAL_BASE_URL}/v1/cases/${encodeURIComponent(case_id)}/actions/${actionId}`,
+      _mock: true,
+    };
+  }
+
+  const config = await getAbnormalConfig();
+  const result = await abnormalApi(config, "POST", `/v1/cases/${encodeURIComponent(case_id)}`, {
+    action,
+    ...(justification && { justification }),
+  });
+
+  logger.info("ATO case action taken", "abnormal", {
+    toolName: "action_ato_case",
+    action,
+  });
+
+  return result;
 }
 
 // ── Context Retrieval ─────────────────────────────────────────
@@ -1967,6 +2066,9 @@ const executors: Record<string, (input: Record<string, unknown>) => Promise<unkn
   get_employee_login_history: (input) => get_employee_login_history(input as unknown as GetEmployeeLoginHistoryInput),
   list_abnormal_threats: (input) => list_abnormal_threats(input as unknown as ListAbnormalThreatsInput),
   get_abnormal_threat: (input) => get_abnormal_threat(input as unknown as GetAbnormalThreatInput),
+  list_ato_cases: (input) => list_ato_cases(input as unknown as ListAtoCasesInput),
+  get_ato_case: (input) => get_ato_case(input as unknown as GetAtoCaseInput),
+  action_ato_case: (input) => action_ato_case(input as unknown as ActionAtoCaseInput),
 };
 
 export interface ExecuteToolContext {
@@ -2780,6 +2882,103 @@ function mockGetAbnormalThreat(threatId: string): unknown {
     impersonatedParty: "External — Acme Billing CFO",
     attackedParty: "Employee — John Smith",
     abxPortalUrl: "https://portal.abnormalsecurity.com/threats/threat-abc123",
+    _mock: true,
+  };
+}
+
+function mockListAtoCases(pageSize: number = 25, pageNumber: number = 1): unknown {
+  return {
+    cases: [
+      {
+        caseId: "ato-001",
+        severity: "Potential Account Takeover",
+        affectedEmployee: "jsmith@goodwin.com",
+        case_status: "Open",
+        remediation_status: "Action Required",
+        firstObserved: "2026-03-25T08:00:00Z",
+        lastModified: "2026-03-26T10:30:00Z",
+      },
+      {
+        caseId: "ato-002",
+        severity: "Account Takeover Confirmed",
+        affectedEmployee: "mkim@goodwin.com",
+        case_status: "Open",
+        remediation_status: "In Progress",
+        firstObserved: "2026-03-24T14:00:00Z",
+        lastModified: "2026-03-26T09:15:00Z",
+      },
+      {
+        caseId: "ato-003",
+        severity: "Potential Account Takeover",
+        affectedEmployee: "lchen@goodwin.com",
+        case_status: "Acknowledged",
+        remediation_status: "Resolved",
+        firstObserved: "2026-03-22T11:00:00Z",
+        lastModified: "2026-03-25T16:00:00Z",
+      },
+    ],
+    totalCount: 3,
+    pageSize,
+    pageNumber,
+    _mock: true,
+  };
+}
+
+function mockGetAtoCase(caseId: string): unknown {
+  return {
+    caseDetails: {
+      caseId,
+      severity: "Account Takeover Confirmed",
+      affectedEmployee: "jsmith@goodwin.com",
+      case_status: "Open",
+      remediation_status: "Action Required",
+      firstObserved: "2026-03-25T08:00:00Z",
+      threatIds: ["threat-abc123", "threat-def456"],
+      genai_summary: "Account for jsmith@goodwin.com shows strong indicators of compromise. " +
+        "Impossible travel detected between Boston and Lagos within 2 hours. " +
+        "A mail forwarding rule was created to auto-delete incoming messages matching 'password reset'. " +
+        "Lateral phishing emails were sent to 3 internal contacts requesting wire transfer updates.",
+    },
+    analysisTimeline: {
+      insights: [
+        { signal: "Impossible Travel", description: "Sign-in from Lagos, Nigeria — 5,300 miles from previous sign-in in Boston 2 hours earlier" },
+        { signal: "Risky Location", description: "Sign-in from IP associated with known proxy service in Nigeria" },
+        { signal: "Suspicious Mail Rule", description: "Mail rule created to DELETE all messages containing 'password reset' or 'security alert'" },
+        { signal: "Lateral Phishing", description: "3 emails sent to internal contacts with wire transfer modification requests" },
+      ],
+      events: [
+        {
+          category: "Risk Event",
+          timestamp: "2026-03-25T08:15:00Z",
+          type: "Impossible Travel",
+          ip: "41.58.172.33",
+          geo: "Lagos, Nigeria",
+          prev_location: "Boston, MA, US",
+        },
+        {
+          category: "Sign In",
+          timestamp: "2026-03-25T08:14:00Z",
+          type: "Suspicious Sign-In",
+          ip: "41.58.172.33",
+          field_labels: ["Rare IP", "Proxy Detected", "Non-Standard User Agent"],
+        },
+        {
+          category: "Mail Rule",
+          timestamp: "2026-03-25T08:30:00Z",
+          type: "Mail Rule Created",
+          conditions: "Subject contains 'password reset' OR 'security alert'",
+          action: "DELETE_ALL",
+          detectors: ["Auto-Delete Rule", "Security Keyword Suppression"],
+        },
+        {
+          category: "Mail Sent",
+          timestamp: "2026-03-25T09:00:00Z",
+          type: "Lateral Phishing",
+          recipients: ["mkim@goodwin.com", "lchen@goodwin.com", "sjohnson@goodwin.com"],
+          subject: "URGENT: Updated Wire Instructions - Client Matter 2024-0891",
+        },
+      ],
+    },
     _mock: true,
   };
 }

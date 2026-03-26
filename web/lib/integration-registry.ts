@@ -171,6 +171,9 @@ export const INTEGRATIONS: IntegrationInfo[] = [
       "get_employee_login_history",
       "list_abnormal_threats",
       "get_abnormal_threat",
+      "list_ato_cases",
+      "get_ato_case",
+      "action_ato_case",
     ],
     secrets: [
       {

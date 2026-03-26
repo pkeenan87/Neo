@@ -141,6 +141,9 @@ See [docs/configuration.md](docs/configuration.md) for Entra ID setup and all co
 | `get_employee_login_history` | Read-only | Get employee 30-day login history |
 | `list_abnormal_threats` | Read-only | List recent email threats from Abnormal Security |
 | `get_abnormal_threat` | Read-only | Get full email threat details with attack analysis |
+| `list_ato_cases` | Read-only | List Account Takeover cases from Abnormal Security |
+| `get_ato_case` | Read-only | Get full ATO case with analysis timeline |
+| `action_ato_case` | Destructive | Take action on an ATO case (acknowledge/action required) |
 
 Read-only tools execute automatically. Destructive tools pause for human confirmation before executing.
 

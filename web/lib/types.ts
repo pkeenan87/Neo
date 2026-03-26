@@ -416,6 +416,22 @@ export interface GetAbnormalThreatInput {
   threat_id: string;
 }
 
+export interface ListAtoCasesInput {
+  filter_value?: string;
+  page_size?: number;
+  page_number?: number;
+}
+
+export interface GetAtoCaseInput {
+  case_id: string;
+}
+
+export interface ActionAtoCaseInput {
+  case_id: string;
+  action: "action_required" | "acknowledge";
+  justification: string;
+}
+
 export interface GetFullToolResultInput {
   tool_use_id: string;
 }

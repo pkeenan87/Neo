@@ -804,6 +804,72 @@ export const TOOLS: Tool[] = [
       required: ["threat_id"],
     },
   },
+  {
+    name: "list_ato_cases",
+    description:
+      "List Account Takeover cases from Abnormal Security. Filterable by last modified time. " +
+      "Shows case IDs, severity, affected employee, and status.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        filter_value: {
+          type: "string",
+          description: "ISO-8601 datetime — only return cases modified after this time (optional)",
+        },
+        page_size: {
+          type: "number",
+          description: "Results per page (default: 25, max: 100)",
+        },
+        page_number: {
+          type: "number",
+          description: "Page number (default: 1)",
+        },
+      },
+      required: [],
+    },
+  },
+  {
+    name: "get_ato_case",
+    description:
+      "Get full details of an Account Takeover case from Abnormal Security. " +
+      "Combines case details (severity, affected employee, AI summary, linked threats) with the full analysis timeline " +
+      "(impossible travel, mail rule changes, suspicious sign-ins, lateral phishing indicators).",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        case_id: {
+          type: "string",
+          description: "The ATO case ID to investigate",
+        },
+      },
+      required: ["case_id"],
+    },
+  },
+  {
+    name: "action_ato_case",
+    description:
+      "⚠️ DESTRUCTIVE — Take action on an Abnormal Security Account Takeover case. " +
+      "Acknowledge the case or mark it as requiring further action.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        case_id: {
+          type: "string",
+          description: "The ATO case ID to act on",
+        },
+        action: {
+          type: "string",
+          enum: ["action_required", "acknowledge"],
+          description: "Action to take on the case",
+        },
+        justification: {
+          type: "string",
+          description: "Reason for the action — written to audit log",
+        },
+      },
+      required: ["case_id", "action", "justification"],
+    },
+  },
   // Read-only but returns sensitive data that was intentionally truncated from
   // context. Available to all roles since it only accesses the current session.
   {
@@ -836,4 +902,5 @@ export const DESTRUCTIVE_TOOLS = new Set([
   "import_indicators",
   "delete_indicator",
   "remediate_abnormal_messages",
+  "action_ato_case",
 ]);

@@ -55,7 +55,10 @@ const TOOL_COLORS = {
   get_employee_profile:        chalk.green,
   get_employee_login_history:  chalk.green,
   list_abnormal_threats:       chalk.green,
-  get_abnormal_threat:         chalk.green
+  get_abnormal_threat:         chalk.green,
+  list_ato_cases:              chalk.green,
+  get_ato_case:                chalk.green,
+  action_ato_case:             chalk.red.bold
 };
 
 const username = os.userInfo().username;
@@ -184,7 +187,8 @@ const TOOL_DESCRIPTIONS = {
   deny_threatlocker_request:    (input) => `Deny ThreatLocker request ${chalk.bold(input.approval_request_id)}`,
   block_indicator:              (input) => `Block ${chalk.bold(input.indicator_type)} indicator: ${chalk.bold(input.value)}`,
   import_indicators:            (input) => `Import ${chalk.bold(String(input.indicators?.length ?? 0))} indicators into Defender`,
-  delete_indicator:             (input) => `Delete Defender indicator #${chalk.bold(String(input.indicator_id))} — ${input.justification || "no reason given"}`
+  delete_indicator:             (input) => `Delete Defender indicator #${chalk.bold(String(input.indicator_id))} — ${input.justification || "no reason given"}`,
+  action_ato_case:              (input) => `Mark ATO case ${chalk.bold(input.case_id)} as ${chalk.bold(input.action)}`
 };
 
 async function promptForConfirmation(rl, tool) {
