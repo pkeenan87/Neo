@@ -84,10 +84,11 @@ export async function POST(
     return NextResponse.json({ success: true });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    console.error(`[integration-probe] ${slug} failed:`, message);
+    const cause = err instanceof Error && err.cause ? ` (${String(err.cause)})` : "";
+    console.error(`[integration-probe] ${slug} failed:`, message, cause);
     return NextResponse.json({
       success: false,
-      error: `Connection test failed: ${message}`,
+      error: `Connection test failed: ${message}${cause}`,
     });
   }
 }
