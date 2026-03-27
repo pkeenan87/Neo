@@ -451,7 +451,8 @@
   font-size: 0.875rem;
   line-height: 1.625;
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1), 0 1px 2px rgba(0, 0, 0, 0.06);
-  max-width: 85%;
+  max-width: 100%;
+  overflow-x: auto;
   background: #fff;
   color: #1e293b;
 }
