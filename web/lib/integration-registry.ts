@@ -75,8 +75,13 @@ export const INTEGRATIONS: IntegrationInfo[] = [
     capabilities: [
       "get_xdr_alert",
       "search_xdr_by_host",
+      "get_machine_isolation_status",
       "isolate_machine",
       "unisolate_machine",
+      "block_indicator",
+      "import_indicators",
+      "list_indicators",
+      "delete_indicator",
     ],
     secrets: [...AZURE_AD_SECRETS],
   },
@@ -87,7 +92,16 @@ export const INTEGRATIONS: IntegrationInfo[] = [
     imageSrc: "/microsoft-logo.png",
     description:
       "Identity and access management. Look up user details, check MFA status, and reset passwords.",
-    capabilities: ["get_user_info", "reset_user_password", "list_ca_policies", "get_ca_policy", "list_named_locations"],
+    capabilities: [
+      "get_user_info",
+      "reset_user_password",
+      "dismiss_user_risk",
+      "list_ca_policies",
+      "get_ca_policy",
+      "list_named_locations",
+      "search_user_messages",
+      "report_message_as_phishing",
+    ],
     secrets: [...AZURE_AD_SECRETS],
   },
   {
