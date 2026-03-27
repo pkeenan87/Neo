@@ -52,6 +52,8 @@
   gap: 0.5rem;
   overflow: hidden;
   white-space: nowrap;
+  text-decoration: none;
+  color: inherit;
 }
 
 /* ─── Sidebar body ─── */

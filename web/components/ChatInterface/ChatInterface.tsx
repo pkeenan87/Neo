@@ -642,14 +642,14 @@ export function ChatInterface({
       >
         {/* Sidebar header */}
         <div className={styles.sidebarHeader}>
-          <div className={styles.sidebarBrandRow}>
+          <Link href="/chat" className={styles.sidebarBrandRow}>
             <Image src="/neo-icon.png" alt="" width={20} height={20} className="rounded shrink-0" />
             <span className={styles.sidebarBrand}>NEO</span>
-          </div>
+          </Link>
         </div>
 
         {/* Sidebar body */}
-        <div className={styles.sidebarBody}>
+        <div className={`${styles.sidebarBody} custom-scrollbar`}>
           <button className={styles.newOpBtn} onClick={handleNewConversation}>
             <Plus className="w-4 h-4" />
             <span>New Operation</span>
