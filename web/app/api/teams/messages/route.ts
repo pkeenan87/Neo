@@ -12,7 +12,7 @@ import { sessionStore } from "@/lib/session-factory";
 import { runAgentLoop, resumeAfterConfirmation, summarizeConversation } from "@/lib/agent";
 import { canUseTool } from "@/lib/permissions";
 import { scanUserInput, shouldBlock } from "@/lib/injection-guard";
-import { logger, hashPii } from "@/lib/logger";
+import { logger, hashPii, setLogContext } from "@/lib/logger";
 import {
   getSessionId,
   setSessionId,
@@ -385,6 +385,8 @@ async function handleTurn(context: TurnContext): Promise<void> {
     channelType,
   });
 
+  const teamsUserName = context.activity.from?.name ?? "Teams User";
+
   // ── Resolve or create session ──────────────────────────────
   // Owner: for DMs use the user's AAD ID; for threads use a synthetic ID
   const ownerId = isThread
@@ -479,7 +481,18 @@ async function handleTurn(context: TurnContext): Promise<void> {
 
   await context.sendActivities([{ type: ActivityTypes.Typing }]);
 
-  const result = await runAgentLoop(session.messages, {}, session.role, resolvedSessionId);
+  // Build logging context after session resolution so sessionId is real
+  const teamsLogContext = {
+    userName: teamsUserName,
+    userIdHash: hashPii(aadObjectId),
+    role: env.TEAMS_BOT_ROLE,
+    provider: "entra-id" as const,
+    channel: "teams",
+    sessionId: resolvedSessionId,
+  };
+  const result = await setLogContext(teamsLogContext, () =>
+    runAgentLoop(session.messages, {}, session.role, resolvedSessionId)
+  );
 
   session.messages = result.messages;
   try {

@@ -77,6 +77,13 @@ export class InMemorySessionStore implements SessionStore {
   }
 
   async delete(id: string): Promise<boolean> {
+    const session = this.sessions.get(id);
+    if (session) {
+      logger.emitEvent("session_ended", "Session deleted", "session-store", {
+        sessionId: id,
+        messageCount: session.messageCount,
+      });
+    }
     return this.sessions.delete(id);
   }
 
@@ -138,6 +145,10 @@ export class InMemorySessionStore implements SessionStore {
     for (const [id, session] of this.sessions) {
       if (now - session.lastActivityAt.getTime() > TTL_MS) {
         logger.debug("Session swept", "session-store", { sessionId: id });
+        logger.emitEvent("session_ended", "Session expired", "session-store", {
+          sessionId: id,
+          messageCount: session.messageCount,
+        });
         this.sessions.delete(id);
       }
     }

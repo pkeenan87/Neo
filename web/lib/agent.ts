@@ -4,6 +4,7 @@ import { DESTRUCTIVE_TOOLS } from "./tools";
 import { executeTool } from "./executors";
 import { getToolsForRole, type Role } from "./permissions";
 import { logger } from "./logger";
+import { getToolIntegration } from "./integration-registry";
 import { wrapToolResult } from "./injection-guard";
 import { prepareMessages, CHARS_PER_TOKEN } from "./context-manager";
 import type { Message, AgentLoopResult, AgentCallbacks, PendingTool, ModelPreference, TokenUsage } from "./types";
@@ -117,7 +118,7 @@ export async function runAgentLoop(
       cache_creation_input_tokens: usageRaw.cache_creation_input_tokens,
       cache_read_input_tokens: usageRaw.cache_read_input_tokens,
     };
-    logger.info("API usage", "agent", {
+    logger.emitEvent("token_usage", "API usage", "agent", {
       inputTokens: usage.input_tokens,
       outputTokens: usage.output_tokens,
       cacheCreationTokens: usage.cache_creation_input_tokens,
@@ -151,7 +152,6 @@ export async function runAgentLoop(
         if (callbacks.onToolCall) {
           callbacks.onToolCall(name, input as Record<string, unknown>);
         }
-        logger.info(`Tool call: ${name}`, "agent", { toolName: name, toolId: id });
 
         // Confirmation gate for destructive actions
         if (DESTRUCTIVE_TOOLS.has(name)) {
@@ -163,10 +163,19 @@ export async function runAgentLoop(
           };
         }
 
-        // Execute the tool
+        // Execute the tool with timing
+        const toolStart = Date.now();
         try {
           const result = await executeTool(name, input as Record<string, unknown>, {
             sessionMessages: localMessages,
+          });
+          const durationMs = Date.now() - toolStart;
+          logger.emitEvent("tool_execution", `Tool completed: ${name}`, "agent", {
+            toolName: name,
+            toolCategory: getToolIntegration(name) ?? undefined,
+            isDestructive: false,
+            durationMs,
+            status: "success",
           });
           toolResults.push({
             type: "tool_result",
@@ -174,6 +183,15 @@ export async function runAgentLoop(
             content: wrapToolResult(name, result, { sessionId }),
           });
         } catch (err) {
+          const durationMs = Date.now() - toolStart;
+          logger.emitEvent("tool_execution", `Tool failed: ${name}`, "agent", {
+            toolName: name,
+            toolCategory: getToolIntegration(name) ?? undefined,
+            isDestructive: false,
+            durationMs,
+            status: "error",
+            errorMessage: (err as Error).message?.slice(0, 500),
+          });
           toolResults.push({
             type: "tool_result",
             tool_use_id: id,
@@ -267,17 +285,31 @@ export async function resumeAfterConfirmation(
   if (confirmed) {
     logger.info("Tool confirmed", "agent", { toolName: name, toolId: id });
     if (callbacks.onToolCall) callbacks.onToolCall(name, input);
+    const toolStart = Date.now();
     try {
       const result = await executeTool(name, input, { sessionMessages: localMessages });
+      const durationMs = Date.now() - toolStart;
+      logger.emitEvent("tool_execution", `Tool completed: ${name}`, "agent", {
+        toolName: name,
+        toolCategory: getToolIntegration(name) ?? undefined,
+        isDestructive: true,
+        durationMs,
+        status: "success",
+      });
       toolResult = {
         type: "tool_result",
         tool_use_id: id,
         content: wrapToolResult(name, result, { sessionId }),
       };
     } catch (err) {
-      logger.error("Tool execution error after confirmation", "agent", {
+      const durationMs = Date.now() - toolStart;
+      logger.emitEvent("tool_execution", `Tool failed: ${name}`, "agent", {
         toolName: name,
-        errorMessage: (err as Error).message,
+        toolCategory: getToolIntegration(name) ?? undefined,
+        isDestructive: true,
+        durationMs,
+        status: "error",
+        errorMessage: (err as Error).message?.slice(0, 500),
       });
       toolResult = {
         type: "tool_result",

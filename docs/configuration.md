@@ -732,41 +732,149 @@ Injection detections are logged as structured events with:
 
 ## Structured Logging
 
-Neo uses a structured logging module that writes JSON log events to both the console and (optionally) an Azure Event Hub for durable audit storage.
+Neo uses a structured logging module that writes JSON log events to both the console and (optionally) Azure Event Hubs for durable audit storage, dashboards, and alerting.
 
 ### Configuration
 
 | Variable | Description |
 |----------|-------------|
-| `EVENT_HUB_CONNECTION_STRING` | Connection string for the Event Hub namespace. Omit to use console-only logging. |
-| `EVENT_HUB_NAME` | Name of the Event Hub (default: `neo-logs`). |
+| `EVENT_HUB_CONNECTION_STRING` | Connection string for the primary (operational) Event Hub. Omit to use console-only logging. |
+| `EVENT_HUB_NAME` | Name of the primary Event Hub (default: `neo-logs`). |
+| `EVENT_HUB_ANALYTICS_CONNECTION_STRING` | Optional — connection string for the analytics Event Hub. If omitted, analytics events go to the primary hub. |
+| `EVENT_HUB_ANALYTICS_NAME` | Name of the analytics Event Hub (default: `neo-analytics`). |
 | `LOG_LEVEL` | Minimum level to log: `debug`, `info` (default when `MOCK_MODE=false`), `warn`, `error`. Defaults to `debug` when `MOCK_MODE=true`. |
+
+### Event Types
+
+Every log event includes an `eventType` field for filtering in Log Analytics and an `identity` envelope with the user's display name, role, provider, channel, and session ID.
+
+| Event Type | Description | Routed To |
+|------------|-------------|-----------|
+| `operational` | Standard application logs (info, warn, error) | Primary hub (`neo-logs`) |
+| `tool_execution` | Emitted after every tool call with duration, status, and integration category | Analytics hub (`neo-analytics`) |
+| `token_usage` | Emitted after each Claude API call with full token breakdown | Analytics hub |
+| `skill_invocation` | Emitted when a slash-command skill is triggered | Analytics hub |
+| `session_started` | Emitted when a new session begins | Analytics hub |
+| `session_ended` | Emitted when a session expires or is deleted | Analytics hub |
+| `destructive_action` | Emitted when a destructive tool is confirmed or cancelled (audit trail) | Primary hub |
+| `budget_alert` | Emitted when a user approaches (80%) or exceeds token budget | Primary hub |
+
+### Dual Event Hub Routing
+
+By default, all events go to a single Event Hub topic. Optionally deploy a second hub for high-volume analytics events to keep the operational table lean:
+
+- **`neo-logs`** (primary): `operational`, `destructive_action`, `budget_alert`
+- **`neo-analytics`** (optional): `tool_execution`, `token_usage`, `skill_invocation`, `session_started`, `session_ended`
+
+If `EVENT_HUB_ANALYTICS_CONNECTION_STRING` is not set, all events gracefully fall back to the primary hub — no data is lost.
+
+### Identity Envelope
+
+Every event includes an `identity` object automatically populated from the request context:
+
+| Field | Description |
+|-------|-------------|
+| `userName` | Human-readable display name (e.g., "Patrick Keenan") |
+| `userIdHash` | SHA-256 hash of the AAD object ID (16 hex chars, for privacy-safe correlation) |
+| `role` | `admin` or `reader` |
+| `provider` | `entra-id` or `api-key` |
+| `channel` | `web`, `cli`, or `teams` |
+| `sessionId` | Current session UUID |
+
+Note: `userName` is logged as the raw display name (not hashed) for dashboard readability. `userIdHash` provides privacy-safe correlation across events.
 
 ### Behavior
 
-- **Console sink**: Always active. In development, all levels are printed. In production (`NODE_ENV=production`), only `warn` and `error` appear on the console.
+- **Console sink**: Always active. In development, all levels are printed. In production (`NODE_ENV=production`), only `warn` and `error` appear on the console. Structured events always appear in console.
 - **Event Hub sink**: Enabled when `EVENT_HUB_CONNECTION_STRING` and `EVENT_HUB_NAME` are set. Events are buffered and flushed every 5 seconds or at 50 events, whichever comes first.
-- **Graceful shutdown**: On `SIGTERM`/`SIGINT`, the logger flushes buffered events and closes the Event Hub connection.
+- **Graceful shutdown**: On `SIGTERM`/`SIGINT`, the logger flushes both buffers and closes all Event Hub connections.
 
-### Metadata redaction
+### Metadata Redaction
 
 Log metadata is filtered through an allowlist (`SAFE_METADATA_FIELDS`). Only explicitly allowed fields pass through to logs. Fields containing PII (like `ownerId` and `aadObjectId`) are one-way hashed with SHA-256 before logging.
 
 ### Provisioning
 
-Use the provisioning script to create the Event Hub infrastructure:
+**Primary Event Hub** (required for Event Hub logging):
 
-```bash
+```powershell
 ./scripts/provision-event-hub.ps1
 ```
 
-This creates an Event Hub Namespace, Hub (2 partitions, 1-day retention), and a Send-only authorization rule. The script outputs the connection string to set in `.env`.
+Creates an Event Hub Namespace, Hub (`neo-logs`, 2 partitions, 1-day retention), and a Send-only authorization rule.
+
+**Analytics Event Hub** (optional — for splitting high-volume events):
+
+```powershell
+./scripts/provision-analytics-event-hub.ps1
+```
+
+Creates a second Event Hub (`neo-analytics`) within the existing namespace. Requires `provision-event-hub.ps1` to have been run first.
+
+### Log Analytics Table Schema
+
+When using the Log Analytics custom table (`NeoLogs_CL`), the schema includes:
+
+| Column | Type | Source |
+|--------|------|--------|
+| `TimeGenerated` | datetime | `LogEntry.timestamp` |
+| `Level` | string | `LogEntry.level` |
+| `Component` | string | `LogEntry.component` |
+| `Message` | string | `LogEntry.message` |
+| `EventType` | string | `LogEntry.eventType` |
+| `Identity` | dynamic | `LogEntry.identity` (userName, role, provider, channel, sessionId) |
+| `Metadata` | dynamic | `LogEntry.metadata` (PII-sanitized key-value pairs) |
+
+### Example KQL Queries for Dashboards
+
+```kql
+// Destructive actions audit trail
+NeoLogs_CL
+| where EventType == "destructive_action"
+| project TimeGenerated, User=Identity.userName, Role=Identity.role,
+          Tool=Metadata.toolName, Confirmed=Metadata.confirmed,
+          Justification=Metadata.justification
+| order by TimeGenerated desc
+
+// Token usage by user (last 24h)
+NeoLogs_CL
+| where EventType == "token_usage" and TimeGenerated > ago(24h)
+| summarize TotalInput=sum(tolong(Metadata.inputTokens)),
+            TotalOutput=sum(tolong(Metadata.outputTokens)),
+            Calls=count()
+  by User=tostring(Identity.userName), Model=tostring(Metadata.model)
+| order by TotalInput desc
+
+// Tool execution performance
+NeoLogs_CL
+| where EventType == "tool_execution" and TimeGenerated > ago(7d)
+| summarize AvgDurationMs=avg(toreal(Metadata.durationMs)),
+            ErrorRate=countif(Metadata.status == "error") * 100.0 / count(),
+            Calls=count()
+  by Tool=tostring(Metadata.toolName)
+| order by Calls desc
+
+// Budget alerts
+NeoLogs_CL
+| where EventType == "budget_alert"
+| project TimeGenerated, User=Identity.userName,
+          Window=Metadata.windowType, Pct=Metadata.percentUsed,
+          Action=Metadata.action
+| order by TimeGenerated desc
+
+// Active users by channel (last 7 days)
+NeoLogs_CL
+| where EventType == "session_started" and TimeGenerated > ago(7d)
+| summarize Sessions=count() by User=tostring(Identity.userName),
+            Channel=tostring(Identity.channel)
+| order by Sessions desc
+```
 
 ---
 
 ## Azure Deployment
 
-Four PowerShell scripts in `scripts/` handle Azure infrastructure provisioning and application deployment. All scripts are idempotent — safe to re-run without creating duplicates.
+PowerShell scripts in `scripts/` handle Azure infrastructure provisioning and application deployment. All scripts are idempotent — safe to re-run without creating duplicates.
 
 ### Prerequisites
 
@@ -850,6 +958,22 @@ EVENT_HUB_CONNECTION_STRING="<connection-string-from-script-output>"
 EVENT_HUB_NAME="neo-logs"
 ```
 
+**Optional: Analytics Event Hub** — To split high-volume analytics events into a separate hub (recommended for production):
+
+```powershell
+# Creates neo-analytics hub within the existing namespace
+./scripts/provision-analytics-event-hub.ps1
+```
+
+Add the output to `.env`:
+
+```bash
+EVENT_HUB_ANALYTICS_CONNECTION_STRING="<connection-string-from-script-output>"
+EVENT_HUB_ANALYTICS_NAME="neo-analytics"
+```
+
+If not provisioned, all events go to the primary `neo-logs` hub — no data is lost.
+
 ### 4. Provision Blob Storage for CLI Downloads (Optional)
 
 Create an Azure Storage account and container for hosting CLI installer files. Skip this step if you don't need the web-based download page.
@@ -894,6 +1018,8 @@ The table schema maps directly to the `LogEntry` interface in `web/lib/logger.ts
 | `Level` | string | `LogEntry.level` (debug, info, warn, error) |
 | `Component` | string | `LogEntry.component` |
 | `Message` | string | `LogEntry.message` |
+| `EventType` | string | `LogEntry.eventType` (operational, tool_execution, token_usage, etc.) |
+| `Identity` | dynamic | `LogEntry.identity` (userName, userIdHash, role, provider, channel, sessionId) |
 | `Metadata` | dynamic | `LogEntry.metadata` (PII-sanitized key-value pairs) |
 
 **Prerequisites**: A Log Analytics workspace must already exist. If you don't have one, create it first:

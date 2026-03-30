@@ -1,6 +1,8 @@
 import { createHash } from "crypto";
+import { AsyncLocalStorage } from "node:async_hooks";
 import { EventHubProducerClient } from "@azure/event-hubs";
 import { env } from "./config";
+import type { LogIdentityContext, LogEventType } from "./types";
 
 // ─────────────────────────────────────────────────────────────
 //  Types
@@ -13,6 +15,8 @@ interface LogEntry {
   level: LogLevel;
   component: string;
   message: string;
+  eventType: LogEventType;
+  identity?: LogIdentityContext;
   metadata?: Record<string, unknown>;
 }
 
@@ -27,6 +31,24 @@ interface LogEntry {
  */
 export function hashPii(value: string): string {
   return createHash("sha256").update(value).digest("hex").slice(0, 16);
+}
+
+// ─────────────────────────────────────────────────────────────
+//  Request-scoped logging context (AsyncLocalStorage)
+// ─────────────────────────────────────────────────────────────
+
+const logContext = new AsyncLocalStorage<LogIdentityContext>();
+
+/**
+ * Run a function with a logging identity context. All log entries
+ * emitted within `fn` will automatically include the identity envelope.
+ */
+export function setLogContext<T>(context: LogIdentityContext, fn: () => T): T {
+  return logContext.run(context, fn);
+}
+
+export function getLogContext(): LogIdentityContext | undefined {
+  return logContext.getStore();
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -104,6 +126,23 @@ const SAFE_METADATA_FIELDS = new Set([
   "model",
   "budgetRemaining",
   "budgetWarning",
+  // Enhanced observability fields
+  "userName",
+  "channel",
+  "toolCategory",
+  "isDestructive",
+  "durationMs",
+  "turnNumber",
+  "skillId",
+  "skillName",
+  "confirmed",
+  "justification",
+  "windowType",
+  "budgetLimit",
+  "currentUsage",
+  "percentUsed",
+  "eventType",
+  "toolInput",
 ]);
 
 function sanitizeMetadata(
@@ -122,17 +161,35 @@ function sanitizeMetadata(
 }
 
 // ─────────────────────────────────────────────────────────────
+//  Event type routing
+// ─────────────────────────────────────────────────────────────
+
+const ANALYTICS_EVENT_TYPES = new Set<LogEventType>([
+  "tool_execution",
+  "token_usage",
+  "skill_invocation",
+  "session_started",
+  "session_ended",
+]);
+
+function isAnalyticsEvent(eventType: LogEventType): boolean {
+  return ANALYTICS_EVENT_TYPES.has(eventType);
+}
+
+// ─────────────────────────────────────────────────────────────
 //  Console sink
 // ─────────────────────────────────────────────────────────────
 
 function logToConsole(entry: LogEntry): void {
-  // In production, only warn/error go to console
+  // In production, only warn/error go to console (operational events always log)
   const isProduction = process.env.NODE_ENV === "production";
-  if (isProduction && LEVEL_PRIORITY[entry.level] < LEVEL_PRIORITY["warn"]) return;
+  if (isProduction && entry.eventType === "operational" && LEVEL_PRIORITY[entry.level] < LEVEL_PRIORITY["warn"]) return;
 
   const ts = entry.timestamp.slice(11, 23); // HH:mm:ss.SSS
   const meta = entry.metadata ? ` ${JSON.stringify(entry.metadata)}` : "";
-  const line = `[${ts}] ${entry.level.toUpperCase()} [${entry.component}] ${entry.message}${meta}`;
+  const eventTag = entry.eventType !== "operational" ? ` [${entry.eventType}]` : "";
+  const identityTag = entry.identity ? ` user=${entry.identity.userName}` : "";
+  const line = `[${ts}] ${entry.level.toUpperCase()} [${entry.component}]${eventTag}${identityTag} ${entry.message}${meta}`;
 
   switch (entry.level) {
     case "error":
@@ -147,18 +204,29 @@ function logToConsole(entry: LogEntry): void {
 }
 
 // ─────────────────────────────────────────────────────────────
-//  Event Hub sink (lazy init, buffered)
+//  Event Hub sinks (lazy init, buffered)
 // ─────────────────────────────────────────────────────────────
 
 const FLUSH_INTERVAL_MS = 5_000;
 const FLUSH_THRESHOLD = 50;
 
+// ── Primary (operational) Event Hub ──
+
 let _producer: EventHubProducerClient | null = null;
 let _producerInitAttempted = false;
 let _buffer: LogEntry[] = [];
 let _flushTimer: ReturnType<typeof setInterval> | null = null;
+
+// ── Analytics Event Hub (optional) ──
+
+let _analyticsProducer: EventHubProducerClient | null = null;
+let _analyticsProducerInitAttempted = false;
+let _analyticsBuffer: LogEntry[] = [];
+let _analyticsFlushTimer: ReturnType<typeof setInterval> | null = null;
+
 let _closing = false;
 let _flushInProgress = false;
+let _analyticsFlushInProgress = false;
 
 function getProducer(): EventHubProducerClient | null {
   if (_producerInitAttempted) return _producer;
@@ -177,25 +245,53 @@ function getProducer(): EventHubProducerClient | null {
   _producer = new EventHubProducerClient(connStr, hubName);
 
   _flushTimer = setInterval(() => {
-    void flushBuffer();
+    void flushBuffer(_buffer, _producer, "operational");
   }, FLUSH_INTERVAL_MS);
 
   return _producer;
 }
 
-async function flushBuffer(): Promise<void> {
-  if (_flushInProgress || _buffer.length === 0) return;
-  _flushInProgress = true;
+function getAnalyticsProducer(): EventHubProducerClient | null {
+  if (_analyticsProducerInitAttempted) return _analyticsProducer;
+  _analyticsProducerInitAttempted = true;
 
-  const producer = _producer;
+  const connStr = env.EVENT_HUB_ANALYTICS_CONNECTION_STRING;
+  const hubName = env.EVENT_HUB_ANALYTICS_NAME;
+
+  if (!connStr || !hubName) {
+    // Graceful fallback — analytics events go to the primary topic
+    return null;
+  }
+
+  _analyticsProducer = new EventHubProducerClient(connStr, hubName);
+
+  _analyticsFlushTimer = setInterval(() => {
+    void flushBuffer(_analyticsBuffer, _analyticsProducer, "analytics");
+  }, FLUSH_INTERVAL_MS);
+
+  return _analyticsProducer;
+}
+
+async function flushBuffer(
+  buffer: LogEntry[],
+  producer: EventHubProducerClient | null,
+  label: string,
+): Promise<void> {
+  const inProgress = label === "analytics" ? _analyticsFlushInProgress : _flushInProgress;
+  if (inProgress || buffer.length === 0) return;
+
+  if (label === "analytics") _analyticsFlushInProgress = true;
+  else _flushInProgress = true;
+
   if (!producer) {
-    _buffer = [];
-    _flushInProgress = false;
+    buffer.length = 0;
+    if (label === "analytics") _analyticsFlushInProgress = false;
+    else _flushInProgress = false;
     return;
   }
 
-  const entries = _buffer;
-  _buffer = [];
+  const entries = [...buffer];
+  buffer.length = 0;
 
   try {
     const pending = [...entries];
@@ -208,7 +304,7 @@ async function flushBuffer(): Promise<void> {
       }
       if (batch.count === 0) {
         // Single entry too large for a batch — discard it
-        console.error("[logger] Single log entry exceeds Event Hub batch size; discarding.");
+        console.error(`[logger] Single log entry exceeds Event Hub batch size (${label}); discarding.`);
         pending.shift();
         continue;
       }
@@ -216,12 +312,38 @@ async function flushBuffer(): Promise<void> {
     }
   } catch (err) {
     console.error(
-      "[logger] Failed to send log batch to Event Hub:",
+      `[logger] Failed to send log batch to Event Hub (${label}):`,
       (err as Error).message
     );
-    // Discard remaining entries to prevent unbounded growth
   } finally {
-    _flushInProgress = false;
+    if (label === "analytics") _analyticsFlushInProgress = false;
+    else _flushInProgress = false;
+  }
+}
+
+function bufferEntry(entry: LogEntry): void {
+  const isAnalytics = isAnalyticsEvent(entry.eventType);
+
+  // Try the analytics producer first for analytics events
+  if (isAnalytics) {
+    const analyticsProducer = getAnalyticsProducer();
+    if (analyticsProducer) {
+      _analyticsBuffer.push(entry);
+      if (_analyticsBuffer.length >= FLUSH_THRESHOLD) {
+        void flushBuffer(_analyticsBuffer, analyticsProducer, "analytics");
+      }
+      return;
+    }
+    // Fall through to primary if analytics hub not configured
+  }
+
+  // Route to primary (operational) Event Hub
+  const producer = getProducer();
+  if (producer) {
+    _buffer.push(entry);
+    if (_buffer.length >= FLUSH_THRESHOLD) {
+      void flushBuffer(_buffer, producer, "operational");
+    }
   }
 }
 
@@ -233,7 +355,8 @@ function log(
   level: LogLevel,
   message: string,
   component: string,
-  metadata?: Record<string, unknown>
+  metadata?: Record<string, unknown>,
+  eventType: LogEventType = "operational",
 ): void {
   if (!shouldLog(level)) return;
 
@@ -242,19 +365,13 @@ function log(
     level,
     component,
     message,
+    eventType,
+    identity: logContext.getStore(),
     metadata: sanitizeMetadata(metadata),
   };
 
   logToConsole(entry);
-
-  // Buffer for Event Hub
-  const producer = getProducer();
-  if (producer) {
-    _buffer.push(entry);
-    if (_buffer.length >= FLUSH_THRESHOLD) {
-      void flushBuffer();
-    }
-  }
+  bufferEntry(entry);
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -274,14 +391,47 @@ export const logger = {
   error(message: string, component: string, metadata?: Record<string, unknown>): void {
     log("error", message, component, metadata);
   },
+
+  /**
+   * Emit a structured event (tool_execution, token_usage, destructive_action, etc.).
+   * Always buffered to Event Hub regardless of LOG_LEVEL.
+   * Console output follows normal production filtering rules.
+   * Routed to the analytics or operational Event Hub based on event type.
+   */
+  emitEvent(
+    eventType: LogEventType,
+    message: string,
+    component: string,
+    metadata?: Record<string, unknown>,
+  ): void {
+    const entry: LogEntry = {
+      timestamp: new Date().toISOString(),
+      level: "info",
+      component,
+      message,
+      eventType,
+      identity: logContext.getStore(),
+      metadata: sanitizeMetadata(metadata),
+    };
+
+    logToConsole(entry);
+    bufferEntry(entry);
+  },
 };
 
 export async function flushLogs(): Promise<void> {
-  await flushBuffer();
+  await flushBuffer(_buffer, _producer, "operational");
+  await flushBuffer(_analyticsBuffer, _analyticsProducer, "analytics");
+
   if (_flushTimer) {
     clearInterval(_flushTimer);
     _flushTimer = null;
   }
+  if (_analyticsFlushTimer) {
+    clearInterval(_analyticsFlushTimer);
+    _analyticsFlushTimer = null;
+  }
+
   if (_producer) {
     try {
       await _producer.close();
@@ -289,6 +439,15 @@ export async function flushLogs(): Promise<void> {
       console.error("[logger] Error closing Event Hub producer:", (err as Error).message);
     } finally {
       _producer = null;
+    }
+  }
+  if (_analyticsProducer) {
+    try {
+      await _analyticsProducer.close();
+    } catch (err) {
+      console.error("[logger] Error closing analytics Event Hub producer:", (err as Error).message);
+    } finally {
+      _analyticsProducer = null;
     }
   }
 }

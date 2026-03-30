@@ -921,3 +921,29 @@ All endpoints require authentication via `Authorization: Bearer <api-key>` heade
 | `context_trimmed` | `originalTokens`, `newTokens`, `method` | Context window was trimmed to stay within token limits. `method` is `"truncation"` (per-result cap) or `"summary"` (conversation compression). |
 | `usage` | `usage: { input_tokens, output_tokens, cache_read_input_tokens }`, `model` | Per-turn token usage summary |
 | `error` | `message`, `code` | An error occurred |
+
+## Observability & Logging
+
+Neo emits structured log events to Azure Event Hubs for dashboarding, analytics, and alerting. Every event includes an identity envelope with the user's display name, role, provider, channel, and session ID.
+
+### Event Types
+
+| Event Type | Description | Key Fields |
+|------------|-------------|------------|
+| `operational` | Standard application logs (info, warn, error) | `level`, `component`, `message` |
+| `tool_execution` | Emitted after every tool call completes | `toolName`, `toolCategory`, `isDestructive`, `durationMs`, `status` |
+| `token_usage` | Emitted after each Claude API call | `model`, `inputTokens`, `outputTokens`, `cacheCreationTokens`, `cacheReadTokens` |
+| `skill_invocation` | Emitted when a slash-command skill is triggered | `skillId`, `skillName` |
+| `destructive_action` | Emitted when a destructive tool is confirmed or cancelled | `toolName`, `confirmed`, `justification`, `toolInput` |
+| `budget_alert` | Emitted when a user approaches (80%) or exceeds token budget | `windowType`, `budgetLimit`, `currentUsage`, `percentUsed`, `action` |
+| `session_started` | Emitted when a new session begins | `sessionId`, `conversationId` |
+| `session_ended` | Emitted when a session expires or is deleted | `sessionId`, `messageCount` |
+
+### Dual Event Hub Topics
+
+By default, all events go to a single Event Hub topic (`EVENT_HUB_NAME`). Optionally, configure a second topic for high-volume analytics events:
+
+- **`neo-logs`** (primary): `operational`, `destructive_action`, `budget_alert`
+- **`neo-analytics`** (optional): `tool_execution`, `token_usage`, `skill_invocation`, `session_started`, `session_ended`
+
+Set `EVENT_HUB_ANALYTICS_CONNECTION_STRING` and `EVENT_HUB_ANALYTICS_NAME` in `.env` to enable dual routing. If not configured, all events flow to the primary topic.

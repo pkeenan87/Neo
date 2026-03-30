@@ -72,6 +72,8 @@ export const env: EnvConfig = {
   TEAMS_BOT_ROLE:               process.env.TEAMS_BOT_ROLE === "admin" ? "admin" : "reader",
   EVENT_HUB_CONNECTION_STRING:  process.env.EVENT_HUB_CONNECTION_STRING,
   EVENT_HUB_NAME:               process.env.EVENT_HUB_NAME,
+  EVENT_HUB_ANALYTICS_CONNECTION_STRING: process.env.EVENT_HUB_ANALYTICS_CONNECTION_STRING,
+  EVENT_HUB_ANALYTICS_NAME:     process.env.EVENT_HUB_ANALYTICS_NAME,
   LOG_LEVEL:                    process.env.LOG_LEVEL,
   COSMOS_ENDPOINT:              process.env.COSMOS_ENDPOINT,
   CLI_STORAGE_ACCOUNT:          process.env.CLI_STORAGE_ACCOUNT,

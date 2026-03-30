@@ -5,11 +5,11 @@ import { createNDJSONStream, encodeNDJSON, writeAgentResult } from "@/lib/stream
 import { resolveAuth } from "@/lib/auth-helpers";
 import { scanUserInput, shouldBlock } from "@/lib/injection-guard";
 import { getSkill } from "@/lib/skill-store";
-import { logger } from "@/lib/logger";
+import { logger, hashPii, setLogContext } from "@/lib/logger";
 import { isChannel } from "@/lib/types";
 import { DEFAULT_MODEL, SUPPORTED_MODELS } from "@/lib/config";
 import { checkBudget, createReservation, deleteReservation, recordUsage } from "@/lib/usage-tracker";
-import type { AgentRequest, ModelPreference, TokenUsage } from "@/lib/types";
+import type { AgentRequest, ModelPreference, TokenUsage, LogIdentityContext } from "@/lib/types";
 
 const SUPPORTED_MODEL_IDS = new Set(Object.values(SUPPORTED_MODELS));
 
@@ -113,8 +113,42 @@ export async function POST(request: NextRequest) {
   }
 
   const session = (await sessionStore.get(sessionId) ?? await sessionStore.getExpired(sessionId))!;
-  logger.info("Agent request", "api/agent", { sessionId, role: session.role, provider: identity.provider });
 
+  // Resolve model preference: request body → default
+  const model: ModelPreference =
+    body.model && SUPPORTED_MODEL_IDS.has(body.model)
+      ? body.model
+      : DEFAULT_MODEL;
+
+  // Set up logging context for the rest of this request
+  const channel = isChannel(body.channel) ? body.channel : "web";
+  const logIdentity: LogIdentityContext = {
+    userName: identity.name,
+    userIdHash: hashPii(identity.ownerId),
+    role: identity.role,
+    provider: identity.provider,
+    channel,
+    sessionId,
+  };
+
+  return setLogContext(logIdentity, () => {
+    logger.info("Agent request", "api/agent", { sessionId, role: session.role, provider: identity.provider });
+    logger.emitEvent("session_started", "Session started", "api/agent", { sessionId, conversationId: sessionId });
+
+    return handleAgentRequest(identity, session, sessionId, body, effectiveMessage, resolvedSkill, model, logIdentity);
+  });
+}
+
+async function handleAgentRequest(
+  identity: { ownerId: string; role: string; name: string; provider: "entra-id" | "api-key" },
+  session: Awaited<ReturnType<typeof sessionStore.get>> & object,
+  sessionId: string,
+  body: AgentRequest,
+  effectiveMessage: string,
+  resolvedSkill: { id: string; name: string } | null,
+  model: ModelPreference,
+  logIdentity: LogIdentityContext,
+): Promise<Response> {
   // Rate limit check
   if (await sessionStore.isRateLimited(sessionId)) {
     logger.warn("Rate limit exceeded", "api/agent", { sessionId });
@@ -128,7 +162,18 @@ export async function POST(request: NextRequest) {
   const budget = await checkBudget(identity.ownerId);
   if (!budget.allowed) {
     const windowLabel = budget.exceededWindow === "two-hour" ? "2-hour" : "weekly";
+    const exceededUsage = budget.exceededWindow === "two-hour" ? budget.twoHourUsage : budget.weeklyUsage;
+    const exceededRemaining = budget.exceededWindow === "two-hour" ? budget.twoHourRemaining : budget.weekRemaining;
+    const budgetLimit = exceededUsage.totalInputTokens + exceededRemaining;
+    const realPct = budgetLimit > 0 ? Math.round((exceededUsage.totalInputTokens / budgetLimit) * 100) : 100;
     logger.warn("Token budget exceeded", "api/agent", { sessionId, budgetWarning: windowLabel });
+    logger.emitEvent("budget_alert", "Token budget exceeded", "api/agent", {
+      windowType: windowLabel,
+      budgetLimit,
+      currentUsage: exceededUsage.totalInputTokens,
+      percentUsed: realPct,
+      action: "blocked",
+    });
     return new Response(
       JSON.stringify({
         error: `Your ${windowLabel} token budget has been exceeded. Please wait for the window to reset.`,
@@ -137,24 +182,14 @@ export async function POST(request: NextRequest) {
     );
   }
 
-  // Resolve model preference: request body → default
-  const model: ModelPreference =
-    body.model && SUPPORTED_MODEL_IDS.has(body.model)
-      ? body.model
-      : DEFAULT_MODEL;
-
-  // Pessimistic reservation: write an estimated usage document before the
-  // agent loop so concurrent requests from the same user see each other's
-  // reservations in the budget check. The reservation is deleted and
-  // replaced with actual usage after the loop completes.
+  // Pessimistic reservation
   const reservationId = await createReservation(identity.ownerId, sessionId, model);
 
   // Add user message to session
   session.messages.push({ role: "user", content: effectiveMessage });
   session.messageCount++;
 
-  // Persist user message immediately (before agent loop) so prompts
-  // from web/CLI are written to the database on receipt.
+  // Persist user message immediately
   try {
     await sessionStore.saveMessages(sessionId, session.messages);
   } catch (err) {
@@ -168,72 +203,80 @@ export async function POST(request: NextRequest) {
 
   // Kick off agent loop asynchronously
   (async () => {
-    try {
-      await writer.write(encodeNDJSON({ type: "session", sessionId }));
+    // Run the entire async body within the logging context
+    await setLogContext(logIdentity, async () => {
+      try {
+        await writer.write(encodeNDJSON({ type: "session", sessionId }));
 
-      // Emit skill invocation event if a slash command was resolved
-      if (resolvedSkill) {
-        void writer.write(encodeNDJSON({
-          type: "skill_invocation",
-          skill: resolvedSkill,
-        })).catch(() => {});
-      }
+        // Emit skill invocation event if a slash command was resolved
+        if (resolvedSkill) {
+          logger.emitEvent("skill_invocation", `Skill invoked: ${resolvedSkill.name}`, "agent", {
+            skillId: resolvedSkill.id,
+            skillName: resolvedSkill.name,
+          });
+          void writer.write(encodeNDJSON({
+            type: "skill_invocation",
+            skill: resolvedSkill,
+          })).catch(() => {});
+        }
 
-      // Stream budget warning if approaching limits
-      if (budget.warning) {
-        void writer.write(encodeNDJSON({
-          type: "warning",
-          message: "You are approaching your token usage limit.",
-          code: "BUDGET_WARNING",
-        })).catch(() => {});
-      }
+        // Stream budget warning if approaching limits
+        if (budget.warning) {
+          // Budget warning is already emitted with real percentages in usage-tracker.ts
+          // Just stream the client-facing warning here
+          void writer.write(encodeNDJSON({
+            type: "warning",
+            message: "You are approaching your token usage limit.",
+            code: "BUDGET_WARNING",
+          })).catch(() => {});
+        }
 
-      // Accumulate usage across all turns in the agent loop
-      const accumulatedUsage: TokenUsage[] = [];
+        // Accumulate usage across all turns
+        const accumulatedUsage: TokenUsage[] = [];
 
-      const result = await runAgentLoop(
-        session.messages,
-        {
-          onThinking: () => {
-            void writer.write(encodeNDJSON({ type: "thinking" })).catch(() => {});
+        const result = await runAgentLoop(
+          session.messages,
+          {
+            onThinking: () => {
+              void writer.write(encodeNDJSON({ type: "thinking" })).catch(() => {});
+            },
+            onToolCall: (name, input) => {
+              void writer.write(encodeNDJSON({ type: "tool_call", tool: name, input })).catch(() => {});
+            },
+            onContextTrimmed: (originalTokens, newTokens, method) => {
+              void writer.write(encodeNDJSON({ type: "context_trimmed", originalTokens, newTokens, method })).catch(() => {});
+            },
+            onUsage: (usage, usedModel) => {
+              accumulatedUsage.push(usage);
+              void writer.write(encodeNDJSON({ type: "usage", usage, model: usedModel })).catch(() => {});
+            },
           },
-          onToolCall: (name, input) => {
-            void writer.write(encodeNDJSON({ type: "tool_call", tool: name, input })).catch(() => {});
-          },
-          onContextTrimmed: (originalTokens, newTokens, method) => {
-            void writer.write(encodeNDJSON({ type: "context_trimmed", originalTokens, newTokens, method })).catch(() => {});
-          },
-          onUsage: (usage, usedModel) => {
-            accumulatedUsage.push(usage);
-            void writer.write(encodeNDJSON({ type: "usage", usage, model: usedModel })).catch(() => {});
-          },
-        },
-        session.role,
-        sessionId,
-        model,
-      );
+          session.role,
+          sessionId,
+          model,
+        );
 
-      await writeAgentResult(result, session, sessionId, writer);
+        await writeAgentResult(result, session, sessionId, writer);
 
-      // Settle: delete reservation and record actual usage
-      if (reservationId) {
-        void deleteReservation(reservationId, identity.ownerId);
+        // Settle: delete reservation and record actual usage
+        if (reservationId) {
+          void deleteReservation(reservationId, identity.ownerId);
+        }
+        for (const usage of accumulatedUsage) {
+          void recordUsage(identity.ownerId, sessionId, model, usage);
+        }
+      } catch (err) {
+        if (reservationId) {
+          void deleteReservation(reservationId, identity.ownerId);
+        }
+        logger.error("Agent loop error", "api/agent", { sessionId, errorMessage: (err as Error).message });
+        await writer.write(
+          encodeNDJSON({ type: "error", message: "An error occurred processing your request.", code: "AGENT_ERROR" })
+        );
+      } finally {
+        await writer.close();
       }
-      for (const usage of accumulatedUsage) {
-        void recordUsage(identity.ownerId, sessionId, model, usage);
-      }
-    } catch (err) {
-      // Clean up reservation on error
-      if (reservationId) {
-        void deleteReservation(reservationId, identity.ownerId);
-      }
-      logger.error("Agent loop error", "api/agent", { sessionId, errorMessage: (err as Error).message });
-      await writer.write(
-        encodeNDJSON({ type: "error", message: "An error occurred processing your request.", code: "AGENT_ERROR" })
-      );
-    } finally {
-      await writer.close();
-    }
+    });
   })();
 
   return new Response(readable, {

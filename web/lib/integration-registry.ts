@@ -247,3 +247,22 @@ export const INTEGRATIONS: IntegrationInfo[] = [
 export function getIntegration(slug: string): IntegrationInfo | undefined {
   return INTEGRATIONS.find((i) => i.slug === slug);
 }
+
+// ── Tool → Integration lookup ────────────────────────────────
+
+let _toolMap: Map<string, string> | null = null;
+
+function buildToolMap(): Map<string, string> {
+  const map = new Map<string, string>();
+  for (const integration of INTEGRATIONS) {
+    for (const tool of integration.capabilities) {
+      map.set(tool, integration.slug);
+    }
+  }
+  return map;
+}
+
+export function getToolIntegration(toolName: string): string | null {
+  if (!_toolMap) _toolMap = buildToolMap();
+  return _toolMap.get(toolName) ?? null;
+}

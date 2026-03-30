@@ -273,11 +273,37 @@ export async function checkBudget(userId: string): Promise<BudgetResult> {
     return { allowed: false, twoHourRemaining, weekRemaining: 0, warning: true, exceededWindow: "weekly", twoHourUsage: twoHour, weeklyUsage: weekly };
   }
 
+  const warning = twoHourWarning || weeklyWarning;
+
+  // Emit budget alert at 80% threshold
+  if (warning) {
+    const twoHourPct = Math.round((twoHour.totalInputTokens / twoHourMax) * 100);
+    const weeklyPct = Math.round((weekly.totalInputTokens / weeklyMax) * 100);
+    if (twoHourWarning) {
+      logger.emitEvent("budget_alert", "Approaching 2-hour token budget", "usage-tracker", {
+        windowType: "2-hour",
+        budgetLimit: twoHourMax,
+        currentUsage: twoHour.totalInputTokens,
+        percentUsed: twoHourPct,
+        action: "warning",
+      });
+    }
+    if (weeklyWarning) {
+      logger.emitEvent("budget_alert", "Approaching weekly token budget", "usage-tracker", {
+        windowType: "weekly",
+        budgetLimit: weeklyMax,
+        currentUsage: weekly.totalInputTokens,
+        percentUsed: weeklyPct,
+        action: "warning",
+      });
+    }
+  }
+
   return {
     allowed: true,
     twoHourRemaining,
     weekRemaining,
-    warning: twoHourWarning || weeklyWarning,
+    warning,
     twoHourUsage: twoHour,
     weeklyUsage: weekly,
   };

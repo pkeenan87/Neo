@@ -14,6 +14,8 @@
       - Level         (string)     — "debug" | "info" | "warn" | "error"
       - Component     (string)     — source component name
       - Message       (string)     — log message text
+      - EventType     (string)     — event classification for filtering/dashboards
+      - Identity      (dynamic)    — user identity envelope (userName, role, provider, channel, sessionId)
       - Metadata      (dynamic)    — optional PII-sanitized key-value pairs
 
     Prerequisites:
@@ -125,7 +127,9 @@ $tablePayload = @{
                 @{ name = "Level";         type = "string";   description = "Log level: debug | info | warn | error" }
                 @{ name = "Component";     type = "string";   description = "Source component (e.g. executors, session-store, injection-guard)" }
                 @{ name = "Message";       type = "string";   description = "Log message text" }
-                @{ name = "Metadata";      type = "dynamic";  description = "PII-sanitized metadata (sessionId, toolName, severity, etc.)" }
+                @{ name = "EventType";     type = "string";   description = "Event classification: operational | tool_execution | token_usage | skill_invocation | destructive_action | budget_alert | session_started | session_ended" }
+                @{ name = "Identity";      type = "dynamic";  description = "User identity envelope (userName, userIdHash, role, provider, channel, sessionId)" }
+                @{ name = "Metadata";      type = "dynamic";  description = "PII-sanitized metadata (toolName, durationMs, status, etc.)" }
             )
         }
         retentionInDays      = $RetentionDays
@@ -206,6 +210,8 @@ $dcrPayload = @{
                     @{ name = "level";     type = "string" }
                     @{ name = "component"; type = "string" }
                     @{ name = "message";   type = "string" }
+                    @{ name = "eventType"; type = "string" }
+                    @{ name = "identity";  type = "dynamic" }
                     @{ name = "metadata";  type = "dynamic" }
                 )
             }
@@ -222,7 +228,7 @@ $dcrPayload = @{
             @{
                 streams       = @( "Custom-$TableName" )
                 destinations  = @( "neo-workspace" )
-                transformKql  = "source | project TimeGenerated = timestamp, Level = level, Component = component, Message = message, Metadata = metadata"
+                transformKql  = "source | project TimeGenerated = timestamp, Level = level, Component = component, Message = message, EventType = eventType, Identity = identity, Metadata = metadata"
                 outputStream  = "Custom-$TableName"
             }
         )
@@ -286,6 +292,8 @@ Write-Host "    TimeGenerated  (datetime)  <- LogEntry.timestamp"
 Write-Host "    Level          (string)    <- LogEntry.level"
 Write-Host "    Component      (string)    <- LogEntry.component"
 Write-Host "    Message        (string)    <- LogEntry.message"
+Write-Host "    EventType      (string)    <- LogEntry.eventType (operational, tool_execution, etc.)"
+Write-Host "    Identity       (dynamic)   <- LogEntry.identity (userName, role, provider, channel)"
 Write-Host "    Metadata       (dynamic)   <- LogEntry.metadata (PII-sanitized)"
 Write-Host ""
 Write-Host "  To ingest logs via the DCR, use:" -ForegroundColor Yellow

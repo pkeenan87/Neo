@@ -36,12 +36,37 @@ export interface EnvConfig {
   TEAMS_BOT_ROLE: Role;
   EVENT_HUB_CONNECTION_STRING: string | undefined;
   EVENT_HUB_NAME: string | undefined;
+  EVENT_HUB_ANALYTICS_CONNECTION_STRING: string | undefined;
+  EVENT_HUB_ANALYTICS_NAME: string | undefined;
   LOG_LEVEL: string | undefined;
   COSMOS_ENDPOINT: string | undefined;
   CLI_STORAGE_ACCOUNT: string | undefined;
   CLI_STORAGE_CONTAINER: string;
   KEY_VAULT_URL: string | undefined;
   KEY_VAULT_KEY_NAME: string;
+}
+
+// ─────────────────────────────────────────────────────────────
+//  Logging
+// ─────────────────────────────────────────────────────────────
+
+export type LogEventType =
+  | "operational"
+  | "tool_execution"
+  | "token_usage"
+  | "skill_invocation"
+  | "destructive_action"
+  | "budget_alert"
+  | "session_started"
+  | "session_ended";
+
+export interface LogIdentityContext {
+  userName: string;
+  userIdHash: string;
+  role: string;
+  provider: "entra-id" | "api-key";
+  channel: string;
+  sessionId: string;
 }
 
 // ─────────────────────────────────────────────────────────────

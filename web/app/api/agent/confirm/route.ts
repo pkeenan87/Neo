@@ -4,8 +4,8 @@ import { resumeAfterConfirmation } from "@/lib/agent";
 import { createNDJSONStream, encodeNDJSON, writeAgentResult } from "@/lib/stream";
 import { resolveAuth } from "@/lib/auth-helpers";
 import { canUseTool } from "@/lib/permissions";
-import { logger } from "@/lib/logger";
-import type { ConfirmRequest } from "@/lib/types";
+import { logger, hashPii, setLogContext } from "@/lib/logger";
+import type { ConfirmRequest, LogIdentityContext } from "@/lib/types";
 
 export async function POST(request: NextRequest) {
   const identity = await resolveAuth(request);
@@ -81,35 +81,64 @@ export async function POST(request: NextRequest) {
     });
   }
 
+  const logIdentity: LogIdentityContext = {
+    userName: identity.name,
+    userIdHash: hashPii(identity.ownerId),
+    role: identity.role,
+    provider: identity.provider,
+    channel: "web",
+    sessionId: body.sessionId,
+  };
+
+  // Emit destructive action audit event inside logging context so identity envelope is attached
+  const toolInput = pendingTool.input;
+  setLogContext(logIdentity, () => {
+    logger.emitEvent("destructive_action", `Destructive tool ${body.confirmed ? "confirmed" : "cancelled"}: ${pendingTool.name}`, "api/confirm", {
+      toolName: pendingTool.name,
+      confirmed: body.confirmed,
+      justification: typeof toolInput.justification === "string" ? toolInput.justification : undefined,
+      toolInput: JSON.stringify({
+        ...(typeof toolInput.upn === "string" && { upn: hashPii(toolInput.upn) }),
+        ...(typeof toolInput.hostname === "string" && { hostname: toolInput.hostname }),
+        ...(typeof toolInput.computer_id === "string" && { computer_id: toolInput.computer_id }),
+        ...(typeof toolInput.value === "string" && { value: "[redacted]" }),
+        ...(typeof toolInput.case_id === "string" && { case_id: toolInput.case_id }),
+        ...(typeof toolInput.approval_request_id === "string" && { approval_request_id: toolInput.approval_request_id }),
+      }),
+    });
+  });
+
   const { readable, writer } = createNDJSONStream();
 
   (async () => {
-    try {
-      const result = await resumeAfterConfirmation(
-        session.messages,
-        pendingTool,
-        body.confirmed,
-        {
-          onThinking: () => {
-            void writer.write(encodeNDJSON({ type: "thinking" })).catch(() => {});
+    await setLogContext(logIdentity, async () => {
+      try {
+        const result = await resumeAfterConfirmation(
+          session.messages,
+          pendingTool,
+          body.confirmed,
+          {
+            onThinking: () => {
+              void writer.write(encodeNDJSON({ type: "thinking" })).catch(() => {});
+            },
+            onToolCall: (name, input) => {
+              void writer.write(encodeNDJSON({ type: "tool_call", tool: name, input })).catch(() => {});
+            },
           },
-          onToolCall: (name, input) => {
-            void writer.write(encodeNDJSON({ type: "tool_call", tool: name, input })).catch(() => {});
-          },
-        },
-        session.role,
-        body.sessionId
-      );
+          session.role,
+          body.sessionId
+        );
 
-      await writeAgentResult(result, session, body.sessionId, writer);
-    } catch (err) {
-      logger.error("Confirmation handler error", "api/confirm", { sessionId: body.sessionId, errorMessage: (err as Error).message });
-      await writer.write(
-        encodeNDJSON({ type: "error", message: (err as Error).message, code: "AGENT_ERROR" })
-      );
-    } finally {
-      await writer.close();
-    }
+        await writeAgentResult(result, session, body.sessionId, writer);
+      } catch (err) {
+        logger.error("Confirmation handler error", "api/confirm", { sessionId: body.sessionId, errorMessage: (err as Error).message });
+        await writer.write(
+          encodeNDJSON({ type: "error", message: "An error occurred processing your request.", code: "AGENT_ERROR" })
+        );
+      } finally {
+        await writer.close();
+      }
+    });
   })();
 
   return new Response(readable, {
