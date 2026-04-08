@@ -1801,6 +1801,7 @@ async function searchAsset(
         assetResources(
           assetPagination: { limit: 5, page: FIRST }
           fields: [
+            "key"
             "assetBasicInfo.name"
             "assetBasicInfo.ipAddress"
             "assetBasicInfo.type"
