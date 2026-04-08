@@ -27,7 +27,7 @@ This skill is the analytical chain from raw threat intelligence to actionable de
 - get_sentinel_incidents
 
 ## Required Role
-reader (escalate to responder for any blocking actions)
+admin
 
 ## Parameters
 - `focus` — what to focus on: `latest_campaigns`, `specific_actor`, `new_behaviours`, `supply_chain_risk`, `full_assessment`
