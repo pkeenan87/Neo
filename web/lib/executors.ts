@@ -1796,7 +1796,7 @@ async function searchAsset(
   }
 
   const query = `
-    query SearchAsset($siteId: ID!, $conditions: [AssetFilterConditionInput!]!) {
+    query SearchAsset($siteId: ID!, $conditions: [AssetsFiltersCondition!]!) {
       site(id: $siteId) {
         assetResources(
           assetPagination: { limit: 5, page: FIRST }
