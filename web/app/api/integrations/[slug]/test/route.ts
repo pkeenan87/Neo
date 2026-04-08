@@ -33,10 +33,17 @@ const PROBES: Record<string, () => Promise<void>> = {
     const apiToken = await getToolSecret("LANSWEEPER_API_TOKEN");
     const siteId = await getToolSecret("LANSWEEPER_SITE_ID");
     if (!apiToken || !siteId) throw new Error("Missing Lansweeper credentials");
+    // SECURITY: Validate siteId format before use — expected UUID or alphanumeric
+    if (!/^[a-zA-Z0-9_-]{1,128}$/.test(siteId)) throw new Error("Invalid LANSWEEPER_SITE_ID format");
     const res = await fetch("https://api.lansweeper.com/api/v2/graphql", {
       method: "POST",
-      headers: { Authorization: `Bearer ${apiToken}`, "Content-Type": "application/json" },
-      body: JSON.stringify({ query: `query { site(id: "${siteId}") { name } }` }),
+      // Lansweeper PATs use "Token" scheme, not "Bearer" (which is for OAuth JWTs)
+      headers: { Authorization: `Token ${apiToken}`, "Content-Type": "application/json" },
+      // SECURITY: siteId passed as a GraphQL variable, not interpolated into the query string
+      body: JSON.stringify({
+        query: `query GetSite($id: String!) { site(id: $id) { name } }`,
+        variables: { id: siteId },
+      }),
     });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const json = await res.json() as { errors?: { message: string }[] };

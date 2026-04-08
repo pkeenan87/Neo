@@ -1753,7 +1753,8 @@ async function lansweeperGraphQL(
   const res = await fetch("https://api.lansweeper.com/api/v2/graphql", {
     method: "POST",
     headers: {
-      Authorization: `Bearer ${config.apiToken}`,
+      // Lansweeper PATs use "Token" scheme, not "Bearer" (which is for OAuth JWTs)
+      Authorization: `Token ${config.apiToken}`,
       "Content-Type": "application/json",
     },
     body: JSON.stringify({ query, variables }),
