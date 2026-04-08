@@ -41,7 +41,7 @@ const PROBES: Record<string, () => Promise<void>> = {
       headers: { Authorization: `Token ${apiToken}`, "Content-Type": "application/json" },
       // SECURITY: siteId passed as a GraphQL variable, not interpolated into the query string
       body: JSON.stringify({
-        query: `query GetSite($id: String!) { site(id: $id) { name } }`,
+        query: `query GetSite($id: ID!) { site(id: $id) { name } }`,
         variables: { id: siteId },
       }),
     });
