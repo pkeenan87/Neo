@@ -202,6 +202,7 @@ export async function runAgentLoop(
       }
 
       localMessages.push({ role: "user", content: toolResults });
+      if (callbacks.onTurnComplete) callbacks.onTurnComplete(localMessages);
       continue;
     }
 

@@ -226,6 +226,12 @@ export interface AgentCallbacks {
    */
   onContextTrimmed?: (originalTokens: number, newTokens: number, method: "truncation" | "summary") => void;
   onUsage?: (usage: TokenUsage, model: ModelPreference) => void;
+  /**
+   * Fired after each agent loop turn — when an assistant response or tool
+   * results are appended to the message array. Use to incrementally persist
+   * messages so conversations are not lost on disconnect or error.
+   */
+  onTurnComplete?: (messages: Message[]) => void;
 }
 
 // ─────────────────────────────────────────────────────────────

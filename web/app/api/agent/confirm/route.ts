@@ -124,6 +124,15 @@ export async function POST(request: NextRequest) {
             onToolCall: (name, input) => {
               void writer.write(encodeNDJSON({ type: "tool_call", tool: name, input })).catch(() => {});
             },
+            onTurnComplete: (messages) => {
+              session.messages = messages;
+              void sessionStore.saveMessages(body.sessionId, messages).catch((saveErr) => {
+                logger.warn("Failed to persist messages on turn complete", "api/confirm", {
+                  sessionId: body.sessionId,
+                  errorMessage: (saveErr as Error).message,
+                });
+              });
+            },
           },
           session.role,
           body.sessionId
@@ -131,6 +140,12 @@ export async function POST(request: NextRequest) {
 
         await writeAgentResult(result, session, body.sessionId, writer);
       } catch (err) {
+        void sessionStore.saveMessages(body.sessionId, session.messages).catch((saveErr) => {
+          logger.warn("Failed to persist messages after confirm handler error", "api/confirm", {
+            sessionId: body.sessionId,
+            errorMessage: (saveErr as Error).message,
+          });
+        });
         logger.error("Confirmation handler error", "api/confirm", { sessionId: body.sessionId, errorMessage: (err as Error).message });
         await writer.write(
           encodeNDJSON({ type: "error", message: "An error occurred processing your request.", code: "AGENT_ERROR" })

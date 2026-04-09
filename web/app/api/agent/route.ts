@@ -250,6 +250,15 @@ async function handleAgentRequest(
               accumulatedUsage.push(usage);
               void writer.write(encodeNDJSON({ type: "usage", usage, model: usedModel })).catch(() => {});
             },
+            onTurnComplete: (messages) => {
+              session.messages = messages;
+              void sessionStore.saveMessages(sessionId, messages).catch((saveErr) => {
+                logger.warn("Failed to persist messages on turn complete", "api/agent", {
+                  sessionId,
+                  errorMessage: (saveErr as Error).message,
+                });
+              });
+            },
           },
           session.role,
           sessionId,
@@ -269,6 +278,13 @@ async function handleAgentRequest(
         if (reservationId) {
           void deleteReservation(reservationId, identity.ownerId);
         }
+        // Fire-and-forget: save whatever messages accumulated before the error
+        void sessionStore.saveMessages(sessionId, session.messages).catch((saveErr) => {
+          logger.warn("Failed to persist messages after agent loop error", "api/agent", {
+            sessionId,
+            errorMessage: (saveErr as Error).message,
+          });
+        });
         logger.error("Agent loop error", "api/agent", { sessionId, errorMessage: (err as Error).message });
         await writer.write(
           encodeNDJSON({ type: "error", message: "An error occurred processing your request.", code: "AGENT_ERROR" })
