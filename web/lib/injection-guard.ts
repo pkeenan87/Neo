@@ -141,11 +141,31 @@ function scan(text: string, patterns: PatternEntry[]): ScanResult {
 //  Exported functions
 // ─────────────────────────────────────────────────────────────
 
+/**
+ * Scan user input for prompt injection patterns.
+ * Accepts plain strings or array content blocks (for multimodal messages).
+ * Only text content is scanned — image and document blocks are skipped.
+ */
 export function scanUserInput(
-  message: string,
+  message: string | unknown[],
   context: { sessionId: string; userId: string; role: string }
 ): ScanResult {
-  const result = scan(message, USER_INPUT_PATTERNS);
+  // Extract text from array content blocks, skip binary/image/document blocks
+  let textToScan: string;
+  if (typeof message === "string") {
+    textToScan = message;
+  } else if (Array.isArray(message)) {
+    textToScan = message
+      .filter((b): b is { type: "text"; text: string } =>
+        typeof b === "object" && b !== null && (b as { type: string }).type === "text"
+      )
+      .map((b) => b.text)
+      .join("\n");
+  } else {
+    textToScan = "";
+  }
+
+  const result = scan(textToScan, USER_INPUT_PATTERNS);
 
   if (result.flagged) {
     logger.warn("Prompt injection detected in user input", "injection-guard", {
@@ -154,7 +174,7 @@ export function scanUserInput(
       role: context.role,
       label: result.label,
       matchCount: result.matchCount,
-      messageLength: message.length,
+      messageLength: textToScan.length,
       mode: GUARD_MODE,
     });
   }

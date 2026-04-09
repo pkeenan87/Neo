@@ -38,12 +38,46 @@ export interface EnvConfig {
   EVENT_HUB_NAME: string | undefined;
   EVENT_HUB_ANALYTICS_CONNECTION_STRING: string | undefined;
   EVENT_HUB_ANALYTICS_NAME: string | undefined;
+  UPLOAD_STORAGE_CONTAINER: string | undefined;
   LOG_LEVEL: string | undefined;
   COSMOS_ENDPOINT: string | undefined;
   CLI_STORAGE_ACCOUNT: string | undefined;
   CLI_STORAGE_CONTAINER: string;
   KEY_VAULT_URL: string | undefined;
   KEY_VAULT_KEY_NAME: string;
+}
+
+// ─────────────────────────────────────────────────────────────
+//  File Uploads
+// ─────────────────────────────────────────────────────────────
+
+export const ACCEPTED_IMAGE_TYPES = new Set([
+  "image/jpeg",
+  "image/png",
+  "image/gif",
+  "image/webp",
+]);
+
+export const ACCEPTED_DOC_TYPES = new Set([
+  "application/pdf",
+]);
+
+export const MAX_IMAGE_SIZE = 20 * 1024 * 1024; // 20 MB
+export const MAX_DOC_SIZE = 32 * 1024 * 1024;   // 32 MB
+export const MAX_FILES_PER_MESSAGE = 5;
+
+export interface FileAttachment {
+  filename: string;
+  mimetype: string;
+  size: number;
+  buffer: Buffer;
+  blobUrl?: string;
+}
+
+export interface FileRef {
+  filename: string;
+  mimetype: string;
+  blobUrl: string;
 }
 
 // ─────────────────────────────────────────────────────────────

@@ -24,6 +24,14 @@ export interface PrepareResult {
 
 // ── Token estimation ─────────────────────────────────────────
 
+// Claude charges ~1600 tokens per 1024x1024 image tile.
+// Convert to char equivalent for the chars-based estimator.
+const IMAGE_TOKEN_ESTIMATE = 1600;
+const IMAGE_CHAR_ESTIMATE = IMAGE_TOKEN_ESTIMATE * CHARS_PER_TOKEN;
+
+// Rough estimate for PDF document blocks (~2000 tokens per page, assume 3 pages average)
+const DOCUMENT_CHAR_ESTIMATE = 2000 * 3 * CHARS_PER_TOKEN;
+
 function contentCharCount(content: Message["content"]): number {
   if (typeof content === "string") return content.length;
   if (!Array.isArray(content)) return 0;
@@ -41,6 +49,10 @@ function contentCharCount(content: Message["content"]): number {
       } else if (Array.isArray(c)) {
         total += JSON.stringify(c).length;
       }
+    } else if (block.type === "image") {
+      total += IMAGE_CHAR_ESTIMATE;
+    } else if ((block as { type: string }).type === "document") {
+      total += DOCUMENT_CHAR_ESTIMATE;
     }
   }
   return total;

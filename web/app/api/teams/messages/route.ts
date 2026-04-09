@@ -13,6 +13,7 @@ import { runAgentLoop, resumeAfterConfirmation, summarizeConversation } from "@/
 import { canUseTool } from "@/lib/permissions";
 import { scanUserInput, shouldBlock } from "@/lib/injection-guard";
 import { logger, hashPii, setLogContext } from "@/lib/logger";
+import { isAcceptedType as isAcceptedFileType } from "@/lib/file-validation";
 import {
   getSessionId,
   setSessionId,
@@ -20,7 +21,7 @@ import {
   refreshMapping,
 } from "@/lib/teams-session-map";
 import { extractAutoTitle, generateAndSetTitle } from "@/lib/title-utils";
-import type { PendingTool, AgentLoopResult, TeamsChannelType } from "@/lib/types";
+import type { PendingTool, AgentLoopResult, TeamsChannelType, Message } from "@/lib/types";
 
 // ─────────────────────────────────────────────────────────────
 //  Bot Framework adapter (lazy singleton — avoids assertions
@@ -466,7 +467,105 @@ async function handleTurn(context: TurnContext): Promise<void> {
     return;
   }
 
-  session.messages.push({ role: "user", content: messageText });
+  // Check for file attachments from Teams
+  const attachments = context.activity.attachments ?? [];
+  const teamsFiles: { filename: string; mimetype: string; buffer: Buffer }[] = [];
+
+  // SSRF prevention: only fetch from known Teams CDN origins
+  const TEAMS_CDN_HOSTS = [
+    "teams.microsoft.com",
+    "us-api.asm.skype.com",
+    "eu-api.asm.skype.com",
+    "ap-api.asm.skype.com",
+  ];
+  function isTeamsCdnUrl(url: string): boolean {
+    try {
+      const parsed = new URL(url);
+      return parsed.protocol === "https:" &&
+        TEAMS_CDN_HOSTS.some(h => parsed.hostname === h || parsed.hostname.endsWith(`.${h}`));
+    } catch { return false; }
+  }
+
+  for (const att of attachments) {
+    if (att.contentUrl && att.contentType && isAcceptedFileType(att.contentType)) {
+      if (!isTeamsCdnUrl(att.contentUrl)) {
+        logger.warn("Rejected non-CDN Teams attachment URL", "teams", {
+          sessionId: resolvedSessionId,
+        });
+        continue;
+      }
+      try {
+        const res = await fetch(att.contentUrl);
+        if (!res.ok) continue;
+        // Stream with size cap to prevent OOM from large attachments
+        const MAX_ATTACHMENT_BYTES = 32 * 1024 * 1024;
+        const chunks: Uint8Array[] = [];
+        let totalBytes = 0;
+        const reader = res.body?.getReader();
+        if (!reader) continue;
+        let done = false;
+        while (!done) {
+          const { done: d, value } = await reader.read();
+          done = d;
+          if (value) {
+            totalBytes += value.length;
+            if (totalBytes > MAX_ATTACHMENT_BYTES) {
+              reader.cancel();
+              logger.warn("Teams attachment too large, skipping", "teams", {
+                sessionId: resolvedSessionId,
+                filename: att.name ?? "unknown",
+              });
+              break;
+            }
+            chunks.push(value);
+          }
+        }
+        if (totalBytes <= MAX_ATTACHMENT_BYTES) {
+          teamsFiles.push({
+            filename: att.name ?? "attachment",
+            mimetype: att.contentType,
+            buffer: Buffer.concat(chunks.map(c => Buffer.from(c))),
+          });
+        }
+      } catch (err) {
+        logger.warn("Failed to download Teams attachment", "teams", {
+          sessionId: resolvedSessionId,
+          filename: att.name ?? "unknown",
+          errorMessage: (err as Error).message,
+        });
+      }
+    }
+  }
+
+  // Build content for Claude API (base64) and for persistence (text + placeholders)
+  let claudeContent: Message["content"];
+  let persistedContent: string;
+  if (teamsFiles.length > 0) {
+    const { buildContentBlocks, buildPersistedContent } = await import("@/lib/content-blocks");
+    const { uploadFile, isUploadStorageConfigured } = await import("@/lib/upload-storage");
+    claudeContent = buildContentBlocks(messageText, teamsFiles.map(f => ({ ...f, size: f.buffer.length })));
+    const fileRefs: { filename: string; mimetype: string; blobUrl: string }[] = [];
+    if (isUploadStorageConfigured()) {
+      for (const f of teamsFiles) {
+        try {
+          const blobUrl = await uploadFile(f.filename, f.buffer, f.mimetype);
+          fileRefs.push({ filename: f.filename, mimetype: f.mimetype, blobUrl });
+        } catch (uploadErr) {
+          logger.warn("Failed to upload Teams attachment to blob storage", "teams", {
+            sessionId: resolvedSessionId,
+            filename: f.filename,
+            errorMessage: (uploadErr as Error).message,
+          });
+        }
+      }
+    }
+    persistedContent = buildPersistedContent(messageText, fileRefs);
+  } else {
+    claudeContent = messageText;
+    persistedContent = messageText;
+  }
+
+  session.messages.push({ role: "user", content: persistedContent });
   session.messageCount++;
 
   // Persist user message immediately (before agent loop)
@@ -481,6 +580,15 @@ async function handleTurn(context: TurnContext): Promise<void> {
 
   await context.sendActivities([{ type: ActivityTypes.Typing }]);
 
+  // Build API messages — swap persisted content with Claude content for current turn
+  const apiMessages = [...session.messages];
+  if (teamsFiles.length > 0 && apiMessages.length > 0) {
+    const lastMsg = apiMessages[apiMessages.length - 1];
+    if (lastMsg.role === "user") {
+      apiMessages[apiMessages.length - 1] = { role: "user", content: claudeContent };
+    }
+  }
+
   // Build logging context after session resolution so sessionId is real
   const teamsLogContext = {
     userName: teamsUserName,
@@ -491,7 +599,7 @@ async function handleTurn(context: TurnContext): Promise<void> {
     sessionId: resolvedSessionId,
   };
   const result = await setLogContext(teamsLogContext, () =>
-    runAgentLoop(session.messages, {}, session.role, resolvedSessionId)
+    runAgentLoop(apiMessages, {}, session.role, resolvedSessionId)
   );
 
   session.messages = result.messages;

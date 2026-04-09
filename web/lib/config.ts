@@ -74,6 +74,7 @@ export const env: EnvConfig = {
   EVENT_HUB_NAME:               process.env.EVENT_HUB_NAME,
   EVENT_HUB_ANALYTICS_CONNECTION_STRING: process.env.EVENT_HUB_ANALYTICS_CONNECTION_STRING,
   EVENT_HUB_ANALYTICS_NAME:     process.env.EVENT_HUB_ANALYTICS_NAME,
+  UPLOAD_STORAGE_CONTAINER:     process.env.UPLOAD_STORAGE_CONTAINER,
   LOG_LEVEL:                    process.env.LOG_LEVEL,
   COSMOS_ENDPOINT:              process.env.COSMOS_ENDPOINT,
   CLI_STORAGE_ACCOUNT:          process.env.CLI_STORAGE_ACCOUNT,

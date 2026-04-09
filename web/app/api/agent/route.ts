@@ -1,3 +1,4 @@
+import type Anthropic from "@anthropic-ai/sdk";
 import { NextRequest } from "next/server";
 import { sessionStore } from "@/lib/session-factory";
 import { runAgentLoop } from "@/lib/agent";
@@ -6,10 +7,13 @@ import { resolveAuth } from "@/lib/auth-helpers";
 import { scanUserInput, shouldBlock } from "@/lib/injection-guard";
 import { getSkill } from "@/lib/skill-store";
 import { logger, hashPii, setLogContext } from "@/lib/logger";
-import { isChannel } from "@/lib/types";
+import { isChannel, MAX_FILES_PER_MESSAGE } from "@/lib/types";
+import type { AgentRequest, ModelPreference, TokenUsage, LogIdentityContext, FileAttachment } from "@/lib/types";
 import { DEFAULT_MODEL, SUPPORTED_MODELS } from "@/lib/config";
 import { checkBudget, createReservation, deleteReservation, recordUsage } from "@/lib/usage-tracker";
-import type { AgentRequest, ModelPreference, TokenUsage, LogIdentityContext } from "@/lib/types";
+import { isMultipartRequest, parseMultipart } from "@/lib/multipart-parser";
+import { buildContentBlocks, buildPersistedContent } from "@/lib/content-blocks";
+import { uploadFile, isUploadStorageConfigured } from "@/lib/upload-storage";
 
 const SUPPORTED_MODEL_IDS = new Set(Object.values(SUPPORTED_MODELS));
 
@@ -22,11 +26,33 @@ export async function POST(request: NextRequest) {
     });
   }
 
+  // Parse request — JSON or multipart/form-data (when files are attached)
   let body: AgentRequest;
-  try {
-    body = await request.json();
-  } catch {
-    return new Response(JSON.stringify({ error: "Invalid JSON" }), { status: 400 });
+  let attachedFiles: FileAttachment[] = [];
+
+  if (isMultipartRequest(request)) {
+    try {
+      const { fields, files } = await parseMultipart(request);
+      body = {
+        message: fields.message ?? "",
+        sessionId: fields.sessionId,
+        channel: fields.channel as AgentRequest["channel"],
+        model: fields.model,
+      };
+      attachedFiles = files;
+    } catch (err) {
+      return new Response(
+        JSON.stringify({ error: (err as Error).message || "Failed to parse file upload" }),
+        { status: 400 },
+      );
+    }
+
+  } else {
+    try {
+      body = await request.json();
+    } catch {
+      return new Response(JSON.stringify({ error: "Invalid JSON" }), { status: 400 });
+    }
   }
 
   if (!body.message || typeof body.message !== "string") {
@@ -135,7 +161,7 @@ export async function POST(request: NextRequest) {
     logger.info("Agent request", "api/agent", { sessionId, role: session.role, provider: identity.provider });
     logger.emitEvent("session_started", "Session started", "api/agent", { sessionId, conversationId: sessionId });
 
-    return handleAgentRequest(identity, session, sessionId, body, effectiveMessage, resolvedSkill, model, logIdentity);
+    return handleAgentRequest(identity, session, sessionId, body, effectiveMessage, resolvedSkill, model, logIdentity, attachedFiles);
   });
 }
 
@@ -148,6 +174,7 @@ async function handleAgentRequest(
   resolvedSkill: { id: string; name: string } | null,
   model: ModelPreference,
   logIdentity: LogIdentityContext,
+  attachedFiles: FileAttachment[] = [],
 ): Promise<Response> {
   // Rate limit check
   if (await sessionStore.isRateLimited(sessionId)) {
@@ -185,8 +212,37 @@ async function handleAgentRequest(
   // Pessimistic reservation
   const reservationId = await createReservation(identity.ownerId, sessionId, model);
 
-  // Add user message to session
-  session.messages.push({ role: "user", content: effectiveMessage });
+  // Build content blocks for Claude API (base64 for files) and for persistence (blob URLs)
+  let claudeContent: Anthropic.Messages.MessageParam["content"];
+  let persistedContent: string;
+
+  if (attachedFiles.length > 0) {
+    claudeContent = buildContentBlocks(effectiveMessage, attachedFiles);
+
+    // Upload files to blob storage if configured, otherwise skip persistence of file refs
+    const fileRefs: { filename: string; mimetype: string; blobUrl: string }[] = [];
+    if (isUploadStorageConfigured()) {
+      for (const file of attachedFiles) {
+        try {
+          const blobUrl = await uploadFile(file.filename, file.buffer, file.mimetype);
+          fileRefs.push({ filename: file.filename, mimetype: file.mimetype, blobUrl });
+        } catch (err) {
+          logger.warn("Failed to upload file to blob storage", "api/agent", {
+            sessionId,
+            filename: file.filename,
+            errorMessage: (err as Error).message,
+          });
+        }
+      }
+    }
+    persistedContent = buildPersistedContent(effectiveMessage, fileRefs);
+  } else {
+    claudeContent = effectiveMessage;
+    persistedContent = effectiveMessage;
+  }
+
+  // Add user message to session (persisted form for Cosmos DB)
+  session.messages.push({ role: "user", content: persistedContent });
   session.messageCount++;
 
   // Persist user message immediately
@@ -234,8 +290,17 @@ async function handleAgentRequest(
         // Accumulate usage across all turns
         const accumulatedUsage: TokenUsage[] = [];
 
+        // Build API messages — use base64 content blocks for the current turn if files attached
+        const apiMessages = [...session.messages];
+        if (attachedFiles.length > 0 && apiMessages.length > 0) {
+          const lastMsg = apiMessages[apiMessages.length - 1];
+          if (lastMsg.role === "user") {
+            apiMessages[apiMessages.length - 1] = { role: "user", content: claudeContent };
+          }
+        }
+
         const result = await runAgentLoop(
-          session.messages,
+          apiMessages,
           {
             onThinking: () => {
               void writer.write(encodeNDJSON({ type: "thinking" })).catch(() => {});

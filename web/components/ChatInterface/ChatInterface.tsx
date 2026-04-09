@@ -19,11 +19,13 @@ import {
   Check,
   X,
   Loader2,
+  Paperclip,
 } from 'lucide-react'
 import Link from 'next/link'
 import { useTheme } from '@/context/ThemeContext'
 import { useConversationCache } from '@/context/ConversationCacheContext'
-import { MarkdownRenderer, ThinkingBubble, UserAvatar } from '@/components'
+import { MarkdownRenderer, ThinkingBubble, UserAvatar, FileAttachmentBar } from '@/components'
+import { useFileUpload } from '@/hooks/useFileUpload'
 import styles from './ChatInterface.module.css'
 import type { Conversation, ConversationMeta, PendingTool } from '@/lib/types'
 
@@ -206,6 +208,8 @@ export function ChatInterface({
   })
   const [inputValue, setInputValue] = useState('')
   const [isLoading, setIsLoading] = useState(false)
+  const fileUpload = useFileUpload()
+  const fileInputRef = useRef<HTMLInputElement>(null)
   const [activeConversationId, _setActiveConversationId] = useState<string | null>(
     initialConversation?.id ?? null
   )
@@ -590,22 +594,39 @@ export function ChatInterface({
 
   const handleSendMessage = async (messageOverride?: string) => {
     const msg = messageOverride ?? inputValue
-    if (!msg.trim() || isLoading) return
+    if ((!msg.trim() && !fileUpload.hasFiles) || isLoading) return
 
     const userMessage = msg
     setInputValue('')
+    const currentFiles = [...fileUpload.files]
+    fileUpload.clearFiles()
     setMessages(prev => [...prev, { id: crypto.randomUUID(), role: 'user', content: userMessage }])
     setIsLoading(true)
 
     try {
-      const res = await fetch('/api/agent', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          sessionId: activeConversationIdRef.current,
-          message: userMessage,
-        }),
-      })
+      let res: Response
+      if (currentFiles.length > 0) {
+        // Multipart upload when files are attached
+        const formData = new FormData()
+        formData.append('message', userMessage)
+        if (activeConversationIdRef.current) {
+          formData.append('sessionId', activeConversationIdRef.current)
+        }
+        for (const cf of currentFiles) {
+          formData.append('files', cf.file)
+        }
+        res = await fetch('/api/agent', { method: 'POST', body: formData })
+      } else {
+        // JSON for text-only messages
+        res = await fetch('/api/agent', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            sessionId: activeConversationIdRef.current,
+            message: userMessage,
+          }),
+        })
+      }
 
       if (!res.ok) {
         const err = await res.json().catch(() => ({ error: 'Unknown error' }))
@@ -1021,10 +1042,43 @@ export function ChatInterface({
                       void handleSendMessage()
                     }
                   }}
+                  onPaste={e => {
+                    const items = e.clipboardData?.items
+                    if (!items) return
+                    const imageFiles: File[] = []
+                    for (const item of Array.from(items)) {
+                      if (item.type.startsWith('image/')) {
+                        const file = item.getAsFile()
+                        if (file) imageFiles.push(file)
+                      }
+                    }
+                    if (imageFiles.length > 0) {
+                      fileUpload.addFiles(imageFiles)
+                    }
+                  }}
+                  onDragOver={e => { e.preventDefault(); e.stopPropagation() }}
+                  onDrop={e => {
+                    e.preventDefault()
+                    e.stopPropagation()
+                    if (e.dataTransfer?.files?.length) {
+                      fileUpload.addFiles(e.dataTransfer.files)
+                    }
+                  }}
                   placeholder={messages.length > 1 ? 'Reply...' : 'Enter security directive...'}
                   disabled={isLoading}
                   className={styles.textarea}
                 />
+                {fileUpload.hasFiles && (
+                  <FileAttachmentBar
+                    files={fileUpload.files}
+                    onRemove={fileUpload.removeFile}
+                  />
+                )}
+                {fileUpload.error && (
+                  <div className={styles.fileError} role="alert">
+                    {fileUpload.error}
+                  </div>
+                )}
                 <div className={styles.inputActions}>
                   {userRole?.toLowerCase() === 'admin' && (
                     <Link
@@ -1035,11 +1089,33 @@ export function ChatInterface({
                       <Plus className="w-5 h-5" />
                     </Link>
                   )}
+                  <input
+                    ref={fileInputRef}
+                    type="file"
+                    multiple
+                    accept="image/jpeg,image/png,image/gif,image/webp,application/pdf"
+                    className="sr-only"
+                    tabIndex={-1}
+                    aria-hidden="true"
+                    onChange={(e) => {
+                      if (e.target.files) fileUpload.addFiles(e.target.files)
+                      e.target.value = ''
+                    }}
+                  />
+                  <button
+                    type="button"
+                    onClick={() => fileInputRef.current?.click()}
+                    disabled={isLoading}
+                    aria-label="Attach file"
+                    className={styles.attachBtn}
+                  >
+                    <Paperclip className="w-4 h-4" />
+                  </button>
                   <div className={styles.inputActionsSpacer} />
                   <button
                     type="button"
                     onClick={() => { void handleSendMessage() }}
-                    disabled={!inputValue.trim() || isLoading}
+                    disabled={(!inputValue.trim() && !fileUpload.hasFiles) || isLoading}
                     aria-label="Send message"
                     className={styles.sendBtn}
                   >
