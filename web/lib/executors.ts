@@ -1905,7 +1905,7 @@ async function getAssetVulnerabilities(
             filters: {
               conjunction: AND
               conditions: [
-                { operator: EQUAL, path: "assetKey", value: $assetKey }
+                { operator: EQUAL, path: "key", value: $assetKey }
               ]
             }
           ) {
