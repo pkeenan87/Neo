@@ -128,6 +128,8 @@ function relativeTime(dateStr: string): string {
 //  Component
 // ─────────────────────────────────────────────────────────────
 
+const SKILL_INVOCATION_RE = /^\[SKILL INVOCATION: (.+?)\]\n\n[\s\S]*\n\n---\n\nUser input: ([\s\S]*)$/
+
 function conversationToChatMessages(conv: Conversation): ChatMessage[] {
   const chatMessages: ChatMessage[] = []
   for (const msg of conv.messages ?? []) {
@@ -138,11 +140,39 @@ function conversationToChatMessages(conv: Conversation): ChatMessage[] {
       if (msg.role === 'assistant' && isIntermediateAssistantTurn(msg.content)) {
         continue
       }
-      const content = typeof msg.content === 'string'
+      let content = typeof msg.content === 'string'
         ? msg.content
         : Array.isArray(msg.content)
           ? msg.content.filter(isTextBlock).map((b: TextBlock) => b.text).join('\n')
           : ''
+
+      // Detect expanded skill invocation messages and replace with the
+      // original user input so reload matches the live experience.
+      // The full skill instructions are internal — only the user's
+      // slash command and args should be visible.
+      if (msg.role === 'user' && content) {
+        const skillMatch = SKILL_INVOCATION_RE.exec(content)
+        if (skillMatch) {
+          const skillName = skillMatch[1]
+          const rawUserInput = skillMatch[2].trim()
+          const userInput = rawUserInput === '(no additional input)' ? '' : rawUserInput
+          // 1. Push the user's original input (slash command or raw args)
+          chatMessages.push({
+            id: crypto.randomUUID(),
+            role: 'user',
+            content: userInput || `/${skillName.toLowerCase().replace(/\s+/g, '-')}`,
+          })
+          // 2. Push the skill badge as a synthetic assistant message (mirrors live stream)
+          chatMessages.push({
+            id: crypto.randomUUID(),
+            role: 'assistant',
+            content: '',
+            skillBadge: skillName,
+          })
+          continue
+        }
+      }
+
       if (content) {
         chatMessages.push({
           id: crypto.randomUUID(),
@@ -811,7 +841,7 @@ export function ChatInterface({
                 initial={{ opacity: 0, y: 10 }}
                 animate={{ opacity: 1, y: 0 }}
                 className={styles.messageRow}
-                aria-label={msg.role === 'assistant' ? 'Neo Agent message' : 'Your message'}
+                aria-label={msg.skillBadge ? `Skill invoked: ${msg.skillBadge}` : msg.role === 'assistant' ? 'Neo Agent message' : 'Your message'}
               >
                 {msg.role === 'assistant' && (
                   <div className={styles.msgAvatarAssistant}>
@@ -836,7 +866,7 @@ export function ChatInterface({
                     }
                   >
                     {msg.skillBadge
-                      ? <span role="status" className={styles.skillBadge}>Skill: {msg.skillBadge}</span>
+                      ? <span className={styles.skillBadge}>Skill: {msg.skillBadge}</span>
                       : msg.role === 'assistant'
                       ? <MarkdownRenderer content={msg.content} />
                       : msg.content}
