@@ -1897,23 +1897,18 @@ async function getAssetVulnerabilities(
       break;
     }
 
+    // The vulnerabilities endpoint does not support server-side filtering by asset key.
+    // Fetch site-wide and filter client-side on assetKeys[].
     const query = `
-      query AssetVulns($siteId: ID!, $assetKey: String!, $pagination: AssetsPaginationInputValidated!) {
+      query AssetVulns($siteId: ID!, $pagination: AssetsPaginationInputValidated!) {
         site(id: $siteId) {
-          vulnerabilities(
-            pagination: $pagination
-            filters: {
-              conjunction: AND
-              conditions: [
-                { operator: EQUAL, path: "key", value: $assetKey }
-              ]
-            }
-          ) {
+          vulnerabilities(pagination: $pagination) {
             total
             pagination {
               next
             }
             items {
+              assetKeys
               cve
               riskScore
               severity
@@ -1934,20 +1929,20 @@ async function getAssetVulnerabilities(
       }
     `;
 
+    // AssetsPaginationInputValidated requires cursor field (empty string for first page)
     const pagination = cursor
-      ? { limit: 100, page: "NEXT", cursor }
-      : { limit: 100, page: "FIRST" };
+      ? { limit: 100, cursor, page: "NEXT" }
+      : { limit: 100, cursor: "", page: "FIRST" };
 
     const data = await lansweeperGraphQL(config, query, {
       siteId: config.siteId,
-      assetKey,
       pagination,
     }) as {
       site: {
         vulnerabilities: {
           total: number;
           pagination: { next: string | null };
-          items: Record<string, unknown>[];
+          items: (Record<string, unknown> & { assetKeys?: string[] })[];
         };
       };
     };
@@ -1955,7 +1950,10 @@ async function getAssetVulnerabilities(
     const vulns = data.site.vulnerabilities;
     if (typeof vulns.total !== "number") break;
     total = vulns.total;
-    allItems.push(...vulns.items);
+
+    // Filter to only vulnerabilities that affect this asset
+    const matching = vulns.items.filter((v) => v.assetKeys?.includes(assetKey));
+    allItems.push(...matching);
 
     if (!vulns.pagination.next || allItems.length >= total) break;
     cursor = vulns.pagination.next;
