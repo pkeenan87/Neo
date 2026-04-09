@@ -2099,10 +2099,7 @@ async function search_abnormal_messages(input: SearchAbnormalMessagesInput): Pro
   const pageSize = Math.max(1, Math.min(input.page_size ?? 50, 1000));
 
   const config = await getAbnormalConfig();
-  const body: Record<string, unknown> = {
-    source: input.source ?? "abnormal",
-    page_size: pageSize,
-    page_number: input.page_number ?? 1,
+  const filters: Record<string, unknown> = {
     start_time: input.start_time ?? fallback.start_time,
     end_time: input.end_time ?? fallback.end_time,
     ...(input.sender_email ? { sender_email: input.sender_email } : {}),
@@ -2114,6 +2111,13 @@ async function search_abnormal_messages(input: SearchAbnormalMessagesInput): Pro
     ...(input.body_link ? { body_link: input.body_link } : {}),
     ...(input.sender_ip ? { sender_ip: input.sender_ip } : {}),
     ...(input.judgement ? { judgement: input.judgement } : {}),
+  };
+
+  const body: Record<string, unknown> = {
+    source: input.source ?? "abnormal",
+    page_size: pageSize,
+    page_number: input.page_number ?? 1,
+    filters,
   };
 
   return await abnormalApi(config, "POST", "/v1/search", body);
