@@ -1898,7 +1898,7 @@ async function getAssetVulnerabilities(
     }
 
     const query = `
-      query AssetVulns($siteId: ID!, $assetKey: String!, $pagination: VulnerabilityPaginationInput!) {
+      query AssetVulns($siteId: ID!, $assetKey: String!, $pagination: AssetsPaginationInput!) {
         site(id: $siteId) {
           vulnerabilities(
             pagination: $pagination
