@@ -1830,7 +1830,7 @@ async function getAssetDetails(
   assetKey: string,
 ): Promise<Record<string, unknown>> {
   const query = `
-    query AssetDetails($siteId: ID!, $assetKey: String!) {
+    query AssetDetails($siteId: ID!, $assetKey: ID!) {
       site(id: $siteId) {
         assetDetails(key: $assetKey) {
           key
@@ -1865,15 +1865,8 @@ async function getAssetDetails(
             version
             buildNumber
           }
-          loggedOnUsers {
-            userName
-            fullName
-            numberOfLogons
-            lastLogon
-          }
           userRelations {
             userKey
-            relationType
           }
         }
       }
