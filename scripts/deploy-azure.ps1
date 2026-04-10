@@ -111,12 +111,12 @@ if ($SkipBuild) {
         Write-Host "  WARNING: Build artifact is $([math]::Round($BuildAge.TotalHours, 0)) hours old. Consider rebuilding." -ForegroundColor Yellow
     }
 } else {
-    Write-Host "`n  Installing dependencies..." -ForegroundColor Cyan
+    Write-Host "`n  Installing dependencies (npm ci — exact lockfile install)..." -ForegroundColor Cyan
     Push-Location $WebDir
     try {
-        npm install
+        npm ci
         if ($LASTEXITCODE -ne 0) {
-            throw "npm install failed with exit code $LASTEXITCODE"
+            throw "npm ci failed with exit code $LASTEXITCODE. Lockfile may be out of sync with package.json — run 'npm install' locally and commit the updated lockfile."
         }
         Write-Host "  Dependencies installed." -ForegroundColor Green
 

@@ -6,11 +6,11 @@ import { TOOLS } from "../web/lib/tools.ts";
 const TOOL_NAMES = new Set(TOOLS.map((t) => t.name));
 
 describe("INTEGRATIONS registry", () => {
-  it("has 3 integrations", () => {
-    assert.equal(INTEGRATIONS.length, 3);
+  it("has at least 3 integrations", () => {
+    assert.ok(INTEGRATIONS.length >= 3, `expected ≥3 integrations, got ${INTEGRATIONS.length}`);
   });
 
-  it("contains expected slugs", () => {
+  it("contains the core Microsoft integrations", () => {
     const slugs = INTEGRATIONS.map((i) => i.slug);
     assert.ok(slugs.includes("microsoft-sentinel"));
     assert.ok(slugs.includes("microsoft-defender-xdr"));
@@ -71,12 +71,18 @@ describe("getIntegration", () => {
 });
 
 describe("integration secrets structure", () => {
-  it("shared Azure AD secrets are consistent across integrations", () => {
+  it("shared Azure AD secrets are consistent across Microsoft integrations", () => {
+    // Only Microsoft-branded integrations share the AAD app registration credentials.
+    // Third-party integrations (Lansweeper, Abnormal Security, ThreatLocker, AppOmni)
+    // use their own API keys.
+    const microsoftSlugs = ["microsoft-sentinel", "microsoft-defender-xdr", "microsoft-entra-id"];
     const sharedKeys = ["AZURE_TENANT_ID", "AZURE_CLIENT_ID", "AZURE_CLIENT_SECRET"];
-    for (const integration of INTEGRATIONS) {
+    for (const slug of microsoftSlugs) {
+      const integration = getIntegration(slug);
+      assert.ok(integration, `${slug} integration missing from registry`);
       for (const sharedKey of sharedKeys) {
         const secret = integration.secrets.find((s) => s.key === sharedKey);
-        assert.ok(secret, `${integration.slug} missing shared secret ${sharedKey}`);
+        assert.ok(secret, `${slug} missing shared secret ${sharedKey}`);
         assert.equal(secret.required, true, `${sharedKey} should be required`);
       }
     }

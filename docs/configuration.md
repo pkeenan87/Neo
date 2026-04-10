@@ -1257,3 +1257,52 @@ These values are managed via the Settings page (`/settings`), accessible from th
 - **Session ownership**: Each agent session is tied to the identity that created it. Only the owner or an admin can access or delete a session. Cosmos DB conversations use the immutable AAD Object ID (`oid` claim) as the partition key, ensuring ownership cannot change if a user's display name is updated.
 - **Prompt injection guard**: User messages and tool results are scanned for adversarial patterns. Detections are logged but never include raw message content. See [Prompt Injection Guard](#prompt-injection-guard).
 - **Audit logging**: Structured events (authentication, tool calls, confirmations, injection detections) are sent to Azure Event Hub. PII fields are one-way hashed before logging. See [Structured Logging](#structured-logging).
+
+---
+
+## Supply Chain Hardening
+
+Neo defends against npm supply chain attacks (like the [March 2026 axios compromise](https://www.microsoft.com/en-us/security/blog/2026/04/01/mitigating-the-axios-npm-supply-chain-compromise/)) with four layers of defense:
+
+### 1. Pinned direct dependencies
+
+All direct dependencies in `web/package.json` and `cli/package.json` are pinned to **exact versions** with no caret (`^`) or tilde (`~`) ranges. This prevents `npm update` or a stale lockfile from silently pulling in newer versions without explicit review.
+
+To update a dependency safely:
+1. Bump the version in `package.json`
+2. Run `npm install` locally to update `package-lock.json`
+3. Run `npm audit` to verify no new vulnerabilities
+4. Commit both `package.json` and `package-lock.json` together
+
+### 2. Transitive dependency overrides
+
+`web/package.json` includes an `overrides` section that force-pins high-risk transitive dependencies regardless of what parent packages request. Currently overridden:
+
+- `axios` — pinned to a known-safe version (skips compromised `1.14.1` and `0.30.4`)
+- `fast-xml-parser` — pinned to a patched version (CVE-fixed)
+
+When updating these overrides, verify the new version against the [GitHub Advisory Database](https://github.com/advisories) and the npm registry.
+
+### 3. `npm ci` for production deploys
+
+The Azure deploy script (`scripts/deploy-azure.ps1`) uses `npm ci` instead of `npm install`. `npm ci` installs exactly what's in `package-lock.json` and **fails fast** if the lockfile and `package.json` disagree. This prevents a compromised package from sneaking in via a transitive dep update during deploy.
+
+If you see `npm ci failed: lockfile out of sync` during deploy, it means someone modified `package.json` without running `npm install` locally. Run `npm install` locally to regenerate the lockfile and commit both files together.
+
+### 4. `min-release-age` cooling-off period
+
+Both `web/.npmrc` and `cli/.npmrc` set `min-release-age=4320` (72 hours, in minutes). npm 11+ refuses to install package versions younger than this threshold, giving the security community time to detect and report compromised releases before they enter our dependency tree. The 2026 axios compromise was unpublished within ~3 hours, so a 72-hour buffer would have entirely prevented it from affecting users with this setting enabled.
+
+You may see an `Unknown project config "min-release-age"` warning on older npm 11 minor versions — the value is still applied, the warning will go away when npm catches up to 11.12+.
+
+To install a brand-new version urgently (e.g., a critical security patch published yesterday), temporarily set `min-release-age=0` in `.npmrc`, install, then revert.
+
+### Verifying clean state
+
+After any dependency change, run:
+
+```bash
+cd web && npm audit                                    # Should report 0 vulnerabilities
+grep -B1 '"version":' package-lock.json | grep -A1 '"node_modules/axios"'  # Should be ≥1.15.0, never 1.14.1 or 0.30.4
+grep -c '"plain-crypto-js"' package-lock.json          # Must return 0 — known supply chain payload
+```
