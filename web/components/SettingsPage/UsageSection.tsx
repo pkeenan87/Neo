@@ -10,6 +10,7 @@ interface UsageSummary {
 }
 
 interface UsageResponse {
+  enforced: boolean
   twoHourUsage: UsageSummary
   weeklyUsage: UsageSummary
   twoHourLimit: number
@@ -70,6 +71,12 @@ export function UsageSection({ className }: UsageSectionProps) {
   return (
     <div className={`${styles.section}${className ? ` ${className}` : ''}`}>
       <h2 className={styles.sectionTitle}>Plan usage limits</h2>
+
+      {data && !data.enforced && (
+        <p className={styles.disabledNotice} role="status">
+          Usage limits are currently disabled. Consumption is still tracked for reporting.
+        </p>
+      )}
 
       <ProgressBar
         label="Current session"

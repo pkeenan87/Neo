@@ -1,7 +1,7 @@
 import { NextRequest } from "next/server";
 import { resolveAuth } from "@/lib/auth-helpers";
 import { checkBudget } from "@/lib/usage-tracker";
-import { USAGE_LIMITS } from "@/lib/config";
+import { USAGE_LIMITS, env } from "@/lib/config";
 
 export async function GET(request: NextRequest) {
   const identity = await resolveAuth(request);
@@ -17,6 +17,7 @@ export async function GET(request: NextRequest) {
 
   return new Response(
     JSON.stringify({
+      enforced: env.ENABLE_USAGE_LIMITS,
       twoHourUsage: budget.twoHourUsage,
       weeklyUsage: budget.weeklyUsage,
       twoHourLimit: USAGE_LIMITS.twoHourWindow.maxInputTokens,

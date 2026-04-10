@@ -293,6 +293,11 @@
 
 /* ── Usage ────────────────────────────────────────────────── */
 
+.disabledNotice {
+  @apply text-sm text-warning-500 mb-4 px-3 py-2 rounded;
+  background: rgba(245, 158, 11, 0.1);
+}
+
 .costEstimate {
   @apply text-sm text-brand-500 mt-4;
 }

@@ -124,6 +124,7 @@ INJECTION_GUARD_MODE=monitor
 | `ORG_CONTEXT` | No | Free-text organizational context injected into the system prompt (domains, SAM formats, VPN ranges, etc.). Supports `\n` for newlines. Also editable by admins in Settings > Organization. |
 | `USAGE_LIMIT_2H_INPUT_TOKENS` | No | Per-user input token cap for the 2-hour rolling window (default: 670,000 — approx. $10 of Opus) |
 | `USAGE_LIMIT_WEEKLY_INPUT_TOKENS` | No | Per-user input token cap for the weekly rolling window (default: 6,700,000 — approx. $100 of Opus) |
+| `ENABLE_USAGE_LIMITS` | No | Set to `false` to disable token budget enforcement globally (default: `true`). Usage is still tracked for dashboards. When disabled, the per-user window overrides above have no effect. |
 | `KEY_VAULT_URL` | No | Azure Key Vault URL. When set, tool integration secrets are read from Key Vault (with env var fallback). Uses Managed Identity auth. |
 | `LANSWEEPER_API_TOKEN` | No | Lansweeper Personal Access Token (from Settings > Developer Tools). Required when `MOCK_MODE=false` and Lansweeper integration is used. Can be stored in Key Vault. |
 | `LANSWEEPER_SITE_ID` | No | Lansweeper site identifier (GUID). Required alongside `LANSWEEPER_API_TOKEN`. Can be stored in Key Vault. |
@@ -257,6 +258,13 @@ These defaults are safety guardrails calibrated to Opus pricing. Adjust via envi
 - Admins can view per-user usage and reset limits in Settings > Usage Limits.
 
 **Tuning**: Set `USAGE_LIMIT_2H_INPUT_TOKENS` and `USAGE_LIMIT_WEEKLY_INPUT_TOKENS` in `.env` or your app settings. Values are in input tokens. To convert to approximate cost: multiply by the per-token input price for your default model (Sonnet: $3/M tokens, Opus: $15/M tokens).
+
+**Disabling enforcement**: Set `ENABLE_USAGE_LIMITS=false` to turn off all token budget enforcement while keeping usage tracking intact. Useful for:
+- Demos where you don't want the agent to stop mid-presentation
+- User onboarding where new users need to explore without hitting limits
+- Incident response where SOC analysts need uninterrupted access
+
+When disabled, the Settings > Usage page shows a "Usage limits are currently disabled" notice but continues to display consumption data. Per-user window overrides (`USAGE_LIMIT_2H_INPUT_TOKENS`, `USAGE_LIMIT_WEEKLY_INPUT_TOKENS`) have no effect while the global toggle is off. Restart the server to apply changes.
 
 ---
 

@@ -67,6 +67,7 @@ export const env: EnvConfig = {
   SENTINEL_WORKSPACE_NAME: process.env.SENTINEL_WORKSPACE_NAME,
   SENTINEL_RG:             process.env.SENTINEL_RESOURCE_GROUP,
   MOCK_MODE:               process.env.MOCK_MODE !== "false",
+  ENABLE_USAGE_LIMITS:     process.env.ENABLE_USAGE_LIMITS !== "false",
   MICROSOFT_APP_ID:             process.env.MICROSOFT_APP_ID,
   MICROSOFT_APP_PASSWORD:       process.env.MICROSOFT_APP_PASSWORD,
   TEAMS_BOT_ROLE:               process.env.TEAMS_BOT_ROLE === "admin" ? "admin" : "reader",

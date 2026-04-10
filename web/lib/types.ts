@@ -31,6 +31,7 @@ export interface EnvConfig {
   SENTINEL_WORKSPACE_NAME: string | undefined;
   SENTINEL_RG: string | undefined;
   MOCK_MODE: boolean;
+  ENABLE_USAGE_LIMITS: boolean;
   MICROSOFT_APP_ID: string | undefined;
   MICROSOFT_APP_PASSWORD: string | undefined;
   TEAMS_BOT_ROLE: Role;

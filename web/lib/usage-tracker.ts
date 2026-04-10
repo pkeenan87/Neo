@@ -254,6 +254,18 @@ export async function checkBudget(userId: string): Promise<BudgetResult> {
     getUserUsage(userId, USAGE_LIMITS.weeklyWindow.windowMs),
   ]);
 
+  // Toggle: when usage limits are disabled, track but never block/warn
+  if (!env.ENABLE_USAGE_LIMITS) {
+    return {
+      allowed: true,
+      twoHourRemaining: Infinity,
+      weekRemaining: Infinity,
+      warning: false,
+      twoHourUsage: twoHour,
+      weeklyUsage: weekly,
+    };
+  }
+
   const twoHourMax = USAGE_LIMITS.twoHourWindow.maxInputTokens;
   const weeklyMax = USAGE_LIMITS.weeklyWindow.maxInputTokens;
 
