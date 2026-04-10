@@ -20,6 +20,7 @@ import {
   X,
   Loader2,
   Paperclip,
+  Square,
 } from 'lucide-react'
 import Link from 'next/link'
 import { useTheme } from '@/context/ThemeContext'
@@ -39,15 +40,17 @@ interface ChatMessage {
   content: string
   toolsUsed?: string[]
   skillBadge?: string
+  interrupted?: boolean
 }
 
 interface SessionEvent { type: 'session'; sessionId: string }
 interface ThinkingEvent { type: 'thinking' }
 interface ToolCallEvent { type: 'tool_call'; tool: string; input: Record<string, unknown> }
 interface ConfirmationEvent { type: 'confirmation_required'; tool: PendingTool }
-interface ResponseEvent { type: 'response'; text: string }
+interface ResponseEvent { type: 'response'; text: string; interrupted?: boolean }
 interface ErrorEvent { type: 'error'; message: string; code?: string }
 interface SkillInvocationEvent { type: 'skill_invocation'; skill: { id: string; name: string } }
+interface InterruptedEvent { type: 'interrupted' }
 
 type StreamEvent =
   | SessionEvent
@@ -57,6 +60,7 @@ type StreamEvent =
   | ResponseEvent
   | ErrorEvent
   | SkillInvocationEvent
+  | InterruptedEvent
 
 interface TextBlock { type: 'text'; text: string }
 
@@ -131,6 +135,7 @@ function relativeTime(dateStr: string): string {
 // ─────────────────────────────────────────────────────────────
 
 const SKILL_INVOCATION_RE = /^\[SKILL INVOCATION: (.+?)\]\n\n[\s\S]*\n\n---\n\nUser input: ([\s\S]*)$/
+const INTERRUPTED_SUFFIX_RE = /\s*\[interrupted\]\s*$/
 
 function conversationToChatMessages(conv: Conversation): ChatMessage[] {
   const chatMessages: ChatMessage[] = []
@@ -175,11 +180,22 @@ function conversationToChatMessages(conv: Conversation): ChatMessage[] {
         }
       }
 
-      if (content) {
+      // Detect interrupted marker at the end of assistant messages.
+      // Use a strict end-anchored regex for both detection and stripping so
+      // legitimate responses that happen to contain "[interrupted]" elsewhere
+      // are not falsely flagged.
+      let isInterrupted = false
+      if (msg.role === 'assistant' && INTERRUPTED_SUFFIX_RE.test(content)) {
+        isInterrupted = true
+        content = content.replace(INTERRUPTED_SUFFIX_RE, '').trim()
+      }
+
+      if (content || isInterrupted) {
         chatMessages.push({
           id: crypto.randomUUID(),
           role: msg.role,
           content,
+          ...(isInterrupted && { interrupted: true }),
         })
       }
     }
@@ -210,6 +226,9 @@ export function ChatInterface({
   const [isLoading, setIsLoading] = useState(false)
   const fileUpload = useFileUpload()
   const fileInputRef = useRef<HTMLInputElement>(null)
+  const abortControllerRef = useRef<AbortController | null>(null)
+  const stopBtnRef = useRef<HTMLButtonElement>(null)
+  const [interruptedAnnouncement, setInterruptedAnnouncement] = useState('')
   const [activeConversationId, _setActiveConversationId] = useState<string | null>(
     initialConversation?.id ?? null
   )
@@ -271,6 +290,16 @@ export function ChatInterface({
       confirmBtnRef.current.focus()
     }
   }, [pendingConfirmation])
+
+  // Preserve focus across the send ↔ stop button swap
+  useEffect(() => {
+    if (isLoading) {
+      stopBtnRef.current?.focus()
+    } else {
+      // Return focus to the textarea so the user can type immediately
+      textareaRef.current?.focus()
+    }
+  }, [isLoading])
 
   const refreshConversations = useCallback(async () => {
     try {
@@ -487,8 +516,22 @@ export function ChatInterface({
                   role: 'assistant',
                   content: event.text,
                   toolsUsed: toolsUsed.length > 0 ? [...toolsUsed] : undefined,
+                  interrupted: event.interrupted,
                 },
               ])
+              break
+            case 'interrupted':
+              setIsThinking(false)
+              setMessages(prev => {
+                if (prev.length === 0) return prev
+                const last = prev[prev.length - 1]
+                if (last.role !== 'assistant') {
+                  return [...prev, { id: crypto.randomUUID(), role: 'assistant', content: '', interrupted: true }]
+                }
+                return prev.map((m, i) => (i === prev.length - 1 ? { ...m, interrupted: true } : m))
+              })
+              setInterruptedAnnouncement('Response interrupted.')
+              setTimeout(() => setInterruptedAnnouncement(''), 1000)
               break
             case 'skill_invocation':
               setMessages(prev => [
@@ -592,6 +635,17 @@ export function ChatInterface({
     }
   }, [slashMenuOpen, filteredSkills, slashSelectedIndex, handleSlashSelect])
 
+  const handleStop = useCallback(() => {
+    abortControllerRef.current?.abort()
+    // Don't null the ref here — let the finally block own cleanup so the
+    // catch block can distinguish user-initiated aborts from other aborts.
+    // Optimistically flip isLoading so the button immediately swaps back
+    // and can't be double-clicked while the async settle runs.
+    setIsLoading(false)
+    setInterruptedAnnouncement('Response interrupted.')
+    setTimeout(() => setInterruptedAnnouncement(''), 1000)
+  }, [])
+
   const handleSendMessage = async (messageOverride?: string) => {
     const msg = messageOverride ?? inputValue
     if ((!msg.trim() && !fileUpload.hasFiles) || isLoading) return
@@ -602,6 +656,10 @@ export function ChatInterface({
     fileUpload.clearFiles()
     setMessages(prev => [...prev, { id: crypto.randomUUID(), role: 'user', content: userMessage }])
     setIsLoading(true)
+
+    // Create a new AbortController for this request
+    const controller = new AbortController()
+    abortControllerRef.current = controller
 
     try {
       let res: Response
@@ -615,7 +673,7 @@ export function ChatInterface({
         for (const cf of currentFiles) {
           formData.append('files', cf.file)
         }
-        res = await fetch('/api/agent', { method: 'POST', body: formData })
+        res = await fetch('/api/agent', { method: 'POST', body: formData, signal: controller.signal })
       } else {
         // JSON for text-only messages
         res = await fetch('/api/agent', {
@@ -625,6 +683,7 @@ export function ChatInterface({
             sessionId: activeConversationIdRef.current,
             message: userMessage,
           }),
+          signal: controller.signal,
         })
       }
 
@@ -642,12 +701,32 @@ export function ChatInterface({
 
       await processNDJSONStream(reader)
     } catch (err) {
+      // AbortError from stop button. Additionally check that the ref was
+      // cleared by handleStop — if the abort is from navigation/unload rather
+      // than a user click, abortControllerRef.current will still be set to
+      // the controller instance (not null), so we treat it as a connection
+      // error instead of a deliberate interrupt.
+      const isUserAbort =
+        (err as Error).name === 'AbortError' &&
+        abortControllerRef.current?.signal.aborted === true
+      if (isUserAbort) {
+        setMessages(prev => {
+          if (prev.length === 0) return prev
+          const last = prev[prev.length - 1]
+          if (last.role !== 'assistant') {
+            return [...prev, { id: crypto.randomUUID(), role: 'assistant', content: '', interrupted: true }]
+          }
+          return prev.map((m, i) => (i === prev.length - 1 ? { ...m, interrupted: true } : m))
+        })
+        return
+      }
       console.error('[handleSendMessage]', err)
       setMessages(prev => [
         ...prev,
         { id: crypto.randomUUID(), role: 'assistant', content: 'Connection error. Please try again.' },
       ])
     } finally {
+      abortControllerRef.current = null
       setIsLoading(false)
       if (activeConversationIdRef.current) {
         cache.invalidate(activeConversationIdRef.current)
@@ -891,6 +970,9 @@ export function ChatInterface({
                       : msg.role === 'assistant'
                       ? <MarkdownRenderer content={msg.content} />
                       : msg.content}
+                    {msg.interrupted && (
+                      <span className={styles.interruptedBadge}>Interrupted</span>
+                    )}
                     {msg.toolsUsed && msg.toolsUsed.length > 0 && (
                       <div className={styles.toolSummary}>
                         <div id={`tools-label-${msg.id}`} className={styles.toolSummaryLabel}>Tools used:</div>
@@ -916,11 +998,13 @@ export function ChatInterface({
               aria-atomic="true"
               className="sr-only"
             >
-              {isThinking
-                ? 'Neo is thinking'
-                : currentToolName
-                  ? `Running ${currentToolName}`
-                  : ''}
+              {interruptedAnnouncement
+                ? interruptedAnnouncement
+                : isThinking
+                  ? 'Neo is thinking'
+                  : currentToolName
+                    ? `Running ${currentToolName}`
+                    : ''}
             </div>
 
             <AnimatePresence>
@@ -1112,15 +1196,27 @@ export function ChatInterface({
                     <Paperclip className="w-4 h-4" />
                   </button>
                   <div className={styles.inputActionsSpacer} />
-                  <button
-                    type="button"
-                    onClick={() => { void handleSendMessage() }}
-                    disabled={(!inputValue.trim() && !fileUpload.hasFiles) || isLoading}
-                    aria-label="Send message"
-                    className={styles.sendBtn}
-                  >
-                    <ArrowUp className="w-5 h-5" />
-                  </button>
+                  {isLoading ? (
+                    <button
+                      ref={stopBtnRef}
+                      type="button"
+                      onClick={handleStop}
+                      aria-label="Stop response"
+                      className={styles.stopBtn}
+                    >
+                      <Square className="w-4 h-4" fill="currentColor" />
+                    </button>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => { void handleSendMessage() }}
+                      disabled={!inputValue.trim() && !fileUpload.hasFiles}
+                      aria-label="Send message"
+                      className={styles.sendBtn}
+                    >
+                      <ArrowUp className="w-5 h-5" />
+                    </button>
+                  )}
                 </div>
               </div>
 

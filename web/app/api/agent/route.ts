@@ -161,7 +161,7 @@ export async function POST(request: NextRequest) {
     logger.info("Agent request", "api/agent", { sessionId, role: session.role, provider: identity.provider });
     logger.emitEvent("session_started", "Session started", "api/agent", { sessionId, conversationId: sessionId });
 
-    return handleAgentRequest(identity, session, sessionId, body, effectiveMessage, resolvedSkill, model, logIdentity, attachedFiles);
+    return handleAgentRequest(identity, session, sessionId, body, effectiveMessage, resolvedSkill, model, logIdentity, attachedFiles, request.signal);
   });
 }
 
@@ -175,6 +175,7 @@ async function handleAgentRequest(
   model: ModelPreference,
   logIdentity: LogIdentityContext,
   attachedFiles: FileAttachment[] = [],
+  signal?: AbortSignal,
 ): Promise<Response> {
   // Rate limit check
   if (await sessionStore.isRateLimited(sessionId)) {
@@ -328,21 +329,26 @@ async function handleAgentRequest(
           session.role,
           sessionId,
           model,
+          signal,
         );
+
+        // Emit session_interrupted event if the loop was aborted
+        if (result.type === "response" && result.interrupted) {
+          logger.emitEvent("session_interrupted", "Agent run interrupted by user", "api/agent", {
+            sessionId,
+          });
+        }
 
         await writeAgentResult(result, session, sessionId, writer);
 
-        // Settle: delete reservation and record actual usage
-        if (reservationId) {
-          void deleteReservation(reservationId, identity.ownerId);
-        }
+        // Record actual usage (reservation cleanup happens in finally)
         for (const usage of accumulatedUsage) {
           void recordUsage(identity.ownerId, sessionId, model, usage);
         }
       } catch (err) {
-        if (reservationId) {
-          void deleteReservation(reservationId, identity.ownerId);
-        }
+        // Note: AbortError is caught inside runAgentLoop and returned as
+        // { interrupted: true } — this catch block only handles real errors.
+
         // Fire-and-forget: save whatever messages accumulated before the error
         void sessionStore.saveMessages(sessionId, session.messages).catch((saveErr) => {
           logger.warn("Failed to persist messages after agent loop error", "api/agent", {
@@ -355,6 +361,10 @@ async function handleAgentRequest(
           encodeNDJSON({ type: "error", message: "An error occurred processing your request.", code: "AGENT_ERROR" })
         );
       } finally {
+        // Always release the pessimistic reservation, regardless of outcome
+        if (reservationId) {
+          void deleteReservation(reservationId, identity.ownerId);
+        }
         await writer.close();
       }
     });

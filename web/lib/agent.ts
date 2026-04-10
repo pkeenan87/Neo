@@ -21,11 +21,16 @@ const RETRYABLE_STATUS = new Set([429, 529, 500, 502, 503]);
 
 async function createWithRetry(
   params: Anthropic.Messages.MessageCreateParamsNonStreaming,
+  signal?: AbortSignal,
 ): Promise<Anthropic.Messages.Message> {
   for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
     try {
-      return await client.messages.create(params);
+      return await client.messages.create(params, { signal });
     } catch (err: unknown) {
+      // Never retry on abort — propagate immediately
+      if ((err as Error).name === "AbortError") {
+        throw err;
+      }
       const status = (err as { status?: number }).status;
 
       // 400 errors are deterministic — never retry them
@@ -68,9 +73,49 @@ export async function runAgentLoop(
   role: Role = "reader",
   sessionId: string = "unknown",
   model: ModelPreference = DEFAULT_MODEL,
+  signal?: AbortSignal,
 ): Promise<AgentLoopResult> {
   const localMessages: Message[] = [...messages];
   logger.info("Agent loop started", "agent", { role, model });
+
+  /**
+   * Append a synthetic [interrupted] text block to the last assistant message
+   * so the next turn sees coherent context, and return an interrupted response.
+   * If the last assistant message contains unmatched tool_use blocks (mid-tool
+   * abort), strip those blocks so the persisted history is structurally valid
+   * for the next turn's API call.
+   */
+  function buildInterruptedResult(): AgentLoopResult {
+    // If the last message is an assistant message with a dangling tool_use
+    // block (no paired tool_result), strip tool_use blocks to prevent an
+    // invalid conversation shape on the next turn.
+    const last = localMessages[localMessages.length - 1];
+    if (last?.role === "assistant" && Array.isArray(last.content)) {
+      const hasDanglingToolUse = last.content.some(
+        (b) => (b as { type: string }).type === "tool_use"
+      );
+      if (hasDanglingToolUse) {
+        last.content = last.content.filter(
+          (b) => (b as { type: string }).type !== "tool_use"
+        );
+      }
+      // Guard against double-appending if called twice
+      const alreadyMarked = last.content.some(
+        (b) => (b as { type: string; text?: string }).type === "text" &&
+               (b as { type: string; text?: string }).text === "[interrupted]"
+      );
+      if (!alreadyMarked) {
+        last.content.push({ type: "text", text: "[interrupted]" });
+      }
+    } else {
+      localMessages.push({
+        role: "assistant",
+        content: [{ type: "text", text: "[interrupted]" }],
+      });
+    }
+    logger.info("Agent loop interrupted", "agent", { role });
+    return { type: "response", text: "[interrupted]", messages: localMessages, interrupted: true };
+  }
 
   const systemPrompt = await getSystemPrompt(role);
   const systemPromptTokenEstimate = Math.ceil(systemPrompt.length / CHARS_PER_TOKEN);
@@ -84,7 +129,11 @@ export async function runAgentLoop(
       : tool
   );
 
+  try {
   while (true) {
+    // Check abort signal between iterations
+    if (signal?.aborted) return buildInterruptedResult();
+
     if (callbacks.onThinking) callbacks.onThinking();
 
     // Prepare messages: truncate oversized tool results, compress if near limit
@@ -106,7 +155,7 @@ export async function runAgentLoop(
       system: [systemBlock] as Anthropic.Messages.TextBlockParam[],
       tools: cachedTools as Anthropic.Messages.Tool[],
       messages: prepared.messages,
-    });
+    }, signal);
 
     lastInputTokens = response.usage.input_tokens;
 
@@ -203,11 +252,22 @@ export async function runAgentLoop(
 
       localMessages.push({ role: "user", content: toolResults });
       if (callbacks.onTurnComplete) callbacks.onTurnComplete(localMessages);
+
+      // Check abort signal after tool execution phase completes
+      if (signal?.aborted) return buildInterruptedResult();
       continue;
     }
 
     logger.warn(`Unexpected stop_reason: ${response.stop_reason}`, "agent");
     throw new Error(`Unexpected stop_reason: ${response.stop_reason}`);
+  }
+  } catch (err) {
+    // AbortError: return interrupted result instead of rethrowing so the route
+    // can persist partial state cleanly
+    if ((err as Error).name === "AbortError") {
+      return buildInterruptedResult();
+    }
+    throw err;
   }
 }
 

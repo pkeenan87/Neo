@@ -93,7 +93,8 @@ export type LogEventType =
   | "destructive_action"
   | "budget_alert"
   | "session_started"
-  | "session_ended";
+  | "session_ended"
+  | "session_interrupted";
 
 export interface LogIdentityContext {
   userName: string;
@@ -138,19 +139,21 @@ export type AgentEventType =
   | "error"
   | "warning"
   | "context_trimmed"
-  | "skill_invocation";
+  | "skill_invocation"
+  | "interrupted";
 
 export type AgentEvent =
   | { type: "session"; sessionId: string }
   | { type: "thinking" }
   | { type: "tool_call"; tool: string; input: Record<string, unknown> }
   | { type: "confirmation_required"; tool: PendingTool }
-  | { type: "response"; text: string }
+  | { type: "response"; text: string; interrupted?: boolean }
   | { type: "error"; message: string; code?: string }
   | { type: "warning"; message: string; code: string }
   | { type: "context_trimmed"; originalTokens: number; newTokens: number; method: "truncation" | "summary" }
   | { type: "usage"; usage: TokenUsage; model: ModelPreference }
-  | { type: "skill_invocation"; skill: { id: string; name: string } };
+  | { type: "skill_invocation"; skill: { id: string; name: string } }
+  | { type: "interrupted" };
 
 // ─────────────────────────────────────────────────────────────
 //  Session
@@ -245,7 +248,7 @@ export interface ConfirmRequest {
 }
 
 export type AgentLoopResult =
-  | { type: "response"; text: string; messages: Message[] }
+  | { type: "response"; text: string; messages: Message[]; interrupted?: boolean }
   | { type: "confirmation_required"; tool: PendingTool; messages: Message[] };
 
 // ─────────────────────────────────────────────────────────────

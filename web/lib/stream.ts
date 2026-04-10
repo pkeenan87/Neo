@@ -32,7 +32,9 @@ export async function writeAgentResult(
     await sessionStore.setPendingConfirmation(sessionId, result.tool);
     await writer.write(encodeNDJSON({ type: "confirmation_required", tool: result.tool }));
   } else {
-    await writer.write(encodeNDJSON({ type: "response", text: result.text }));
+    // The interrupted flag on the response event is sufficient — no need for a
+    // separate interrupted event on the happy-abort path.
+    await writer.write(encodeNDJSON({ type: "response", text: result.text, interrupted: result.interrupted }));
   }
 
   // Persist messages to the backing store (Cosmos DB or no-op for in-memory)

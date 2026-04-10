@@ -693,6 +693,41 @@
   background: #4cba6e;
 }
 
+.stopBtn {
+  padding: 0.5rem;
+  border-radius: 0.375rem;
+  transition: all 150ms;
+  background: #ef4444;
+  color: #fff;
+  border: none;
+  cursor: pointer;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.stopBtn:hover {
+  background: #dc2626;
+}
+
+.stopBtn:focus-visible {
+  outline: 2px solid #0f172a;
+  outline-offset: 2px;
+}
+
+:global(html.dark) .stopBtn {
+  background: #b91c1c;
+}
+
+:global(html.dark) .stopBtn:hover {
+  background: #991b1b;
+}
+
+:global(html.dark) .stopBtn:focus-visible {
+  outline-color: #fbbf24;
+}
+
 /* ─── Slash command popover ─── */
 .slashPopover {
   position: absolute;
@@ -800,6 +835,25 @@
 :global(html.dark) .skillBadge {
   background: rgba(59, 165, 93, 0.1);
   color: #4ade80;
+}
+
+/* ─── Interrupted badge ─── */
+.interruptedBadge {
+  display: inline-block;
+  margin-top: 0.5rem;
+  padding: 0.125rem 0.5rem;
+  border-radius: 0.375rem;
+  font-size: 0.6875rem;
+  font-weight: 600;
+  background: rgba(245, 158, 11, 0.12);
+  color: #d97706;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+:global(html.dark) .interruptedBadge {
+  background: rgba(245, 158, 11, 0.15);
+  color: #fbbf24;
 }
 
 /* ─── Input footer ─── */
