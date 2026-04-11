@@ -1322,6 +1322,30 @@ export const TOOLS: Tool[] = [
       required: ["action", "occurrence_ids"],
     },
   },
+  // Read-only SQL query against a reference-mode CSV attachment. Registered
+  // conditionally by the agent loop — only exposed when the current conversation
+  // has at least one reference-mode CSV attachment.
+  {
+    name: "query_csv",
+    description:
+      "Run a read-only SQL query against a CSV attachment that is too large to inline. " +
+      "The table name is always 'csv'. Only SELECT / WITH / PRAGMA table_info(csv) are permitted. " +
+      "Prefer aggregations (COUNT, GROUP BY, AVG) over raw row dumps — results are capped at 100 rows.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        csv_id: {
+          type: "string",
+          description: "The csv_id from the <csv_attachment mode=\"reference\"> block you want to query.",
+        },
+        query: {
+          type: "string",
+          description: "A read-only SQL statement against the 'csv' table.",
+        },
+      },
+      required: ["csv_id", "query"],
+    },
+  },
   // Read-only but returns sensitive data that was intentionally truncated from
   // context. Available to all roles since it only accesses the current session.
   {

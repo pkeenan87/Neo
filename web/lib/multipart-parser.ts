@@ -31,7 +31,9 @@ export async function parseMultipart(
       headers: { "content-type": contentType },
       limits: {
         files: MAX_FILES_PER_MESSAGE,
-        fileSize: 33 * 1024 * 1024, // 33 MB per file hard cap
+        // 51 MB per file hard cap — covers the 50 MB CSV limit with a
+        // small headroom. Per-type limits are enforced by validateFile.
+        fileSize: 51 * 1024 * 1024,
         fieldSize: 8 * 1024,        // 8 KB per field value
         fields: 10,                  // max 10 form fields
       },
@@ -65,14 +67,14 @@ export async function parseMultipart(
         }
 
         const buffer = Buffer.concat(chunks);
-        const validation = validateFile(info.mimeType, buffer.length);
+        const validation = validateFile(info.mimeType, buffer.length, info.filename);
         if (!validation.valid) {
           abortError = new Error(validation.error);
           return;
         }
 
         // Verify magic bytes match declared MIME type
-        if (!validateMagicBytes(info.mimeType, buffer)) {
+        if (!validateMagicBytes(info.mimeType, buffer, info.filename)) {
           abortError = new Error(`File "${info.filename}" content does not match its declared type.`);
           return;
         }

@@ -7,13 +7,18 @@ import { resolveAuth } from "@/lib/auth-helpers";
 import { scanUserInput, shouldBlock } from "@/lib/injection-guard";
 import { getSkill } from "@/lib/skill-store";
 import { logger, hashPii, setLogContext } from "@/lib/logger";
-import { isChannel, MAX_FILES_PER_MESSAGE } from "@/lib/types";
-import type { AgentRequest, ModelPreference, TokenUsage, LogIdentityContext, FileAttachment } from "@/lib/types";
+import { isChannel, MAX_FILES_PER_MESSAGE, CsvAttachmentCapError } from "@/lib/types";
+import type { AgentRequest, ModelPreference, TokenUsage, LogIdentityContext, FileAttachment, CSVReference } from "@/lib/types";
 import { DEFAULT_MODEL, SUPPORTED_MODELS } from "@/lib/config";
 import { checkBudget, createReservation, deleteReservation, recordUsage } from "@/lib/usage-tracker";
 import { isMultipartRequest, parseMultipart } from "@/lib/multipart-parser";
-import { buildContentBlocks, buildPersistedContent } from "@/lib/content-blocks";
-import { uploadFile, isUploadStorageConfigured } from "@/lib/upload-storage";
+import { buildContentBlocks, buildMediaBlocks, buildPersistedContent } from "@/lib/content-blocks";
+import { buildInlineCsvBlock, buildReferenceCsvBlock, composeUserContent } from "@/lib/csv-content-blocks";
+import { uploadFile, isUploadStorageConfigured, uploadCsv, deleteCsvBlob } from "@/lib/upload-storage";
+import { isCsvType } from "@/lib/file-validation";
+import { classifyCsv } from "@/lib/csv-classifier";
+import { appendCsvAttachment, getCsvAttachments } from "@/lib/conversation-store";
+import { randomUUID } from "crypto";
 
 const SUPPORTED_MODEL_IDS = new Set(Object.values(SUPPORTED_MODELS));
 
@@ -213,17 +218,120 @@ async function handleAgentRequest(
   // Pessimistic reservation
   const reservationId = await createReservation(identity.ownerId, sessionId, model);
 
-  // Build content blocks for Claude API (base64 for files) and for persistence (blob URLs)
+  // Split attachments into media (image/PDF) and CSV paths. CSVs are
+  // classified server-side and either inlined as text content blocks or
+  // uploaded to blob storage as reference-mode attachments.
+  const mediaFiles: FileAttachment[] = [];
+  const csvFiles: FileAttachment[] = [];
+  for (const file of attachedFiles) {
+    if (isCsvType(file.mimetype, file.filename)) {
+      csvFiles.push(file);
+    } else {
+      mediaFiles.push(file);
+    }
+  }
+
+  // Build content blocks for Claude API (base64 for media, inline text for
+  // small CSVs, reference blocks for large CSVs) and for persistence (blob
+  // URLs).
   let claudeContent: Anthropic.Messages.MessageParam["content"];
   let persistedContent: string;
+  const newCsvAttachments: CSVReference[] = [];
+  const csvBlocks: Anthropic.Messages.TextBlockParam[] = [];
 
-  if (attachedFiles.length > 0) {
-    claudeContent = buildContentBlocks(effectiveMessage, attachedFiles);
+  // Process CSVs before media: classification / 10-cap rejection short-circuits
+  // the request before any media is base64-encoded or persisted. Note that for
+  // reference-mode CSVs the blob upload itself still precedes the Cosmos cap
+  // check inside appendCsvAttachment — that race is handled by deleteCsvBlob
+  // on the cap-error path so orphaned blobs don't accumulate.
+  for (const file of csvFiles) {
+    let classified;
+    try {
+      classified = classifyCsv(file.buffer);
+    } catch (err) {
+      return new Response(
+        JSON.stringify({ error: `CSV "${file.filename}" could not be processed: ${(err as Error).message}` }),
+        { status: 400, headers: { "Content-Type": "application/json" } },
+      );
+    }
 
-    // Upload files to blob storage if configured, otherwise skip persistence of file refs
+    if (classified.mode === "inline") {
+      csvBlocks.push(buildInlineCsvBlock(file.filename, classified));
+      continue;
+    }
+
+    // Reference mode — upload to CSV blob storage, append to conversation.
+    const csvId = randomUUID();
+    let blobUrl: string;
+    try {
+      blobUrl = await uploadCsv(sessionId, csvId, file.filename, classified.normalizedBuffer);
+    } catch (err) {
+      logger.warn("Failed to upload CSV to blob storage", "api/agent", {
+        sessionId,
+        filename: file.filename,
+        errorMessage: (err as Error).message,
+      });
+      return new Response(
+        JSON.stringify({ error: "CSV upload storage is not available. Please try again later." }),
+        { status: 503, headers: { "Content-Type": "application/json" } },
+      );
+    }
+
+    const reference: CSVReference = {
+      csvId,
+      filename: file.filename,
+      blobUrl,
+      rowCount: classified.rowCount,
+      columns: classified.columns,
+      sampleRows: classified.previewRows,
+      createdAt: new Date().toISOString(),
+    };
+
+    try {
+      await appendCsvAttachment(sessionId, identity.ownerId, reference);
+    } catch (err) {
+      // Best-effort cleanup: the blob was uploaded before the Cosmos write,
+      // so any failure here leaves an orphan. Delete it so storage doesn't
+      // accumulate costs for attachments that are never visible to the user.
+      void deleteCsvBlob(blobUrl);
+      if (err instanceof CsvAttachmentCapError) {
+        return new Response(
+          JSON.stringify({ error: err.message }),
+          { status: 409, headers: { "Content-Type": "application/json" } },
+        );
+      }
+      logger.warn("Failed to persist CSV attachment", "api/agent", {
+        sessionId,
+        csvId,
+        errorMessage: (err as Error).message,
+      });
+      return new Response(
+        JSON.stringify({ error: "Failed to register CSV attachment. Please try again." }),
+        { status: 500, headers: { "Content-Type": "application/json" } },
+      );
+    }
+
+    newCsvAttachments.push(reference);
+    csvBlocks.push(buildReferenceCsvBlock(reference));
+  }
+
+  if (mediaFiles.length > 0 || csvBlocks.length > 0) {
+    // When CSVs are present we use composeUserContent to enforce the spec
+    // ordering media → CSV → user text. When only media is present (no
+    // CSVs), the existing buildContentBlocks helper keeps the historical
+    // text → media ordering so image/PDF-only flows are unchanged.
+    if (csvBlocks.length > 0) {
+      const mediaBlocks = buildMediaBlocks(mediaFiles);
+      claudeContent = composeUserContent(effectiveMessage, mediaBlocks, csvBlocks);
+    } else {
+      claudeContent = buildContentBlocks(effectiveMessage, mediaFiles);
+    }
+
+    // Upload media files to blob storage for persistence. CSV uploads are
+    // handled separately above.
     const fileRefs: { filename: string; mimetype: string; blobUrl: string }[] = [];
-    if (isUploadStorageConfigured()) {
-      for (const file of attachedFiles) {
+    if (mediaFiles.length > 0 && isUploadStorageConfigured()) {
+      for (const file of mediaFiles) {
         try {
           const blobUrl = await uploadFile(file.filename, file.buffer, file.mimetype);
           fileRefs.push({ filename: file.filename, mimetype: file.mimetype, blobUrl });
@@ -235,6 +343,10 @@ async function handleAgentRequest(
           });
         }
       }
+    }
+    // Reference-mode CSVs appear as file refs in the persisted message too.
+    for (const ref of newCsvAttachments) {
+      fileRefs.push({ filename: ref.filename, mimetype: "text/csv", blobUrl: ref.blobUrl });
     }
     persistedContent = buildPersistedContent(effectiveMessage, fileRefs);
   } else {
@@ -300,6 +412,20 @@ async function handleAgentRequest(
           }
         }
 
+        // Load reference-mode CSV attachments owned by this conversation.
+        // Newly uploaded references have been persisted above; this query
+        // returns them plus any from prior turns. Used for conditional
+        // tool registration and executor context scoping.
+        let conversationCsvAttachments: CSVReference[] = [];
+        try {
+          conversationCsvAttachments = await getCsvAttachments(sessionId, identity.ownerId);
+        } catch (err) {
+          logger.warn("Failed to load CSV attachments", "api/agent", {
+            sessionId,
+            errorMessage: (err as Error).message,
+          });
+        }
+
         const result = await runAgentLoop(
           apiMessages,
           {
@@ -330,6 +456,7 @@ async function handleAgentRequest(
           sessionId,
           model,
           signal,
+          { csvAttachments: conversationCsvAttachments },
         );
 
         // Emit session_interrupted event if the loop was aborted

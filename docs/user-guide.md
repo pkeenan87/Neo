@@ -281,6 +281,39 @@ In the web UI, select your preferred model before starting a conversation (model
 
 The model preference applies for the duration of the session and does not affect other users.
 
+### File Uploads (Web)
+
+The web interface accepts image, PDF, and CSV attachments. Click the paper-clip icon next to the message input to attach one or more files (up to 5 per message).
+
+**Supported types and limits**
+
+| Type | Extensions | Maximum size |
+|---|---|---|
+| Images | `.jpg`, `.jpeg`, `.png`, `.gif`, `.webp` | 20 MB |
+| Documents | `.pdf` | 32 MB |
+| CSV data | `.csv` | 50 MB |
+
+**How CSVs are handled**
+
+Neo uses a hybrid strategy for CSVs so you don't have to think about file size:
+
+- **Small CSVs (≤ 500 rows AND ≤ 100 KB)** are inlined directly into the conversation as text. Claude can read individual rows, quote cells, and answer questions without any extra round-trip. This is the right mode for alert lists, short exports, and anything small enough to fit in context.
+- **Larger CSVs** are uploaded to blob storage and exposed through a `query_csv` tool. Claude sees only the column schema and a 5-row preview in the prompt, then runs SQL queries on demand (SELECT / WITH / PRAGMA) against an in-memory SQLite copy. The table name is always `csv`. Query results are capped at 100 rows per call; prefer aggregations (`COUNT`, `GROUP BY`, `AVG`) over raw dumps. Common examples:
+
+  ```text
+  Which source IPs accounted for the most failed sign-ins?
+  What's the 95th percentile of response time in this CSV?
+  Show me the 10 users with the highest alert counts.
+  ```
+
+**Limits and caveats**
+
+- Up to **10 reference-mode CSVs** per conversation. Uploading an 11th returns an error asking you to start a new conversation.
+- CSV column count is capped at **200**. Wider files are rejected at upload time.
+- Binary files renamed with a `.csv` extension are rejected before parsing.
+- CSVs are processed server-side with `csv-parse`; malformed rows (unterminated quotes, ragged rows) surface a validation error before the file reaches Claude.
+- Reference-mode blobs live in the `neo-csv-uploads` container and are tied to the conversation document for TTL cleanup. See [configuration.md](configuration.md#csv-uploads) for deployment details.
+
 ### Conversation History (Web)
 
 When Azure Cosmos DB is configured, the web interface persists conversations across sessions and server restarts. The sidebar shows your recent conversations, and you can:

@@ -7,7 +7,7 @@ import { logger } from "./logger";
 import { getToolIntegration } from "./integration-registry";
 import { wrapToolResult } from "./injection-guard";
 import { prepareMessages, CHARS_PER_TOKEN } from "./context-manager";
-import type { Message, AgentLoopResult, AgentCallbacks, PendingTool, ModelPreference, TokenUsage } from "./types";
+import type { Message, AgentLoopResult, AgentCallbacks, PendingTool, ModelPreference, TokenUsage, CSVReference } from "./types";
 
 const client = new Anthropic({ apiKey: env.ANTHROPIC_API_KEY });
 
@@ -67,6 +67,16 @@ async function createWithRetry(
   throw new Error("Retry loop exited unexpectedly");
 }
 
+export interface RunAgentLoopOptions {
+  /**
+   * CSV reference-mode attachments available to this conversation. When
+   * non-empty, the query_csv tool is registered in the tools list and
+   * passed through to the executor context so the tool can look up
+   * csv_ids scoped to this conversation.
+   */
+  csvAttachments?: CSVReference[];
+}
+
 export async function runAgentLoop(
   messages: Message[],
   callbacks: AgentCallbacks = {},
@@ -74,6 +84,7 @@ export async function runAgentLoop(
   sessionId: string = "unknown",
   model: ModelPreference = DEFAULT_MODEL,
   signal?: AbortSignal,
+  options: RunAgentLoopOptions = {},
 ): Promise<AgentLoopResult> {
   const localMessages: Message[] = [...messages];
   logger.info("Agent loop started", "agent", { role, model });
@@ -121,8 +132,15 @@ export async function runAgentLoop(
   const systemPromptTokenEstimate = Math.ceil(systemPrompt.length / CHARS_PER_TOKEN);
   let lastInputTokens: number | null = null;
 
-  // Build tools with cache_control on the last item so the entire prefix is cached
-  const roleTools = getToolsForRole(role);
+  // Build tools with cache_control on the last item so the entire prefix is cached.
+  // query_csv is registered conditionally — only when the conversation actually
+  // has at least one reference-mode CSV attachment — so conversations without
+  // CSVs don't pay the prompt-cache cost of the extra tool schema.
+  const csvAttachments = options.csvAttachments ?? [];
+  const hasCsvAttachments = csvAttachments.length > 0;
+  const roleTools = getToolsForRole(role).filter((tool) =>
+    tool.name === "query_csv" ? hasCsvAttachments : true,
+  );
   const cachedTools = roleTools.map((tool, i) =>
     i === roleTools.length - 1
       ? { ...tool, cache_control: { type: "ephemeral" as const } }
@@ -217,6 +235,7 @@ export async function runAgentLoop(
         try {
           const result = await executeTool(name, input as Record<string, unknown>, {
             sessionMessages: localMessages,
+            csvAttachments,
           });
           const durationMs = Date.now() - toolStart;
           logger.emitEvent("tool_execution", `Tool completed: ${name}`, "agent", {
@@ -337,6 +356,7 @@ export async function resumeAfterConfirmation(
   role: Role = "reader",
   sessionId: string = "unknown",
   model: ModelPreference = DEFAULT_MODEL,
+  options: RunAgentLoopOptions = {},
 ): Promise<AgentLoopResult> {
   const localMessages: Message[] = [...messages];
   const { id, name, input } = pendingTool;
@@ -348,7 +368,10 @@ export async function resumeAfterConfirmation(
     if (callbacks.onToolCall) callbacks.onToolCall(name, input);
     const toolStart = Date.now();
     try {
-      const result = await executeTool(name, input, { sessionMessages: localMessages });
+      const result = await executeTool(name, input, {
+        sessionMessages: localMessages,
+        csvAttachments: options.csvAttachments,
+      });
       const durationMs = Date.now() - toolStart;
       logger.emitEvent("tool_execution", `Tool completed: ${name}`, "agent", {
         toolName: name,
@@ -390,5 +413,5 @@ export async function resumeAfterConfirmation(
 
   localMessages.push({ role: "user", content: [toolResult] });
 
-  return runAgentLoop(localMessages, callbacks, role, sessionId, model);
+  return runAgentLoop(localMessages, callbacks, role, sessionId, model, undefined, options);
 }

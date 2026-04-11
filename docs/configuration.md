@@ -10,6 +10,7 @@ This guide covers all configuration options for the Neo web server and CLI clien
   - [Entra ID Setup (Web Server)](#entra-id-setup-web-server)
   - [Mock Mode](#mock-mode)
   - [CLI Downloads Storage](#cli-downloads-storage)
+  - [File Uploads (Web)](#file-uploads-web)
 - [CLI Configuration](#cli-configuration)
   - [Config File](#config-file)
   - [Authentication Priority](#authentication-priority)
@@ -79,6 +80,11 @@ SENTINEL_RESOURCE_GROUP=
 # Chat persistence (optional — omit for in-memory sessions)
 COSMOS_ENDPOINT=https://<account-name>.documents.azure.com:443/
 
+# File upload storage (optional — omit to disable file attachments)
+# Reuses CLI_STORAGE_ACCOUNT as the storage account for both containers.
+UPLOAD_STORAGE_CONTAINER=neo-uploads           # images + PDFs
+CSV_UPLOAD_STORAGE_CONTAINER=neo-csv-uploads   # reference-mode CSV attachments
+
 # Development auth bypass (never enable in production)
 # DEV_AUTH_BYPASS=true
 
@@ -110,8 +116,10 @@ INJECTION_GUARD_MODE=monitor
 | `SENTINEL_WORKSPACE_NAME` | When live | Log Analytics workspace name |
 | `SENTINEL_RESOURCE_GROUP` | When live | Resource group containing the Sentinel workspace |
 | `COSMOS_ENDPOINT` | No | Azure Cosmos DB endpoint URL. Omit for in-memory sessions (no persistence). |
-| `CLI_STORAGE_ACCOUNT` | No | Azure Storage account name for hosting CLI installer downloads |
+| `CLI_STORAGE_ACCOUNT` | No | Azure Storage account name. Used for CLI installer downloads AND as the account that hosts the upload containers below. |
 | `CLI_STORAGE_CONTAINER` | No | Blob container name for CLI installers (default: `cli-releases`) |
+| `UPLOAD_STORAGE_CONTAINER` | No | Blob container name for image/PDF message attachments. Required for image + PDF uploads to work in the web chat. |
+| `CSV_UPLOAD_STORAGE_CONTAINER` | No | Blob container name for reference-mode CSV attachments (default: `neo-csv-uploads`). Used only when a CSV exceeds the inline threshold (500 rows / 100 KB). |
 | `DEV_AUTH_BYPASS` | No | Set to `true` in development only. Bypasses all auth checks with a dev-operator identity. Blocked in production by a startup guard. |
 | `MICROSOFT_APP_ID` | No | Bot Framework app ID (for Teams channel) |
 | `MICROSOFT_APP_PASSWORD` | No | Bot Framework app password |
@@ -237,6 +245,61 @@ CLI installer files are hosted in Azure Blob Storage, allowing the CLI to be upd
 If `CLI_STORAGE_ACCOUNT` is not set, the `/api/downloads/[filename]` route returns a 503 error.
 
 **CLI auto-update version endpoint**: The `GET /api/cli/version` route also reads from the storage account to compute a SHA-256 hash of the installer blob. The hash is cached in memory (keyed by the blob's ETag) so subsequent requests are fast. When you upload a new installer, the ETag changes and the hash is recomputed on the next request. The CLI verifies this hash after downloading to ensure integrity. To update the CLI version number, change the `version` field in `web/lib/download-config.ts` and redeploy the web server.
+
+<a id="csv-uploads"></a>
+### File Uploads (Web)
+
+The web chat accepts image, PDF, and CSV attachments up to 5 files per message. All three types use Azure Blob Storage with Managed Identity auth, sharing the same storage account as the CLI downloads container.
+
+| Container | Env Var | Content | Notes |
+|---|---|---|---|
+| Images + PDFs | `UPLOAD_STORAGE_CONTAINER` | JPEG, PNG, GIF, WebP, PDF | Attachment blobs are persisted with blob URLs in the conversation document for history replay. |
+| CSV attachments | `CSV_UPLOAD_STORAGE_CONTAINER` (default `neo-csv-uploads`) | CSVs exceeding 500 rows or 100 KB | Inline CSVs never touch blob storage — they are embedded directly in the conversation. |
+
+**How CSVs are handled**
+
+- **Small CSVs (≤ 500 rows AND ≤ 100 KB)** are classified inline: parsed server-side, wrapped in a `<csv_attachment mode="inline">` text block, and sent to Claude directly. Nothing is uploaded.
+- **Large CSVs** are uploaded to the `neo-csv-uploads` container under `{conversationId}/{csvId}/{filename}`, and a `CSVReference` record is appended to the conversation's `csvAttachments[]` field in Cosmos. A new `query_csv` tool is conditionally registered for that conversation, giving Claude read-only SQL (`SELECT` / `WITH` / `PRAGMA table_info(csv)`) against an in-memory `sql.js` (SQLite-in-WebAssembly) copy of the file. Queries are capped at 100 rows per call.
+- Per-conversation cap: 10 reference-mode CSVs. An 11th upload returns a 409 with a message asking the user to start a new conversation.
+- Hard limits: 50 MB per file, 200 columns per file. Wider files are rejected at upload time.
+- Binary content (null-byte buffers) is rejected before parsing, even with a `.csv` extension and a permissive MIME type.
+
+**Provisioning (Azure CLI)**
+
+Create both containers in the same storage account referenced by `CLI_STORAGE_ACCOUNT`:
+
+```powershell
+# Create the image/PDF upload container
+az storage container create `
+    --name neo-uploads `
+    --account-name neoclireleases
+
+# Create the CSV upload container
+az storage container create `
+    --name neo-csv-uploads `
+    --account-name neoclireleases
+
+# Grant the App Service's managed identity read/write on the upload containers.
+# Storage Blob Data Contributor is required because the app both reads and writes.
+$principalId = az webapp identity show `
+    --name neo-web `
+    --resource-group neo-rg `
+    --query principalId -o tsv
+
+az role assignment create `
+    --role "Storage Blob Data Contributor" `
+    --assignee $principalId `
+    --scope "/subscriptions/<subscription-id>/resourceGroups/neo-rg/providers/Microsoft.Storage/storageAccounts/neoclireleases/blobServices/default/containers/neo-uploads"
+
+az role assignment create `
+    --role "Storage Blob Data Contributor" `
+    --assignee $principalId `
+    --scope "/subscriptions/<subscription-id>/resourceGroups/neo-rg/providers/Microsoft.Storage/storageAccounts/neoclireleases/blobServices/default/containers/neo-csv-uploads"
+```
+
+**Cleanup lifecycle**
+
+Blobs in both containers are tied to the parent conversation document in Cosmos. Because Cosmos TTL deletion is not atomic with blob deletion, a daily scheduled Azure Function is recommended to sweep orphaned blobs whose parent conversation no longer exists. See the spec at `_specs/hybrid-csv-support.md` for the intended sweep logic — this function is a separate deployment artifact and is not yet included in this repository.
 
 ### Token Usage Budgets
 
@@ -1013,6 +1076,8 @@ az role assignment create \
 ```
 
 After creating the storage account, set `CLI_STORAGE_ACCOUNT=neoclireleases` in your app settings (see step 6).
+
+**File upload containers (web chat attachments)**: if you want the web UI to accept images, PDFs, and CSVs, create the two upload containers in the same storage account and grant the App Service identity `Storage Blob Data Contributor`. Full commands and behavior are in [File Uploads (Web)](#file-uploads-web).
 
 ### 5. Provision Log Analytics Custom Table (Optional)
 

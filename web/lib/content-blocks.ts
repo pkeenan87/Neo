@@ -3,6 +3,51 @@ import type { FileAttachment, FileRef } from "./types";
 import { isImageType, isDocumentType } from "./file-validation";
 
 /**
+ * Media block union: the two Claude API content block shapes this helper
+ * produces. Documents are not in every SDK version's typed surface, so we
+ * type them structurally rather than via SDK interfaces.
+ */
+export type MediaBlockParam =
+  | Anthropic.Messages.ImageBlockParam
+  | {
+      type: "document";
+      source: { type: "base64"; media_type: "application/pdf"; data: string };
+    };
+
+/**
+ * Build Claude API media content blocks (image / document) from a set of
+ * file attachments. Used by callers that need to compose content with a
+ * non-default ordering (e.g. media → CSV → text). CSVs should be handled
+ * separately via csv-content-blocks; this helper skips any non-media
+ * attachments it receives.
+ */
+export function buildMediaBlocks(files: FileAttachment[]): MediaBlockParam[] {
+  const blocks: MediaBlockParam[] = [];
+  for (const file of files) {
+    if (isImageType(file.mimetype)) {
+      blocks.push({
+        type: "image",
+        source: {
+          type: "base64",
+          media_type: file.mimetype as "image/jpeg" | "image/png" | "image/gif" | "image/webp",
+          data: file.buffer.toString("base64"),
+        },
+      });
+    } else if (isDocumentType(file.mimetype)) {
+      blocks.push({
+        type: "document",
+        source: {
+          type: "base64",
+          media_type: "application/pdf",
+          data: file.buffer.toString("base64"),
+        },
+      });
+    }
+  }
+  return blocks;
+}
+
+/**
  * Build Claude API content blocks from a text message + file attachments.
  * Files are base64-encoded inline for the API call (not persisted this way).
  * Returns string for text-only, or array of content blocks when files present.

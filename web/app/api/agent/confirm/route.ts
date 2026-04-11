@@ -1,6 +1,7 @@
 import { NextRequest } from "next/server";
 import { sessionStore } from "@/lib/session-factory";
 import { resumeAfterConfirmation } from "@/lib/agent";
+import { getCsvAttachments } from "@/lib/conversation-store";
 import { createNDJSONStream, encodeNDJSON, writeAgentResult } from "@/lib/stream";
 import { resolveAuth } from "@/lib/auth-helpers";
 import { canUseTool } from "@/lib/permissions";
@@ -113,6 +114,7 @@ export async function POST(request: NextRequest) {
   (async () => {
     await setLogContext(logIdentity, async () => {
       try {
+        const csvAttachments = await getCsvAttachments(body.sessionId, identity.ownerId).catch(() => []);
         const result = await resumeAfterConfirmation(
           session.messages,
           pendingTool,
@@ -135,7 +137,9 @@ export async function POST(request: NextRequest) {
             },
           },
           session.role,
-          body.sessionId
+          body.sessionId,
+          undefined,
+          { csvAttachments },
         );
 
         await writeAgentResult(result, session, body.sessionId, writer);

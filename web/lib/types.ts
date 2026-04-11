@@ -40,6 +40,7 @@ export interface EnvConfig {
   EVENT_HUB_ANALYTICS_CONNECTION_STRING: string | undefined;
   EVENT_HUB_ANALYTICS_NAME: string | undefined;
   UPLOAD_STORAGE_CONTAINER: string | undefined;
+  CSV_UPLOAD_STORAGE_CONTAINER: string;
   LOG_LEVEL: string | undefined;
   COSMOS_ENDPOINT: string | undefined;
   CLI_STORAGE_ACCOUNT: string | undefined;
@@ -63,9 +64,38 @@ export const ACCEPTED_DOC_TYPES = new Set([
   "application/pdf",
 ]);
 
+export const ACCEPTED_CSV_TYPES = new Set([
+  "text/csv",
+  // Browsers are unreliable about CSV MIME types — these are common fallbacks
+  "application/csv",
+  "application/vnd.ms-excel",
+  "application/octet-stream",
+  "text/plain",
+]);
+
 export const MAX_IMAGE_SIZE = 20 * 1024 * 1024; // 20 MB
 export const MAX_DOC_SIZE = 32 * 1024 * 1024;   // 32 MB
+export const MAX_CSV_SIZE = 50 * 1024 * 1024;   // 50 MB
 export const MAX_FILES_PER_MESSAGE = 5;
+
+// ── CSV classification thresholds ────────────────────────────
+// Both thresholds must be satisfied for the inline path: a CSV can
+// hit the row cap cheaply but still be too large on bytes (wide
+// columns), or vice versa.
+export const CSV_INLINE_ROW_LIMIT = 500;
+export const CSV_INLINE_BYTE_LIMIT = 100_000; // ~100 KB
+export const CSV_MAX_REFERENCE_ATTACHMENTS = 10;
+export const CSV_PREVIEW_ROW_COUNT = 5;
+export const CSV_QUERY_RESULT_LIMIT = 100;
+// Hard ceiling on column count. Wide CSVs with thousands of columns
+// would push the Cosmos document past its 2 MB item limit once their
+// preview rows are persisted — so we reject them at classify time.
+export const CSV_MAX_COLUMNS = 200;
+// Maximum character length for any single preview cell before it is
+// truncated (with a trailing ellipsis). Only affects previewRows that
+// end up in the Cosmos document; the full-fidelity body still lives in
+// blob storage for reference-mode CSVs.
+export const CSV_PREVIEW_CELL_MAX_CHARS = 500;
 
 export interface FileAttachment {
   filename: string;
@@ -79,6 +109,24 @@ export interface FileRef {
   filename: string;
   mimetype: string;
   blobUrl: string;
+}
+
+// ── CSV Attachments ──────────────────────────────────────────
+
+/**
+ * A reference-mode CSV attachment persisted on the conversation document.
+ * The full CSV body lives in Azure Blob Storage; queries go through the
+ * `query_csv` tool which downloads the blob and loads it into an
+ * in-memory SQLite database per call.
+ */
+export interface CSVReference {
+  csvId: string;
+  filename: string;
+  blobUrl: string;
+  rowCount: number;
+  columns: string[];
+  sampleRows: string[][];
+  createdAt: string;
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -210,6 +258,7 @@ export interface Conversation {
   pendingConfirmation: PendingTool | null;
   model?: string;
   ttl?: number;
+  csvAttachments?: CSVReference[];
 }
 
 export type ConversationMeta = Omit<Conversation, "messages" | "pendingConfirmation">;
@@ -657,6 +706,18 @@ export interface ActionAppOmniFindingInput {
 
 export interface GetFullToolResultInput {
   tool_use_id: string;
+}
+
+export interface QueryCsvInput {
+  csv_id: string;
+  query: string;
+}
+
+export class CsvAttachmentCapError extends Error {
+  constructor(public readonly cap: number) {
+    super(`CSV attachment limit reached: a conversation can hold at most ${cap} reference-mode CSV attachments. Please start a new conversation.`);
+    this.name = "CsvAttachmentCapError";
+  }
 }
 
 // ─────────────────────────────────────────────────────────────

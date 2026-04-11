@@ -1177,7 +1177,7 @@ export function ChatInterface({
                     ref={fileInputRef}
                     type="file"
                     multiple
-                    accept="image/jpeg,image/png,image/gif,image/webp,application/pdf"
+                    accept="image/jpeg,image/png,image/gif,image/webp,application/pdf,text/csv,.csv"
                     className="sr-only"
                     tabIndex={-1}
                     aria-hidden="true"
