@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { resolveAuth } from "@/lib/auth-helpers";
 import { getAllUsersUsage } from "@/lib/usage-tracker";
 import { USAGE_LIMITS } from "@/lib/config";
-import { logger, hashPii } from "@/lib/logger";
+import { logger } from "@/lib/logger";
 
 const DEFAULT_PAGE_SIZE = 50;
 const MAX_PAGE_SIZE = 100;
@@ -29,7 +29,7 @@ export async function GET(request: NextRequest) {
 
     return NextResponse.json({
       users: pageSlice.map(({ userId, twoHourUsage, weeklyUsage }) => ({
-        userIdHash: hashPii(userId),
+        userId,
         twoHourUsage,
         weeklyUsage,
       })),

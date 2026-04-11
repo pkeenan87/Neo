@@ -12,7 +12,7 @@ interface UsageSummary {
 }
 
 interface UserUsageRow {
-  userIdHash: string
+  userId: string
   twoHourUsage: UsageSummary
   weeklyUsage: UsageSummary
 }
@@ -28,7 +28,7 @@ interface AdminUsageResponse {
 }
 
 type ConfirmTarget = {
-  userIdHash: string
+  userId: string
   windowType: 'two-hour' | 'weekly'
 } | null
 
@@ -88,11 +88,18 @@ export function AdminUsageSection({ className }: AdminUsageSectionProps) {
         credentials: 'include',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          userId: confirmTarget.userIdHash,
+          userId: confirmTarget.userId,
           window: confirmTarget.windowType,
         }),
       })
-      if (!res.ok) throw new Error('Reset failed')
+      if (!res.ok) {
+        const payload: unknown = await res.json().catch(() => null)
+        const serverMessage =
+          payload && typeof payload === 'object' && 'error' in payload && typeof (payload as { error: unknown }).error === 'string'
+            ? (payload as { error: string }).error
+            : `Reset failed (${res.status})`
+        throw new Error(serverMessage)
+      }
       setConfirmTarget(null)
       await fetchData()
     } catch (err) {
@@ -153,28 +160,28 @@ export function AdminUsageSection({ className }: AdminUsageSectionProps) {
 
       {data?.users.map((user) => {
         const isConfirming2h =
-          confirmTarget?.userIdHash === user.userIdHash && confirmTarget?.windowType === 'two-hour'
+          confirmTarget?.userId === user.userId && confirmTarget?.windowType === 'two-hour'
         const isConfirmingWeekly =
-          confirmTarget?.userIdHash === user.userIdHash && confirmTarget?.windowType === 'weekly'
+          confirmTarget?.userId === user.userId && confirmTarget?.windowType === 'weekly'
 
         return (
           <section
-            key={user.userIdHash}
+            key={user.userId}
             className={styles.userCard}
-            aria-labelledby={`user-heading-${user.userIdHash}`}
+            aria-labelledby={`user-heading-${user.userId}`}
           >
             <div className={styles.userHeader}>
               <h3
-                id={`user-heading-${user.userIdHash}`}
+                id={`user-heading-${user.userId}`}
                 className={styles.userId}
               >
                 <span className={styles.srOnly}>User: </span>
-                {user.userIdHash}
+                {user.userId}
               </h3>
               <div
                 className={styles.resetGroup}
                 role="group"
-                aria-label={`Reset controls for ${user.userIdHash}`}
+                aria-label={`Reset controls for ${user.userId}`}
               >
                 {isConfirming2h ? (
                   <span role="alert" className={styles.confirmOverlay}>
@@ -183,7 +190,7 @@ export function AdminUsageSection({ className }: AdminUsageSectionProps) {
                       ref={confirmYesRef}
                       type="button"
                       className={styles.confirmYes}
-                      aria-label={`Confirm reset 2-hour window for ${user.userIdHash}`}
+                      aria-label={`Confirm reset 2-hour window for ${user.userId}`}
                       onClick={handleReset}
                       disabled={resetting}
                     >
@@ -193,7 +200,7 @@ export function AdminUsageSection({ className }: AdminUsageSectionProps) {
                     <button
                       type="button"
                       className={styles.confirmCancel}
-                      aria-label={`Cancel reset for ${user.userIdHash}`}
+                      aria-label={`Cancel reset for ${user.userId}`}
                       onClick={() => setConfirmTarget(null)}
                     >
                       Cancel
@@ -203,9 +210,12 @@ export function AdminUsageSection({ className }: AdminUsageSectionProps) {
                   <button
                     type="button"
                     className={styles.resetButton}
-                    aria-label={`Reset 2-hour window for ${user.userIdHash}`}
+                    aria-label={`Reset 2-hour window for ${user.userId}`}
                     onClick={() =>
-                      setConfirmTarget({ userIdHash: user.userIdHash, windowType: 'two-hour' })
+                      setConfirmTarget({
+                        userId: user.userId,
+                        windowType: 'two-hour',
+                      })
                     }
                   >
                     Reset 2-hr
@@ -218,7 +228,7 @@ export function AdminUsageSection({ className }: AdminUsageSectionProps) {
                       ref={isConfirming2h ? undefined : confirmYesRef}
                       type="button"
                       className={styles.confirmYes}
-                      aria-label={`Confirm reset weekly window for ${user.userIdHash}`}
+                      aria-label={`Confirm reset weekly window for ${user.userId}`}
                       onClick={handleReset}
                       disabled={resetting}
                     >
@@ -228,7 +238,7 @@ export function AdminUsageSection({ className }: AdminUsageSectionProps) {
                     <button
                       type="button"
                       className={styles.confirmCancel}
-                      aria-label={`Cancel reset for ${user.userIdHash}`}
+                      aria-label={`Cancel reset for ${user.userId}`}
                       onClick={() => setConfirmTarget(null)}
                     >
                       Cancel
@@ -238,9 +248,12 @@ export function AdminUsageSection({ className }: AdminUsageSectionProps) {
                   <button
                     type="button"
                     className={styles.resetButton}
-                    aria-label={`Reset weekly window for ${user.userIdHash}`}
+                    aria-label={`Reset weekly window for ${user.userId}`}
                     onClick={() =>
-                      setConfirmTarget({ userIdHash: user.userIdHash, windowType: 'weekly' })
+                      setConfirmTarget({
+                        userId: user.userId,
+                        windowType: 'weekly',
+                      })
                     }
                   >
                     Reset weekly

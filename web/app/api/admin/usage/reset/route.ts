@@ -28,19 +28,33 @@ export async function POST(request: NextRequest) {
   try {
     body = await request.json();
   } catch {
+    logger.warn("Rejected reset request: invalid JSON body", "admin-usage", {
+      ownerIdHash: hashPii(identity.ownerId),
+    });
     return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
   }
 
   if (!body || typeof body !== "object") {
+    logger.warn("Rejected reset request: body not an object", "admin-usage", {
+      ownerIdHash: hashPii(identity.ownerId),
+    });
     return NextResponse.json({ error: "Invalid request body" }, { status: 400 });
   }
 
   const { userId, window: windowType } = body as Record<string, unknown>;
 
   if (typeof userId !== "string" || !AAD_OID_RE.test(userId)) {
+    logger.warn("Rejected reset request: missing or invalid userId", "admin-usage", {
+      ownerIdHash: hashPii(identity.ownerId),
+      userIdType: typeof userId,
+    });
     return NextResponse.json({ error: "Missing or invalid userId" }, { status: 400 });
   }
   if (typeof windowType !== "string" || !VALID_WINDOWS.has(windowType)) {
+    logger.warn("Rejected reset request: invalid window", "admin-usage", {
+      ownerIdHash: hashPii(identity.ownerId),
+      targetUserIdHash: hashPii(userId),
+    });
     return NextResponse.json(
       { error: "Invalid window parameter" },
       { status: 400 },

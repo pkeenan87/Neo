@@ -250,8 +250,8 @@ export async function checkBudget(userId: string): Promise<BudgetResult> {
   }
 
   const [twoHour, weekly] = await Promise.all([
-    getUserUsage(userId, USAGE_LIMITS.twoHourWindow.windowMs),
-    getUserUsage(userId, USAGE_LIMITS.weeklyWindow.windowMs),
+    getUserUsageWithReset(userId, USAGE_LIMITS.twoHourWindow.windowMs, "two-hour"),
+    getUserUsageWithReset(userId, USAGE_LIMITS.weeklyWindow.windowMs, "weekly"),
   ]);
 
   // Toggle: when usage limits are disabled, track but never block/warn
