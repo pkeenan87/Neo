@@ -12,7 +12,9 @@ import type {
   Session,
   SessionMeta,
   Channel,
+  CSVReference,
 } from "./types";
+import { CSV_MAX_REFERENCE_ATTACHMENTS, CsvAttachmentCapError } from "./types";
 import type { SessionStore } from "./session-store";
 
 // ─────────────────────────────────────────────────────────────
@@ -201,6 +203,62 @@ export async function clearConversationPendingConfirmation(
   conv.updatedAt = new Date().toISOString();
   await container.item(id, ownerId).replace(conv);
   return pending;
+}
+
+/**
+ * Append a CSV reference attachment to a conversation. Enforces the per-
+ * conversation cap and retries etag conflicts up to APPEND_CSV_MAX_ATTEMPTS
+ * times so that 3+ concurrent uploads at the cap boundary resolve without
+ * surfacing a 500 to the caller. CsvAttachmentCapError is never retried.
+ */
+const APPEND_CSV_MAX_ATTEMPTS = 3;
+
+export async function appendCsvAttachment(
+  id: string,
+  ownerId: string,
+  attachment: CSVReference,
+): Promise<void> {
+  const container = getContainer();
+
+  const attempt = async () => {
+    const { resource, etag } = await container.item(id, ownerId).read<Conversation>();
+    if (!resource) throw new Error(`Conversation ${id} not found`);
+    if (!etag) throw new Error(`Missing ETag for conversation ${id}`);
+
+    const existing = resource.csvAttachments ?? [];
+    if (existing.length >= CSV_MAX_REFERENCE_ATTACHMENTS) {
+      throw new CsvAttachmentCapError(CSV_MAX_REFERENCE_ATTACHMENTS);
+    }
+
+    resource.csvAttachments = [...existing, attachment];
+    resource.updatedAt = new Date().toISOString();
+
+    await container.item(id, ownerId).replace(resource, {
+      accessCondition: { type: "IfMatch", condition: etag },
+    });
+  };
+
+  let lastErr: unknown;
+  for (let i = 0; i < APPEND_CSV_MAX_ATTEMPTS; i++) {
+    try {
+      await attempt();
+      return;
+    } catch (err: unknown) {
+      if (err instanceof CsvAttachmentCapError) throw err;
+      const code = err && typeof err === "object" && "code" in err ? (err as { code: number }).code : 0;
+      if (code !== 412) throw err;
+      lastErr = err;
+    }
+  }
+  throw lastErr ?? new Error("appendCsvAttachment: exhausted retries");
+}
+
+export async function getCsvAttachments(
+  id: string,
+  ownerId: string,
+): Promise<CSVReference[]> {
+  const conv = await getConversation(id, ownerId);
+  return conv?.csvAttachments ?? [];
 }
 
 export async function isConversationRateLimited(

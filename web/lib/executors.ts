@@ -2,6 +2,7 @@ import { env } from "./config";
 import { getAzureToken, getMSGraphToken, generateSecurePassword } from "./auth";
 import { getToolSecret } from "./secrets";
 import { logger, hashPii } from "./logger";
+import { queryCsv } from "./csv-query-executor";
 import type {
   SentinelKqlInput,
   SentinelIncidentsInput,
@@ -60,6 +61,8 @@ import type {
   GetAppOmniAuditLogsInput,
   ActionAppOmniFindingInput,
   GetFullToolResultInput,
+  QueryCsvInput,
+  CSVReference,
   Message,
 } from "./types";
 import type { IndicatorType } from "./types";
@@ -3329,6 +3332,7 @@ const executors: Record<string, (input: Record<string, unknown>) => Promise<unkn
 
 export interface ExecuteToolContext {
   sessionMessages?: Message[];
+  csvAttachments?: CSVReference[];
 }
 
 export async function executeTool(
@@ -3340,6 +3344,13 @@ export async function executeTool(
 
   if (toolName === "get_full_tool_result") {
     return get_full_tool_result(toolInput as unknown as GetFullToolResultInput, context?.sessionMessages);
+  }
+
+  if (toolName === "query_csv") {
+    return queryCsv(
+      toolInput as unknown as QueryCsvInput,
+      context?.csvAttachments ?? [],
+    );
   }
 
   const fn = executors[toolName];

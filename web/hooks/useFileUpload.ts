@@ -4,10 +4,20 @@ import { useState, useCallback, useRef, useEffect } from "react";
 import {
   ACCEPTED_IMAGE_TYPES,
   ACCEPTED_DOC_TYPES,
+  ACCEPTED_CSV_TYPES,
   MAX_IMAGE_SIZE,
   MAX_DOC_SIZE,
+  MAX_CSV_SIZE,
   MAX_FILES_PER_MESSAGE,
 } from "@/lib/types";
+
+function isCsvFile(file: File): boolean {
+  if (file.type === "text/csv" || file.type === "application/csv") return true;
+  if (!file.name.toLowerCase().endsWith(".csv")) return false;
+  // Browsers often report CSVs with ambiguous types — fall back to extension
+  // as long as the declared type is in the known-good set (or empty).
+  return ACCEPTED_CSV_TYPES.has(file.type) || file.type === "";
+}
 
 export interface ClientFile {
   id: string;
@@ -15,12 +25,18 @@ export interface ClientFile {
   previewUrl: string | null;
 }
 
-function isAcceptedType(type: string): boolean {
-  return ACCEPTED_IMAGE_TYPES.has(type) || ACCEPTED_DOC_TYPES.has(type);
+function isAcceptedFile(file: File): boolean {
+  return (
+    ACCEPTED_IMAGE_TYPES.has(file.type) ||
+    ACCEPTED_DOC_TYPES.has(file.type) ||
+    isCsvFile(file)
+  );
 }
 
-function maxSizeForType(type: string): number {
-  return ACCEPTED_DOC_TYPES.has(type) ? MAX_DOC_SIZE : MAX_IMAGE_SIZE;
+function maxSizeForFile(file: File): number {
+  if (isCsvFile(file)) return MAX_CSV_SIZE;
+  if (ACCEPTED_DOC_TYPES.has(file.type)) return MAX_DOC_SIZE;
+  return MAX_IMAGE_SIZE;
 }
 
 export function useFileUpload() {
@@ -51,11 +67,11 @@ export function useFileUpload() {
 
       const toAdd: ClientFile[] = [];
       for (const file of incoming.slice(0, remaining)) {
-        if (!isAcceptedType(file.type)) {
-          setError(`Unsupported file type: ${file.type || file.name}. Use JPEG, PNG, GIF, WebP, or PDF.`);
+        if (!isAcceptedFile(file)) {
+          setError(`Unsupported file type: ${file.type || file.name}. Use JPEG, PNG, GIF, WebP, PDF, or CSV.`);
           continue;
         }
-        const max = maxSizeForType(file.type);
+        const max = maxSizeForFile(file);
         if (file.size > max) {
           setError(`${file.name} is too large (${(file.size / 1024 / 1024).toFixed(1)} MB). Max: ${(max / 1024 / 1024).toFixed(0)} MB.`);
           continue;

@@ -1,8 +1,10 @@
 import {
   ACCEPTED_IMAGE_TYPES,
   ACCEPTED_DOC_TYPES,
+  ACCEPTED_CSV_TYPES,
   MAX_IMAGE_SIZE,
   MAX_DOC_SIZE,
+  MAX_CSV_SIZE,
 } from "./types";
 
 export function isImageType(mimetype: string): boolean {
@@ -13,18 +15,37 @@ export function isDocumentType(mimetype: string): boolean {
   return ACCEPTED_DOC_TYPES.has(mimetype);
 }
 
-export function isAcceptedType(mimetype: string): boolean {
-  return isImageType(mimetype) || isDocumentType(mimetype);
+/**
+ * Identify CSVs by either an accepted MIME type OR a .csv extension.
+ * Browsers frequently report CSVs with generic fallback types (e.g.
+ * application/octet-stream or application/vnd.ms-excel), so we rely
+ * on the extension when the declared MIME type is ambiguous.
+ */
+export function isCsvType(mimetype: string, filename?: string): boolean {
+  if (mimetype === "text/csv" || mimetype === "application/csv") return true;
+  if (!filename) return false;
+  if (!filename.toLowerCase().endsWith(".csv")) return false;
+  // Only fall through on ambiguous-but-commonly-valid MIME types.
+  return ACCEPTED_CSV_TYPES.has(mimetype) || mimetype === "";
+}
+
+export function isAcceptedType(mimetype: string, filename?: string): boolean {
+  return (
+    isImageType(mimetype) ||
+    isDocumentType(mimetype) ||
+    isCsvType(mimetype, filename)
+  );
 }
 
 export function validateFile(
   mimetype: string,
   size: number,
+  filename?: string,
 ): { valid: boolean; error?: string } {
-  if (!isAcceptedType(mimetype)) {
+  if (!isAcceptedType(mimetype, filename)) {
     return {
       valid: false,
-      error: "Unsupported file type. Accepted: JPEG, PNG, GIF, WebP, PDF.",
+      error: "Unsupported file type. Accepted: JPEG, PNG, GIF, WebP, PDF, CSV.",
     };
   }
 
@@ -39,6 +60,13 @@ export function validateFile(
     return {
       valid: false,
       error: `Document too large (${(size / 1024 / 1024).toFixed(1)} MB). Maximum: 32 MB.`,
+    };
+  }
+
+  if (isCsvType(mimetype, filename) && size > MAX_CSV_SIZE) {
+    return {
+      valid: false,
+      error: `CSV too large (${(size / 1024 / 1024).toFixed(1)} MB). Maximum: 50 MB.`,
     };
   }
 
@@ -58,8 +86,17 @@ const MAGIC_CHECKS: Record<string, (buf: Buffer) => boolean> = {
 /**
  * Verify file content matches the declared MIME type by checking magic bytes.
  * Returns false if the file content doesn't match the expected signature.
+ *
+ * CSVs are plain text and have no reliable magic-byte signature, so they
+ * bypass this check — content validation happens separately in
+ * classifyCsv() via csv-parse.
  */
-export function validateMagicBytes(mimetype: string, buffer: Buffer): boolean {
+export function validateMagicBytes(
+  mimetype: string,
+  buffer: Buffer,
+  filename?: string,
+): boolean {
+  if (isCsvType(mimetype, filename)) return true;
   const check = MAGIC_CHECKS[mimetype];
   if (!check) return true; // unknown types pass (only known types are accepted anyway)
   return check(buffer);
