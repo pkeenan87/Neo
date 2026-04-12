@@ -1,0 +1,21 @@
+{
+  "name": "neo-csv-cleanup",
+  "version": "1.0.0",
+  "description": "Timer-triggered Azure Function that deletes orphaned CSV blobs from neo-csv-uploads when the parent conversation no longer exists in Cosmos DB.",
+  "main": "dist/src/csvCleanup.js",
+  "scripts": {
+    "build": "tsc",
+    "start": "func start",
+    "prestart": "npm run build"
+  },
+  "dependencies": {
+    "@azure/cosmos": "^4.9.1",
+    "@azure/functions": "^4.7.0",
+    "@azure/identity": "^4.13.0",
+    "@azure/storage-blob": "^12.31.0"
+  },
+  "devDependencies": {
+    "@types/node": "^25.6.0",
+    "typescript": "^5.9.3"
+  }
+}
