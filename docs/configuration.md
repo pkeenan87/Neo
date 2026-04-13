@@ -1430,7 +1430,7 @@ $pw = Read-Host -Prompt "PFX password" -AsSecureString
 
 **How dual-domain works**:
 
-- `AUTH_URL` is set to the custom domain (`https://neo.companyname.com`). Auth.js derives the OAuth redirect URI from the incoming request host (`trustHost: true`), so login works from either domain as long as both redirect URIs are registered in Entra ID.
+- `AUTH_URL` must be **removed** (not set) from app settings. With `trustHost: true`, Auth.js derives the OAuth redirect URI from the incoming request host automatically. If `AUTH_URL` is set, it pins all callbacks to a single domain, causing PKCE cookie mismatches when users start login from the other domain.
 - CSP (`connect-src 'self'`) and CSRF origin checks are domain-agnostic — they match whichever domain the request arrives on.
 - The `azurewebsites.net` domain stays active as a fallback. This is important if the Teams bot or external integrations need to reach the app from outside the internal network.
 - CLI users on the internal network should set `NEO_SERVER=https://neo.companyname.com`. Users connecting externally can use `NEO_SERVER=https://app-neo-prod-001.azurewebsites.net`.

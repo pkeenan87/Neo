@@ -172,7 +172,7 @@ if ($EntraAppId) {
 
         if ($LASTEXITCODE -ne 0) {
             Write-Host "`n  ERROR: Failed to update Entra ID redirect URIs." -ForegroundColor Red
-            Write-Host "  AUTH_URL has NOT been updated. Fix the Entra ID registration first:" -ForegroundColor Red
+            Write-Host "  Dual-domain OAuth will not work until this redirect URI is registered:" -ForegroundColor Red
             Write-Host "    $newRedirectUri`n" -ForegroundColor Red
             exit 1
         }
@@ -185,29 +185,27 @@ if ($EntraAppId) {
 }
 
 # ─────────────────────────────────────────────────────────────
-#  Step 5: Update AUTH_URL app setting
+#  Step 5: Remove AUTH_URL (if set) for dual-domain support
 # ─────────────────────────────────────────────────────────────
-# AUTH_URL controls which domain Auth.js uses as the OAuth redirect URI base.
-# Changing it to the custom domain means browser-based OAuth on the
-# azurewebsites.net domain will no longer work. This is intentional because
-# azurewebsites.net is used only for the Teams bot, which authenticates via
-# Bot Framework JWT (not browser OAuth).
+# AUTH_URL pins Auth.js to a single callback domain. When set, users who
+# start OAuth on one domain get redirected to AUTH_URL for the callback,
+# causing a PKCE cookie mismatch (cookie set on domain A, callback on domain B).
 #
-# To roll back:
-#   az webapp config appsettings set --resource-group <RG> `
-#       --name <APP> --settings "AUTH_URL=https://<app>.azurewebsites.net"
+# With AUTH_URL removed and trustHost: true, Auth.js derives the callback
+# from the incoming request host — so OAuth works from either domain.
 
-Write-Host "`n  Updating AUTH_URL app setting to 'https://$CustomDomain'..." -ForegroundColor Cyan
+Write-Host "`n  Removing AUTH_URL app setting for dual-domain OAuth support..." -ForegroundColor Cyan
 
-az webapp config appsettings set `
-    --resource-group $ResourceGroupName `
+az webapp config appsettings delete `
     --name $WebAppName `
-    --settings "AUTH_URL=https://$CustomDomain"
+    --resource-group $ResourceGroupName `
+    --setting-names AUTH_URL 2>$null
 
 if ($LASTEXITCODE -ne 0) {
-    Write-Host "`n  WARNING: Failed to update AUTH_URL. Set it manually in App Settings.`n" -ForegroundColor Yellow
+    Write-Host "`n  WARNING: Failed to remove AUTH_URL (it may not exist, or check permissions)." -ForegroundColor Yellow
+    Write-Host "  If AUTH_URL is still set, it will pin OAuth callbacks to a single domain.`n" -ForegroundColor Yellow
 } else {
-    Write-Host "  AUTH_URL updated." -ForegroundColor Green
+    Write-Host "  AUTH_URL removed (Auth.js will derive callback from request host)." -ForegroundColor Green
 }
 
 # ─────────────────────────────────────────────────────────────

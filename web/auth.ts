@@ -11,15 +11,14 @@ import { logger } from "@/lib/logger";
 
 // On Azure App Service behind a reverse proxy, the default SameSite=Lax
 // cookies are dropped during the cross-origin OAuth redirect from Entra ID.
-// Force SameSite=None + Secure on OAuth flow cookies for HTTPS deployments
-// so they survive the redirect cycle. The session token stays Lax to prevent CSRF.
-const useSecureCookies = (() => {
-  try {
-    return new URL(process.env.AUTH_URL ?? "").protocol === "https:";
-  } catch {
-    return false;
-  }
-})();
+// Force SameSite=None + Secure on OAuth flow cookies so they survive the
+// redirect cycle. The session token stays Lax to prevent CSRF.
+//
+// AUTH_URL is intentionally NOT set so Auth.js derives the callback URL from
+// the incoming request host (trustHost: true). This lets OAuth work on both
+// the custom domain and the azurewebsites.net fallback without cookie mismatch.
+// Secure cookies are enabled in production (all production deployments use HTTPS).
+const useSecureCookies = process.env.NODE_ENV === "production";
 
 const crossOriginCookie = { httpOnly: true, sameSite: "none" as const, path: "/", secure: true, maxAge: 900 };
 
