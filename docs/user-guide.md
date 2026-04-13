@@ -1171,6 +1171,30 @@ The Logic App authenticates to Neo via Managed Identity:
 
 See [configuration.md](configuration.md#triage-api) for full deployment and configuration steps.
 
+### Alert Type to Skill Routing
+
+Neo routes each triage request to a skill based on the `source.product` and `source.alertType` fields in the request body. The routing works as follows:
+
+1. Neo constructs a lookup key: `"${product}:${alertType}"` (e.g., `"DefenderXDR:DefenderEndpoint.SuspiciousProcess"`)
+2. If the key matches an entry in the dispatch table (`web/lib/triage-dispatch.ts`), the corresponding skill is used
+3. If no match, the **generic-alert-triage** catch-all skill is used (conservative — leans toward `escalate`)
+
+**Built-in skills**:
+
+| Skill | ID | Triggered by | What it does |
+|-------|----|-------------|--------------|
+| Defender Endpoint Triage | `defender-endpoint-triage` | `DefenderXDR:DefenderEndpoint.SuspiciousProcess` | Retrieves the XDR alert, analyzes the process tree (LOLBins, obfuscation, parent chain), checks host and user context, queries Sentinel for corroborating evidence |
+| Generic Alert Triage | `generic-alert-triage` | Any unmapped `product:alertType` | Identifies pivot points (users, devices, IPs), runs broad Sentinel queries, assesses the alert in context. Leans toward escalation when uncertain |
+
+**Tips for maximizing auto-close rates**:
+
+- Create dedicated triage skills for your highest-volume alert types. Generic triage is conservative by design — specialized skills that know what "normal" looks like for a specific alert type will produce higher-confidence `benign` verdicts.
+- Set `source.alertType` in the Logic App to a consistent value that matches the dispatch table. For Sentinel, use the analytics rule name or alert product name.
+- Use dry-run mode (`"dryRun": true`) to evaluate skill accuracy before enabling live auto-close.
+- Review the `skillUsed` field in triage responses to confirm alerts are routing to the expected skill.
+
+See [configuration.md — Mapping Alert Types to Triage Skills](configuration.md#mapping-alert-types-to-triage-skills) for how to add new mappings and create custom triage skills.
+
 ---
 
 ## Observability & Logging

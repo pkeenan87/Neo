@@ -38,9 +38,10 @@ This guide covers all configuration options for the Neo web server and CLI clien
   - [2. Provision Cosmos DB (Optional)](#2-provision-cosmos-db-optional)
   - [3. Provision Event Hub (Optional)](#3-provision-event-hub-optional)
   - [4. Provision Blob Storage for CLI Downloads (Optional)](#4-provision-blob-storage-for-cli-downloads-optional)
-  - [5. Provision Log Analytics Custom Table (Optional)](#5-provision-log-analytics-custom-table-optional)
-  - [6. Set Secret Environment Variables](#6-set-secret-environment-variables)
-  - [7. Build and Deploy](#7-build-and-deploy)
+  - [5. Provision CSV Cleanup Function (Optional)](#5-provision-csv-cleanup-function-optional)
+  - [6. Provision Log Analytics Custom Table (Optional)](#6-provision-log-analytics-custom-table-optional)
+  - [7. Set Secret Environment Variables](#7-set-secret-environment-variables)
+  - [8. Build and Deploy](#8-build-and-deploy)
 - [Security Notes](#security-notes)
 
 ---
@@ -308,7 +309,9 @@ az role assignment create `
 
 **Cleanup lifecycle**
 
-Blobs in both containers are tied to the parent conversation document in Cosmos. Because Cosmos TTL deletion is not atomic with blob deletion, a daily scheduled Azure Function is recommended to sweep orphaned blobs whose parent conversation no longer exists. See the spec at `_specs/hybrid-csv-support.md` for the intended sweep logic — this function is a separate deployment artifact and is not yet included in this repository.
+Blobs in both containers are tied to the parent conversation document in Cosmos. Because Cosmos TTL deletion is not atomic with blob deletion, a daily Azure Function (`csv-cleanup`) sweeps orphaned blobs whose parent conversation no longer exists. The function runs at 03:00 UTC, lists blob prefixes in the CSV container, checks each conversation ID against Cosmos DB, and deletes blobs for conversations that have been TTL'd. It fails closed — if a Cosmos lookup errors (e.g., throttled), it skips deletion rather than risk removing live data.
+
+Deploy the cleanup function via `scripts/provision-csv-cleanup.ps1` (see [Provision CSV Cleanup Function](#provision-csv-cleanup-function) under Azure Deployment).
 
 <a id="triage-api"></a>
 ### Alert Triage API
@@ -699,6 +702,96 @@ Follow these steps in order...
 - Skills without a name or description are skipped with a warning.
 - Skills referencing unknown tools are skipped with a warning.
 - Skills that use destructive tools (`reset_user_password`, `isolate_machine`, `unisolate_machine`) but have `Required Role` set to `reader` are rejected.
+
+### Mapping Alert Types to Triage Skills
+
+When the triage API receives an alert, it resolves which skill to run using a dispatch table in `web/lib/triage-dispatch.ts`. The table maps `product:alertType` keys to skill IDs. If no specific mapping exists, the `generic-alert-triage` catch-all skill is used.
+
+**Current dispatch table**:
+
+| Key (`product:alertType`) | Skill ID | Description |
+|---------------------------|----------|-------------|
+| `DefenderXDR:DefenderEndpoint.SuspiciousProcess` | `defender-endpoint-triage` | Defender for Endpoint process alerts |
+| *(any other combination)* | `generic-alert-triage` | Generic catch-all for unmapped alert types |
+
+**Adding a new mapping**:
+
+1. Create a new skill file in `web/skills/` (e.g., `entra-risky-signin-triage.md`):
+
+```markdown
+# Skill: Entra Risky Sign-In Triage
+
+## Description
+
+Investigate Entra ID Protection alerts for risky sign-in activity.
+
+## Required Tools
+
+- run_sentinel_kql
+- get_user_info
+
+## Required Role
+
+reader
+
+## Parameters
+
+- alertId
+- username
+
+## Steps
+
+1. Retrieve the user's profile and risk state via `get_user_info`.
+2. Query SigninLogs for the flagged sign-in event and surrounding activity:
+   - Check source IP geolocation and whether it matches known user locations
+   - Check for impossible travel (sign-ins from distant locations within a short window)
+   - Check MFA completion status
+3. Query AADRiskEvents for correlated risk detections on this user.
+4. Check for post-sign-in suspicious activity (new inbox rules, consent grants, privilege escalation).
+5. Formulate verdict:
+   - **benign**: Known location, MFA passed, no post-sign-in anomalies
+   - **escalate**: Unfamiliar location, MFA bypassed, or suspicious post-sign-in activity
+   - **inconclusive**: Insufficient data to determine
+```
+
+2. Add the mapping to the dispatch table in `web/lib/triage-dispatch.ts`:
+
+```typescript
+const TRIAGE_SKILL_MAP: Record<string, string> = {
+  "DefenderXDR:DefenderEndpoint.SuspiciousProcess": "defender-endpoint-triage",
+  "EntraIDProtection:riskySignIn": "entra-risky-signin-triage",  // new
+};
+```
+
+3. The skill hot-reloads from disk — no restart needed for the skill file. The dispatch table change requires a redeploy.
+
+**How the key is constructed**: The triage API caller sets `source.product` and `source.alertType` in the request body. The dispatch table looks up `"${product}:${alertType}"`. The `product` must be one of: `Sentinel`, `DefenderXDR`, `EntraIDProtection`, `Purview`, `DefenderForCloudApps`. The `alertType` is a free-form string set by the Logic App (typically the alert product name or rule name from Sentinel).
+
+**Matching in the Logic App**: To route a specific Sentinel analytics rule to a dedicated skill, set `source.alertType` in the Logic App request body to a value that matches the dispatch table key. For example, if you want all "Risky sign-in" alerts to use the `entra-risky-signin-triage` skill:
+
+```json
+{
+  "source": {
+    "product": "EntraIDProtection",
+    "alertType": "riskySignIn",
+    "severity": "@{triggerBody()?['properties']?['severity']}",
+    "alertId": "@{triggerBody()?['properties']?['incidentNumber']}",
+    "detectionTime": "@{triggerBody()?['properties']?['createdTimeUtc']}"
+  },
+  "payload": { ... },
+  "context": { ... }
+}
+```
+
+**Generic fallback**: If the `product:alertType` key has no entry in the dispatch table, the `generic-alert-triage` skill is used. This skill is deliberately conservative — it leans toward `escalate` or `inconclusive` when uncertain. To get the best auto-close rates, create dedicated skills for your highest-volume alert types and add them to the dispatch table.
+
+**Per-caller skill restrictions**: If you have multiple Logic Apps and want to limit which skills each can invoke, use the `TRIAGE_CALLER_ALLOWLIST` env var:
+
+```bash
+# Format: appId1:skill1,skill2;appId2:*
+# * = all skills allowed
+TRIAGE_CALLER_ALLOWLIST="12345678-...:defender-endpoint-triage;87654321-...:*"
+```
 
 ---
 
@@ -1134,7 +1227,42 @@ After creating the storage account, set `CLI_STORAGE_ACCOUNT=neoclireleases` in 
 
 **File upload containers (web chat attachments)**: if you want the web UI to accept images, PDFs, and CSVs, create the two upload containers in the same storage account and grant the App Service identity `Storage Blob Data Contributor`. Full commands and behavior are in [File Uploads (Web)](#file-uploads-web).
 
-### 5. Provision Log Analytics Custom Table (Optional)
+<a id="provision-csv-cleanup-function"></a>
+### 5. Provision CSV Cleanup Function (Optional)
+
+`scripts/provision-csv-cleanup.ps1` creates a timer-triggered Azure Function that runs daily at 03:00 UTC to delete orphaned CSV blobs from the `neo-csv-uploads` container. A blob is orphaned when its parent conversation has been deleted by Cosmos TTL. Skip this step if you are not using CSV uploads.
+
+```powershell
+# Default — creates neo-csv-cleanup Function App
+./scripts/provision-csv-cleanup.ps1
+
+# Production — custom names
+./scripts/provision-csv-cleanup.ps1 `
+    -FunctionAppName "neo-csv-cleanup-prod" `
+    -CosmosAccountName "neo-cosmos-prod" `
+    -StorageAccountName "neoclireleases"
+```
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `-ResourceGroupName` | `neo-rg` | Azure Resource Group name |
+| `-FunctionAppName` | `neo-csv-cleanup` | Function App name |
+| `-StorageAccountName` | `neoclireleases` | Storage account containing the CSV container |
+| `-CsvContainerName` | `neo-csv-uploads` | Blob container for CSV uploads |
+| `-CosmosAccountName` | `neo-cosmos` | Cosmos DB account name |
+| `-CosmosDatabase` | `neo-db` | Cosmos DB database name |
+| `-CosmosContainer` | `conversations` | Cosmos DB container holding conversations |
+| `-Location` | `eastus` | Azure region |
+| `-SkipDeploy` | (off) | Provision infrastructure only, skip function deployment |
+
+The script automatically:
+- Creates a Consumption-plan Function App with Node.js 20 and system-assigned Managed Identity
+- Assigns **Cosmos DB Built-in Data Reader** scoped to the `conversations` container
+- Assigns **Storage Blob Data Contributor** scoped to the CSV container
+- Configures app settings (Cosmos endpoint, database, container, storage account, CSV container)
+- Builds and deploys the function from `functions/csv-cleanup/`
+
+### 6. Provision Log Analytics Custom Table (Optional)
 
 `scripts/provision-log-analytics.ps1` creates a custom Log Analytics table (`NeoLogs_CL`) and a Data Collection Rule (DCR) for ingesting structured application logs. Skip this step if you only need Event Hub or console logging.
 
@@ -1193,7 +1321,7 @@ NeoLogs_CL
 | order by TimeGenerated desc
 ```
 
-### 6. Set Secret Environment Variables
+### 7. Set Secret Environment Variables
 
 After provisioning, set the secret app settings that the provisioning script does not set (secrets should not be passed as script parameters):
 
@@ -1247,7 +1375,7 @@ az webapp config appsettings set \
         CLI_STORAGE_ACCOUNT="neoclireleases"
 ```
 
-### 7. Build and Deploy
+### 8. Build and Deploy
 
 `scripts/deploy-azure.ps1` builds the Next.js app in standalone mode and deploys it to the existing Azure Web App via zip deploy.
 
@@ -1272,7 +1400,7 @@ The script packages the Next.js standalone output, `public/` assets, `.next/stat
 
 The Web App must already exist — run `provision-azure.ps1` first.
 
-### 8. Add a Custom Domain (Optional)
+### 9. Add a Custom Domain (Optional)
 
 `scripts/add-custom-domain.ps1` binds a custom internal domain to the App Service, uploads a TLS certificate, and registers the OAuth redirect URI in Entra ID. The existing `*.azurewebsites.net` domain remains fully functional.
 
