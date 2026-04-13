@@ -337,7 +337,7 @@ The triage API (`POST /api/triage`) enables automated alert investigation from A
 3. Go to **Enterprise applications** → find your app → **Users and groups** → **Add assignment** → select the Logic App's service principal → assign the `Triage.Run` role.
 4. In the Logic App's HTTP action, set:
    - **Method**: POST
-   - **URI**: `https://your-neo-server.azurewebsites.net/api/triage`
+   - **URI**: `https://neo.companyname.com/api/triage`
    - **Authentication**: Managed Identity
    - **Audience**: `api://<your-neo-app-client-id>`
 5. The Logic App's Managed Identity token will include `idtyp: "app"`, which Neo uses to identify it as a service principal.
@@ -1271,6 +1271,41 @@ az webapp config appsettings set \
 The script packages the Next.js standalone output, `public/` assets, `.next/static/`, and `skills/` into a zip file and deploys via `az webapp deploy`. The `-SkipBuild` flag is useful for redeploying without rebuilding (e.g., after changing only app settings). It warns if the build artifact is more than 24 hours old.
 
 The Web App must already exist — run `provision-azure.ps1` first.
+
+### 8. Add a Custom Domain (Optional)
+
+`scripts/add-custom-domain.ps1` binds a custom internal domain to the App Service, uploads a TLS certificate, and registers the OAuth redirect URI in Entra ID. The existing `*.azurewebsites.net` domain remains fully functional.
+
+```powershell
+$pw = Read-Host -Prompt "PFX password" -AsSecureString
+./scripts/add-custom-domain.ps1 `
+    -CustomDomain "neo.companyname.com" `
+    -PfxPath "./certs/neo.pfx" `
+    -PfxPassword $pw `
+    -EntraAppId "your-entra-app-client-id"
+```
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `-CustomDomain` | (required) | The custom domain to bind (e.g., `neo.companyname.com`) |
+| `-PfxPath` | (required) | Path to the PFX certificate file |
+| `-PfxPassword` | (required) | Password for the PFX file |
+| `-ResourceGroupName` | `neo-rg` | Azure Resource Group name |
+| `-WebAppName` | `neo-web` | App Service name |
+| `-EntraAppId` | (optional) | Entra ID application ID for auto-registering redirect URIs |
+
+**Prerequisites before running**:
+
+1. **DNS**: Create a CNAME record pointing your custom domain to `<WebAppName>.azurewebsites.net`, or an A record pointing to the App Service IP. Also add the TXT verification record (`asuid.<custom-domain>`).
+2. **Certificate**: Have your TLS certificate ready as a PFX file. Since internal domains are not publicly resolvable, Azure managed certificates cannot be used — you must supply your own.
+3. **Entra ID redirect URI**: The script can auto-register the new redirect URI if you provide `-EntraAppId`. Otherwise, manually add `https://<custom-domain>/api/auth/callback/microsoft-entra-id` in the Entra ID app registration under Authentication > Redirect URIs. Keep the existing `azurewebsites.net` redirect URI.
+
+**How dual-domain works**:
+
+- `AUTH_URL` is set to the custom domain (`https://neo.companyname.com`). Auth.js derives the OAuth redirect URI from the incoming request host (`trustHost: true`), so login works from either domain as long as both redirect URIs are registered in Entra ID.
+- CSP (`connect-src 'self'`) and CSRF origin checks are domain-agnostic — they match whichever domain the request arrives on.
+- The `azurewebsites.net` domain stays active as a fallback. This is important if the Teams bot or external integrations need to reach the app from outside the internal network.
+- CLI users on the internal network should set `NEO_SERVER=https://neo.companyname.com`. Users connecting externally can use `NEO_SERVER=https://app-neo-prod-001.azurewebsites.net`.
 
 ---
 

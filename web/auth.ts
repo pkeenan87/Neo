@@ -60,7 +60,11 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
         params: {
           scope: "openid profile email User.Read",
           prompt: "select_account",
-          redirect_uri: `${process.env.AUTH_URL}/api/auth/callback/microsoft-entra-id`,
+          // redirect_uri is intentionally omitted so Auth.js derives it from
+          // the incoming request host (trustHost: true). This allows OAuth to
+          // work on both the custom internal domain and the fallback
+          // azurewebsites.net domain without code changes. Both redirect URIs
+          // must be registered in the Entra ID app registration.
         },
       },
     }),

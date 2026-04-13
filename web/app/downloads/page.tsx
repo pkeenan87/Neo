@@ -163,7 +163,11 @@ export default function DownloadsPage() {
               <p className={styles.stepDesc}>
                 If your Neo server is not on localhost, set the server URL:
               </p>
-              <pre className={styles.codeBlock}>export NEO_SERVER_URL=https://neo.yourcompany.com</pre>
+              <pre className={styles.codeBlock}>export NEO_SERVER=https://neo.companyname.com</pre>
+              <p className={styles.stepDesc}>
+                If connecting from outside the internal network, use the Azure fallback URL instead:{" "}
+                <code className={styles.code}>export NEO_SERVER=https://app-neo-prod-001.azurewebsites.net</code>
+              </p>
             </div>
           </div>
 
