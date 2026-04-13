@@ -11,6 +11,7 @@ This guide covers all configuration options for the Neo web server and CLI clien
   - [Mock Mode](#mock-mode)
   - [CLI Downloads Storage](#cli-downloads-storage)
   - [File Uploads (Web)](#file-uploads-web)
+  - [Alert Triage API](#triage-api)
 - [CLI Configuration](#cli-configuration)
   - [Config File](#config-file)
   - [Authentication Priority](#authentication-priority)
@@ -137,6 +138,14 @@ INJECTION_GUARD_MODE=monitor
 | `LANSWEEPER_API_TOKEN` | No | Lansweeper Personal Access Token (from Settings > Developer Tools). Required when `MOCK_MODE=false` and Lansweeper integration is used. Can be stored in Key Vault. |
 | `LANSWEEPER_SITE_ID` | No | Lansweeper site identifier (GUID). Required alongside `LANSWEEPER_API_TOKEN`. Can be stored in Key Vault. |
 | `ABNORMAL_API_TOKEN` | No | Abnormal Security REST API bearer token for Search & Respond. Required when `MOCK_MODE=false` and Abnormal integration is used. Can be stored in Key Vault. |
+| `TRIAGE_DEDUP_WINDOW_MS` | No | Idempotency window for triage runs in milliseconds (default: 86400000 = 24 hours). Duplicate `alertId` + `callerId` within this window returns the cached verdict. |
+| `TRIAGE_CONFIDENCE_THRESHOLD` | No | Minimum confidence for a `benign` verdict. Below this, the verdict is coerced to `escalate` (default: 0.80). |
+| `TRIAGE_SEVERITY_ALLOWLIST` | No | Comma-separated list of severities eligible for auto-close (default: `Informational,Low,Medium,High`). Severities not in the list are coerced to `escalate`. |
+| `TRIAGE_CIRCUIT_BREAKER_THRESHOLD` | No | Failure rate fraction that trips the circuit breaker (default: 0.30 = 30%). |
+| `TRIAGE_CIRCUIT_BREAKER_WINDOW_MS` | No | Rolling window for failure rate calculation (default: 900000 = 15 min). |
+| `TRIAGE_CIRCUIT_BREAKER_COOLDOWN_MS` | No | Cooldown before the breaker auto-resets (default: 1800000 = 30 min). |
+| `TRIAGE_CALLER_ALLOWLIST` | No | Per-caller skill restrictions. Format: `appId1:skill1,skill2;appId2:*`. Empty = all callers can use all skills. |
+| `TRIAGE_RAW_PAYLOAD_MAX_BYTES` | No | Maximum `payload.raw` size for prompt injection (default: 500000 = 500 KB). The full payload is stored in Cosmos. |
 
 **Constants** (hardcoded in `web/lib/config.ts`, not environment variables):
 
@@ -300,6 +309,52 @@ az role assignment create `
 **Cleanup lifecycle**
 
 Blobs in both containers are tied to the parent conversation document in Cosmos. Because Cosmos TTL deletion is not atomic with blob deletion, a daily scheduled Azure Function is recommended to sweep orphaned blobs whose parent conversation no longer exists. See the spec at `_specs/hybrid-csv-support.md` for the intended sweep logic — this function is a separate deployment artifact and is not yet included in this repository.
+
+<a id="triage-api"></a>
+### Alert Triage API
+
+The triage API (`POST /api/triage`) enables automated alert investigation from Azure Logic Apps. Logic Apps submit structured security alerts; Neo investigates via its skills framework and returns a JSON verdict (benign / escalate / inconclusive).
+
+**Authentication**: The Logic App authenticates via Managed Identity using an app-only Entra token. Neo checks the `idtyp === "app"` claim and assigns the dedicated `triage` role, which is scoped to read-only investigation tools (no destructive actions).
+
+**Cosmos DB**: Triage runs are persisted in a `triageRuns` container. Add it to your existing Cosmos DB account using `scripts/provision-cosmos-db.ps1` (it provisions all containers idempotently).
+
+**Roles**: The `triage` role is a new third role alongside `admin` and `reader`. It has the same tool access as `reader` (no destructive tools) but is assigned only to service principals, not interactive users.
+
+**Environment variables**: See the env var table above for all `TRIAGE_*` variables. Key settings:
+
+| Setting | Default | Purpose |
+|---------|---------|---------|
+| `TRIAGE_CONFIDENCE_THRESHOLD` | 0.80 | Minimum confidence for auto-close |
+| `TRIAGE_SEVERITY_ALLOWLIST` | All | Severities eligible for benign verdict |
+| `TRIAGE_DEDUP_WINDOW_MS` | 24 hours | Idempotency window |
+| `TRIAGE_CALLER_ALLOWLIST` | Empty (all allowed) | Restrict callers to specific skills |
+
+**Setting up the Logic App caller**:
+
+1. Create a Logic App with a system-assigned Managed Identity.
+2. In Neo's Entra app registration (same one used for browser auth), go to **App roles** and create a role (e.g., `Triage.Run`, value `Triage.Run`, allowed member types: `Applications`).
+3. Go to **Enterprise applications** → find your app → **Users and groups** → **Add assignment** → select the Logic App's service principal → assign the `Triage.Run` role.
+4. In the Logic App's HTTP action, set:
+   - **Method**: POST
+   - **URI**: `https://your-neo-server.azurewebsites.net/api/triage`
+   - **Authentication**: Managed Identity
+   - **Audience**: `api://<your-neo-app-client-id>`
+5. The Logic App's Managed Identity token will include `idtyp: "app"`, which Neo uses to identify it as a service principal.
+
+**Per-caller skill restrictions** (optional): If you have multiple Logic Apps and want to limit which alert types each can triage, set `TRIAGE_CALLER_ALLOWLIST`:
+
+```bash
+# Format: appId1:skill1,skill2;appId2:*
+# * = all skills allowed
+TRIAGE_CALLER_ALLOWLIST="12345678-...:defender-endpoint-triage;87654321-...:*"
+```
+
+When the allowlist is empty (default), all authenticated service principals can invoke any triage skill.
+
+**Circuit breaker**: If >30% of triage runs fail within 15 minutes, the breaker trips and all requests return `verdict: escalate` until auto-reset (30 min) or manual reset via `POST /api/admin/triage/circuit-breaker/reset` (admin auth required).
+
+**Monitoring**: All triage runs are logged to the same Event Hub pipeline as interactive conversations. Filter by `channel: "triage"` in your dashboards. Each run includes: alert ID, product, alert type, verdict, confidence, skill used, and duration.
 
 ### Token Usage Budgets
 
