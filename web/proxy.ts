@@ -92,9 +92,28 @@ function resolveClientIP(request: NextRequest): string {
 //  Proxy (replaces deprecated middleware convention)
 // ─────────────────────────────────────────────────────────────
 
+// ─────────────────────────────────────────────────────────────
+//  Allowed hosts (defense-in-depth against Host header injection)
+// ─────────────────────────────────────────────────────────────
+
+const ALLOWED_HOSTS: Set<string> = new Set([
+  "neo.companyname.com",
+  "app-neo-prod-001.azurewebsites.net",
+  "localhost",
+  "localhost:3000",
+]);
+
 export function proxy(request: NextRequest) {
   const path = request.nextUrl.pathname;
   const isDev = process.env.NODE_ENV === "development";
+
+  // ── Host allowlist (skip in dev to allow any localhost port) ──
+  if (!isDev) {
+    const host = (request.headers.get("x-forwarded-host") ?? request.headers.get("host") ?? "").split(",")[0].trim();
+    if (!ALLOWED_HOSTS.has(host)) {
+      return new NextResponse("Bad Request", { status: 400 });
+    }
+  }
 
   // ── IP restriction for non-Teams API routes (production only) ──
   // /api/teams/* is exempted because those routes validate Bot Framework

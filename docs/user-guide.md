@@ -964,7 +964,7 @@ The triage API enables automated tier-1 alert investigation. External orchestrat
 ### How It Works
 
 1. A Logic App fires on a Sentinel incident (or Defender XDR alert, Entra risky sign-in, etc.).
-2. The Logic App extracts a standardized payload and `POST`s it to `https://your-neo-server.azurewebsites.net/api/triage` with a Managed Identity bearer token.
+2. The Logic App extracts a standardized payload and `POST`s it to `https://neo.companyname.com/api/triage` (or your `*.azurewebsites.net` fallback domain) with a Managed Identity bearer token.
 3. Neo resolves the matching triage skill (or the generic catch-all), runs a full investigation using its read-only tools, and returns a JSON verdict.
 4. The Logic App branches: if `verdict == "benign"` and `confidence >= 0.80`, close the incident in Sentinel with Neo's reasoning as a comment; otherwise, assign to the analyst queue.
 
@@ -1005,7 +1005,7 @@ Possible `verdict` values: `benign` (safe to auto-close), `escalate` (needs anal
 **HTTP action** (calls Neo triage API):
 ```
 Method: POST
-URI: https://your-neo-server.azurewebsites.net/api/triage
+URI: https://neo.companyname.com/api/triage
 Authentication: Managed Identity
 Audience: api://<your-neo-app-client-id>
 Headers:
