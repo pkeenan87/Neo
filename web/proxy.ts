@@ -97,7 +97,7 @@ function resolveClientIP(request: NextRequest): string {
 // ─────────────────────────────────────────────────────────────
 
 const ALLOWED_HOSTS: Set<string> = new Set([
-  "neo.companyname.com",
+  "neo.goodwinprocter.com",
   "app-neo-prod-001.azurewebsites.net",
   "localhost",
   "localhost:3000",
