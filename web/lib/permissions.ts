@@ -5,7 +5,7 @@ import { TOOLS, DESTRUCTIVE_TOOLS } from "./tools";
 //  Roles
 // ─────────────────────────────────────────────────────────────
 
-export type Role = "admin" | "reader";
+export type Role = "admin" | "reader" | "triage";
 
 interface RolePermissions {
   canUseDestructiveTools: boolean;
@@ -14,6 +14,7 @@ interface RolePermissions {
 const ROLE_PERMISSIONS: Record<Role, RolePermissions> = {
   admin: { canUseDestructiveTools: true },
   reader: { canUseDestructiveTools: false },
+  triage: { canUseDestructiveTools: false },
 };
 
 // ─────────────────────────────────────────────────────────────
@@ -27,6 +28,7 @@ interface RateLimitConfig {
 export const RATE_LIMITS: Record<Role, RateLimitConfig> = {
   admin: { messagesPerSession: 200 },
   reader: { messagesPerSession: 100 },
+  triage: { messagesPerSession: 50 },
 };
 
 // ─────────────────────────────────────────────────────────────

@@ -77,7 +77,7 @@ Write-Host ""
 
 # ── Resource Group ─────────────────────────────────────────
 
-Write-Host "1/7 Creating resource group..." -ForegroundColor Green
+Write-Host "1/9 Creating resource group..." -ForegroundColor Green
 az group create `
     --name $ResourceGroupName `
     --location $Location `
@@ -86,7 +86,7 @@ Write-Host "     Resource group '$ResourceGroupName' ready."
 
 # ── Cosmos DB Account ──────────────────────────────────────
 
-Write-Host "2/7 Creating Cosmos DB account (serverless)..." -ForegroundColor Green
+Write-Host "2/9 Creating Cosmos DB account (serverless)..." -ForegroundColor Green
 $existing = az cosmosdb show --name $AccountName --resource-group $ResourceGroupName 2>$null | ConvertFrom-Json
 if ($existing) {
     Write-Host "     Account '$AccountName' already exists — skipping."
@@ -104,7 +104,7 @@ if ($existing) {
 
 # ── Database ───────────────────────────────────────────────
 
-Write-Host "3/7 Creating database..." -ForegroundColor Green
+Write-Host "3/9 Creating database..." -ForegroundColor Green
 $existingDb = az cosmosdb sql database show `
     --account-name $AccountName `
     --resource-group $ResourceGroupName `
@@ -122,7 +122,7 @@ if ($existingDb) {
 
 # ── Container ──────────────────────────────────────────────
 
-Write-Host "4/7 Creating conversations container..." -ForegroundColor Green
+Write-Host "4/9 Creating conversations container..." -ForegroundColor Green
 $existingContainer = az cosmosdb sql container show `
     --account-name $AccountName `
     --resource-group $ResourceGroupName `
@@ -144,7 +144,7 @@ if ($existingContainer) {
 
 # ── Teams Mappings Container ───────────────────────────────
 
-Write-Host "5/7 Creating teams-mappings container..." -ForegroundColor Green
+Write-Host "5/9 Creating teams-mappings container..." -ForegroundColor Green
 $existingMappings = az cosmosdb sql container show `
     --account-name $AccountName `
     --resource-group $ResourceGroupName `
@@ -166,7 +166,7 @@ if ($existingMappings) {
 
 # ── Usage Logs Container ──────────────────────────────────
 
-Write-Host "6/8 Creating usage-logs container..." -ForegroundColor Green
+Write-Host "6/9 Creating usage-logs container..." -ForegroundColor Green
 $existingUsage = az cosmosdb sql container show `
     --account-name $AccountName `
     --resource-group $ResourceGroupName `
@@ -188,7 +188,7 @@ if ($existingUsage) {
 
 # ── API Keys Container ────────────────────────────────────
 
-Write-Host "7/8 Creating api-keys container..." -ForegroundColor Green
+Write-Host "7/9 Creating api-keys container..." -ForegroundColor Green
 $existingApiKeys = az cosmosdb sql container show `
     --account-name $AccountName `
     --resource-group $ResourceGroupName `
@@ -207,9 +207,32 @@ if ($existingApiKeys) {
     Write-Host "     Container '$ApiKeysContainerName' created with /id partition key."
 }
 
+# ── Triage Runs Container ─────────────────────────────────
+
+Write-Host "8/9 Creating triageRuns container..." -ForegroundColor Green
+$existingTriageRuns = az cosmosdb sql container show `
+    --account-name $AccountName `
+    --resource-group $ResourceGroupName `
+    --database-name $DatabaseName `
+    --name "triageRuns" 2>$null | ConvertFrom-Json
+if ($existingTriageRuns) {
+    Write-Host "     Container 'triageRuns' already exists — skipping."
+} else {
+    az cosmosdb sql container create `
+        --account-name $AccountName `
+        --resource-group $ResourceGroupName `
+        --database-name $DatabaseName `
+        --name "triageRuns" `
+        --partition-key-path "/id" `
+        --default-ttl $DefaultTtl `
+        --max-throughput 1000 `
+        --output none
+    Write-Host "     Container 'triageRuns' created with /id partition key and autoscale (1000 RU/s max)."
+}
+
 # ── Managed Identity Role Assignment ───────────────────────
 
-Write-Host "8/8 Assigning Managed Identity role..." -ForegroundColor Green
+Write-Host "9/9 Assigning Managed Identity role..." -ForegroundColor Green
 if ($WebAppName) {
     $principalId = az webapp identity show `
         --name $WebAppName `

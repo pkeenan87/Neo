@@ -941,6 +941,8 @@ All endpoints require authentication via `Authorization: Bearer <api-key>` heade
 | `GET` | `/downloads` | Public (no auth). CLI installer downloads page with OS detection and install guide. |
 | `GET` | `/api/downloads/[filename]` | Public (no auth). Streams an installer file from Azure Blob Storage. |
 | `GET` | `/api/cli/version` | Public (no auth). Returns latest CLI version, download URL, platform, and SHA-256 hash. |
+| `POST` | `/api/triage` | Submit a security alert for automated triage. Returns a structured verdict JSON. Requires Entra service-principal auth. |
+| `POST` | `/api/admin/triage/circuit-breaker/reset` | Manually reset the triage circuit breaker (admin only). |
 
 **NDJSON stream events** (returned by `/api/agent` and `/api/agent/confirm`):
 
@@ -954,6 +956,106 @@ All endpoints require authentication via `Authorization: Bearer <api-key>` heade
 | `context_trimmed` | `originalTokens`, `newTokens`, `method` | Context window was trimmed to stay within token limits. `method` is `"truncation"` (per-result cap) or `"summary"` (conversation compression). |
 | `usage` | `usage: { input_tokens, output_tokens, cache_read_input_tokens }`, `model` | Per-turn token usage summary |
 | `error` | `message`, `code` | An error occurred |
+
+## Alert Triage API
+
+The triage API enables automated tier-1 alert investigation. External orchestrators (primarily Azure Logic Apps) submit security alerts to Neo, which runs them through investigation skills and returns a structured verdict that the caller uses to auto-close benign alerts or escalate to analysts with Neo's reasoning attached.
+
+### How It Works
+
+1. A Logic App fires on a Sentinel incident (or Defender XDR alert, Entra risky sign-in, etc.).
+2. The Logic App extracts a standardized payload and `POST`s it to `https://your-neo-server.azurewebsites.net/api/triage` with a Managed Identity bearer token.
+3. Neo resolves the matching triage skill (or the generic catch-all), runs a full investigation using its read-only tools, and returns a JSON verdict.
+4. The Logic App branches: if `verdict == "benign"` and `confidence >= 0.80`, close the incident in Sentinel with Neo's reasoning as a comment; otherwise, assign to the analyst queue.
+
+### Verdict Response
+
+```json
+{
+  "verdict": "benign",
+  "confidence": 0.92,
+  "reasoning": "The alert was triggered by SCCM running a scheduled software inventory scan...",
+  "evidence": [
+    { "source": "DefenderXDR", "finding": "Process tree shows sccm-client.exe as parent" },
+    { "source": "SentinelKQL", "query": "SigninLogs | where ...", "finding": "No anomalous sign-ins" }
+  ],
+  "recommendedActions": [
+    { "action": "close", "reason": "Known-good IT tooling activity" }
+  ],
+  "neoRunId": "triage_a1b2c3d4-...",
+  "skillUsed": "defender-endpoint-triage",
+  "durationMs": 8400
+}
+```
+
+Possible `verdict` values: `benign` (safe to auto-close), `escalate` (needs analyst review), `inconclusive` (not enough data to determine).
+
+### Guardrails
+
+- **Confidence threshold** (default 0.80): verdicts below this threshold are coerced to `escalate` regardless of Neo's assessment. Configurable via `TRIAGE_CONFIDENCE_THRESHOLD`.
+- **Severity allowlist** (default: all severities): alerts whose severity is not in the allowlist are coerced to `escalate`. Configurable via `TRIAGE_SEVERITY_ALLOWLIST`.
+- **Dry-run mode**: set `context.dryRun: true` in the request to run the full pipeline without the caller acting on the verdict. Use this for shadow-mode validation.
+- **Circuit breaker**: if the failure rate exceeds 30% over 15 minutes, all requests return `escalate` until the breaker auto-resets (30 min) or is manually reset via `POST /api/admin/triage/circuit-breaker/reset`.
+- **Per-caller rate limit**: 100 requests per 15-minute window per service principal. Returns 429 if exceeded.
+
+### Example: Logic App on Sentinel Incident Creation
+
+**Trigger**: "When a new Microsoft Sentinel incident is created"
+
+**HTTP action** (calls Neo triage API):
+```
+Method: POST
+URI: https://your-neo-server.azurewebsites.net/api/triage
+Authentication: Managed Identity
+Audience: api://<your-neo-app-client-id>
+Headers:
+  Content-Type: application/json
+Body:
+{
+  "source": {
+    "product": "Sentinel",
+    "alertType": "@{triggerBody()?['properties']?['additionalData']?['alertProductNames']?[0]}",
+    "severity": "@{triggerBody()?['properties']?['severity']}",
+    "tenantId": "@{triggerBody()?['properties']?['additionalData']?['tenantId']}",
+    "alertId": "@{triggerBody()?['properties']?['incidentNumber']}",
+    "detectionTime": "@{triggerBody()?['properties']?['createdTimeUtc']}"
+  },
+  "payload": {
+    "essentials": {
+      "title": "@{triggerBody()?['properties']?['title']}",
+      "description": "@{triggerBody()?['properties']?['description']}",
+      "entities": {
+        "users": ["@{join(triggerBody()?['properties']?['relatedEntities']?['accounts'], ',')}"],
+        "devices": ["@{join(triggerBody()?['properties']?['relatedEntities']?['hosts'], ',')}"],
+        "ips": ["@{join(triggerBody()?['properties']?['relatedEntities']?['ips'], ',')}"]
+      },
+      "mitreTactics": "@{triggerBody()?['properties']?['additionalData']?['tactics']}"
+    },
+    "raw": @{triggerBody()}
+  },
+  "context": {
+    "requesterId": "logic-app-sentinel-triage",
+    "dryRun": false
+  }
+}
+```
+
+**Condition**: `verdict == "benign"` AND `confidence >= 0.80`
+- **True**: Close the incident via the Sentinel API, append Neo's `reasoning` as a comment.
+- **False**: Assign to the SOC analyst queue, attach Neo's `reasoning` and `evidence` as a comment.
+
+### Authentication Setup
+
+The Logic App authenticates to Neo via Managed Identity:
+
+1. Enable a system-assigned Managed Identity on the Logic App.
+2. In Neo's Entra app registration, add an app role (e.g., `Triage.Run`) and assign it to the Logic App's managed identity.
+3. The Logic App acquires a token for `api://<neo-app-client-id>` and sends it as `Authorization: Bearer <token>`.
+4. Neo validates the token's `idtyp === "app"` claim and assigns the `triage` role (read-only investigation tools only).
+
+See [configuration.md](configuration.md#triage-api) for full deployment and configuration steps.
+
+---
 
 ## Observability & Logging
 

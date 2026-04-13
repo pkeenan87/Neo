@@ -47,6 +47,15 @@ export interface EnvConfig {
   CLI_STORAGE_CONTAINER: string;
   KEY_VAULT_URL: string | undefined;
   KEY_VAULT_KEY_NAME: string;
+  // Triage API
+  TRIAGE_DEDUP_WINDOW_MS: number;
+  TRIAGE_CONFIDENCE_THRESHOLD: number;
+  TRIAGE_SEVERITY_ALLOWLIST: string;
+  TRIAGE_CIRCUIT_BREAKER_THRESHOLD: number;
+  TRIAGE_CIRCUIT_BREAKER_WINDOW_MS: number;
+  TRIAGE_CIRCUIT_BREAKER_COOLDOWN_MS: number;
+  TRIAGE_CALLER_ALLOWLIST: string;
+  TRIAGE_RAW_PAYLOAD_MAX_BYTES: number;
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -148,7 +157,7 @@ export interface LogIdentityContext {
   userName: string;
   userIdHash: string;
   role: string;
-  provider: "entra-id" | "api-key";
+  provider: "entra-id" | "api-key" | "service-principal";
   channel: string;
   sessionId: string;
 }
@@ -719,6 +728,122 @@ export class CsvAttachmentCapError extends Error {
     this.name = "CsvAttachmentCapError";
   }
 }
+
+// ─────────────────────────────────────────────────────────────
+//  Triage API
+// ─────────────────────────────────────────────────────────────
+
+export type TriageVerdict = "benign" | "escalate" | "inconclusive";
+
+export type TriageAlertSeverity = "Informational" | "Low" | "Medium" | "High";
+
+export type TriageProduct =
+  | "DefenderXDR"
+  | "Sentinel"
+  | "EntraIDProtection"
+  | "Purview"
+  | "DefenderForCloudApps";
+
+export interface TriageSource {
+  product: TriageProduct;
+  alertType: string;
+  severity: TriageAlertSeverity;
+  tenantId: string;
+  alertId: string;
+  detectionTime: string;
+}
+
+export interface TriageEntities {
+  users?: string[];
+  devices?: string[];
+  ips?: string[];
+  files?: { name: string; sha256?: string }[];
+  urls?: string[];
+  processes?: string[];
+}
+
+export interface TriageEssentials {
+  title: string;
+  description: string;
+  entities: TriageEntities;
+  mitreTactics?: string[];
+  evidence?: unknown[];
+}
+
+export interface TriagePayload {
+  essentials: TriageEssentials;
+  raw?: Record<string, unknown>;
+  links?: {
+    portalUrl?: string;
+    investigationGraphUrl?: string;
+  };
+}
+
+export interface TriageContext {
+  requesterId: string;
+  playbookRunId?: string;
+  dryRun?: boolean;
+  analystNotes?: string;
+}
+
+export interface TriageRequest {
+  source: TriageSource;
+  payload: TriagePayload;
+  context: TriageContext;
+}
+
+export interface TriageEvidence {
+  source: string;
+  query?: string;
+  finding: string;
+}
+
+export interface TriageRecommendedAction {
+  action: string;
+  reason: string;
+}
+
+export interface TriageResponse {
+  verdict: TriageVerdict;
+  confidence: number;
+  reasoning: string;
+  evidence: TriageEvidence[];
+  recommendedActions: TriageRecommendedAction[];
+  neoRunId: string;
+  skillUsed: string;
+  durationMs: number;
+  dryRun?: boolean;
+  /** Set when guardrails override the original verdict. */
+  originalVerdict?: TriageVerdict;
+  originalConfidence?: number;
+  /** Reason code when the response is a fail-safe or system-generated verdict. */
+  reason?: string;
+}
+
+export interface TriageRun {
+  id: string;
+  alertId: string;
+  request: TriageRequest;
+  response?: TriageResponse;
+  rawClaudeResponse?: string;
+  toolCallTrace?: unknown[];
+  callerId: string;
+  createdAt: string;
+  durationMs?: number;
+  ttl: number;
+}
+
+// ── Triage Config Constants ──────────────────────────────────
+export const TRIAGE_DEFAULT_DEDUP_WINDOW_MS = 24 * 60 * 60 * 1000; // 24 hours
+export const TRIAGE_DEFAULT_CONFIDENCE_THRESHOLD = 0.80;
+export const TRIAGE_DEFAULT_SEVERITY_ALLOWLIST: TriageAlertSeverity[] = [
+  "Informational", "Low", "Medium", "High",
+];
+export const TRIAGE_DEFAULT_CIRCUIT_BREAKER_THRESHOLD = 0.30;
+export const TRIAGE_DEFAULT_CIRCUIT_BREAKER_WINDOW_MS = 15 * 60 * 1000; // 15 min
+export const TRIAGE_DEFAULT_CIRCUIT_BREAKER_COOLDOWN_MS = 30 * 60 * 1000; // 30 min
+export const TRIAGE_DEFAULT_RAW_PAYLOAD_MAX_BYTES = 500_000; // 500 KB
+export const TRIAGE_RUN_TTL = 7_776_000; // 90 days
 
 // ─────────────────────────────────────────────────────────────
 //  Model Selection

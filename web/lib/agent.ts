@@ -75,6 +75,38 @@ export interface RunAgentLoopOptions {
    * csv_ids scoped to this conversation.
    */
   csvAttachments?: CSVReference[];
+  /**
+   * When present, the tools list is intersected with this allowlist.
+   * Only tools whose name appears in the list (plus `get_full_tool_result`)
+   * are sent to Claude. Used by the triage endpoint to scope tools per skill.
+   */
+  toolAllowlist?: string[];
+  /**
+   * Additional tools to include in the request that are NOT in the global
+   * TOOLS array. Used by the triage endpoint to inject the
+   * `respond_with_triage_verdict` tool. These are appended AFTER the
+   * role/allowlist filter so they're always available.
+   */
+  extraTools?: Anthropic.Messages.Tool[];
+  /**
+   * Force Claude to call a specific tool. Used by the triage endpoint
+   * to ensure structured JSON output via `respond_with_triage_verdict`.
+   */
+  toolChoice?: Anthropic.Messages.MessageCreateParamsNonStreaming["tool_choice"];
+  /**
+   * Override the system prompt for this run. When present, replaces the
+   * default system prompt from getSystemPrompt(role). Used by the triage
+   * endpoint to inject the triage-mode wrapper.
+   */
+  systemPromptOverride?: string;
+  /**
+   * Tool names that should NOT be executed by the agent loop even if
+   * Claude calls them. The tool-use block is preserved in the messages
+   * and the result is returned directly so the caller can extract the
+   * structured input. Used for "respond" tools that produce output
+   * via their input schema.
+   */
+  nonExecutableTools?: Set<string>;
 }
 
 export async function runAgentLoop(
@@ -128,21 +160,32 @@ export async function runAgentLoop(
     return { type: "response", text: "[interrupted]", messages: localMessages, interrupted: true };
   }
 
-  const systemPrompt = await getSystemPrompt(role);
+  const systemPrompt = options.systemPromptOverride ?? await getSystemPrompt(role);
   const systemPromptTokenEstimate = Math.ceil(systemPrompt.length / CHARS_PER_TOKEN);
   let lastInputTokens: number | null = null;
 
   // Build tools with cache_control on the last item so the entire prefix is cached.
-  // query_csv is registered conditionally — only when the conversation actually
-  // has at least one reference-mode CSV attachment — so conversations without
-  // CSVs don't pay the prompt-cache cost of the extra tool schema.
   const csvAttachments = options.csvAttachments ?? [];
   const hasCsvAttachments = csvAttachments.length > 0;
-  const roleTools = getToolsForRole(role).filter((tool) =>
-    tool.name === "query_csv" ? hasCsvAttachments : true,
-  );
-  const cachedTools = roleTools.map((tool, i) =>
-    i === roleTools.length - 1
+  const toolAllowlist = options.toolAllowlist
+    ? new Set([...options.toolAllowlist, "get_full_tool_result"])
+    : null;
+
+  let filteredTools = getToolsForRole(role).filter((tool) => {
+    // query_csv is registered conditionally
+    if (tool.name === "query_csv" && !hasCsvAttachments) return false;
+    // Tool allowlist narrows the set when present
+    if (toolAllowlist && !toolAllowlist.has(tool.name)) return false;
+    return true;
+  });
+
+  // Append extra tools (e.g., respond_with_triage_verdict)
+  if (options.extraTools?.length) {
+    filteredTools = [...filteredTools, ...options.extraTools];
+  }
+
+  const cachedTools = filteredTools.map((tool, i) =>
+    i === filteredTools.length - 1
       ? { ...tool, cache_control: { type: "ephemeral" as const } }
       : tool
   );
@@ -167,13 +210,17 @@ export async function runAgentLoop(
       cache_control: { type: "ephemeral" },
     };
 
-    const response = await createWithRetry({
+    const apiParams: Anthropic.Messages.MessageCreateParamsNonStreaming = {
       model,
       max_tokens: 4096,
       system: [systemBlock] as Anthropic.Messages.TextBlockParam[],
       tools: cachedTools as Anthropic.Messages.Tool[],
       messages: prepared.messages,
-    }, signal);
+    };
+    if (options.toolChoice) {
+      apiParams.tool_choice = options.toolChoice;
+    }
+    const response = await createWithRetry(apiParams, signal);
 
     lastInputTokens = response.usage.input_tokens;
 
@@ -211,6 +258,26 @@ export async function runAgentLoop(
       const toolUseBlocks = response.content.filter(
         (b): b is Anthropic.Messages.ToolUseBlock => b.type === "tool_use"
       );
+
+      // Non-executable tools (e.g., respond_with_triage_verdict) — the
+      // tool_use block IS the output. Check BEFORE the execution loop so
+      // we never partially execute tools if Claude emits a mix of regular
+      // and non-executable tool calls in the same turn.
+      const nonExecBlock = toolUseBlocks.find(
+        (b) => options.nonExecutableTools?.has(b.name),
+      );
+      if (nonExecBlock) {
+        if (callbacks.onToolCall) {
+          callbacks.onToolCall(nonExecBlock.name, nonExecBlock.input as Record<string, unknown>);
+        }
+        logger.info("Non-executable tool called — returning result", "agent", { toolName: nonExecBlock.name });
+        const text = response.content
+          .filter((b): b is Anthropic.Messages.TextBlock => b.type === "text")
+          .map((b) => b.text)
+          .join("\n");
+        return { type: "response", text, messages: localMessages };
+      }
+
       const toolResults: Anthropic.Messages.ToolResultBlockParam[] = [];
 
       for (const block of toolUseBlocks) {

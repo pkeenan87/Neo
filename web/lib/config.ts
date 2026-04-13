@@ -83,6 +83,15 @@ export const env: EnvConfig = {
   CLI_STORAGE_CONTAINER:        process.env.CLI_STORAGE_CONTAINER || "cli-releases",
   KEY_VAULT_URL:                process.env.KEY_VAULT_URL,
   KEY_VAULT_KEY_NAME:           process.env.KEY_VAULT_KEY_NAME || "neo-api-key-encryption",
+  // Triage API
+  TRIAGE_DEDUP_WINDOW_MS:               parsePositiveInt("TRIAGE_DEDUP_WINDOW_MS", 24 * 60 * 60 * 1000),
+  TRIAGE_CONFIDENCE_THRESHOLD:          Number(process.env.TRIAGE_CONFIDENCE_THRESHOLD ?? "0.80"),
+  TRIAGE_SEVERITY_ALLOWLIST:            process.env.TRIAGE_SEVERITY_ALLOWLIST || "Informational,Low,Medium,High",
+  TRIAGE_CIRCUIT_BREAKER_THRESHOLD:     Number(process.env.TRIAGE_CIRCUIT_BREAKER_THRESHOLD ?? "0.30"),
+  TRIAGE_CIRCUIT_BREAKER_WINDOW_MS:     parsePositiveInt("TRIAGE_CIRCUIT_BREAKER_WINDOW_MS", 15 * 60 * 1000),
+  TRIAGE_CIRCUIT_BREAKER_COOLDOWN_MS:   parsePositiveInt("TRIAGE_CIRCUIT_BREAKER_COOLDOWN_MS", 30 * 60 * 1000),
+  TRIAGE_CALLER_ALLOWLIST:              process.env.TRIAGE_CALLER_ALLOWLIST || "",
+  TRIAGE_RAW_PAYLOAD_MAX_BYTES:         parsePositiveInt("TRIAGE_RAW_PAYLOAD_MAX_BYTES", 500_000),
 };
 
 // Note: validateConfig uses console.warn directly (not logger) because

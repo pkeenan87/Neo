@@ -171,7 +171,7 @@ export async function POST(request: NextRequest) {
 }
 
 async function handleAgentRequest(
-  identity: { ownerId: string; role: string; name: string; provider: "entra-id" | "api-key" },
+  identity: { ownerId: string; role: string; name: string; provider: "entra-id" | "api-key" | "service-principal" },
   session: Awaited<ReturnType<typeof sessionStore.get>> & object,
   sessionId: string,
   body: AgentRequest,

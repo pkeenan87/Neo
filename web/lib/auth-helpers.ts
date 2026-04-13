@@ -4,11 +4,13 @@ import { findApiKey, hashApiKey, updateLastUsed } from "./api-key-store";
 import { logger } from "./logger";
 import type { Role } from "./permissions";
 
+export type AuthProvider = "entra-id" | "api-key" | "service-principal";
+
 export interface ResolvedAuth {
   role: Role;
   name: string;
   ownerId: string;
-  provider: "entra-id" | "api-key";
+  provider: AuthProvider;
 }
 
 // ── Entra ID token verification ───────────────────────────────
@@ -104,20 +106,50 @@ export async function resolveAuth(
     // Try Entra ID token verification (CLI sends id_token via PKCE)
     const payload = await verifyEntraToken(token);
     if (payload) {
-      // Map Entra ID app roles to our internal roles
-      const roles = payload.roles as string[] | undefined;
-      const role: Role = roles?.includes("Admin") ? "admin" : "reader";
-      const name =
-        (payload.preferred_username as string) ??
-        (payload.name as string) ??
-        "Unknown";
-      // Use immutable AAD object ID as ownerId for Cosmos partition key
-      const ownerId =
-        (payload.oid as string) ??
-        (payload.sub as string) ??
-        name;
-      logger.info("Auth resolved via Entra ID token", "auth", { role, provider: "entra-id" });
-      return { role, name, ownerId, provider: "entra-id" };
+      // SECURITY: Use `idtyp` claim as the positive discriminant for
+      // app-only tokens. This is the OIDC-standard indicator — never
+      // rely on the *absence* of user claims as a proxy, because edge
+      // cases (B2B guests, OBO, UPN-less service accounts) can lack
+      // preferred_username / scp while still being user tokens.
+      const isAppOnly = payload.idtyp === "app";
+
+      if (!isAppOnly) {
+        // Interactive user token (CLI PKCE, browser, or any non-app-only)
+        const roles = payload.roles as string[] | undefined;
+        const role: Role = roles?.includes("Admin") ? "admin" : "reader";
+        const name =
+          (payload.preferred_username as string) ??
+          (payload.name as string) ??
+          "Unknown";
+        const ownerId =
+          (payload.oid as string) ??
+          (payload.sub as string) ??
+          name;
+        logger.info("Auth resolved via Entra ID token", "auth", { role, provider: "entra-id" });
+        return { role, name, ownerId, provider: "entra-id" };
+      }
+
+      // App-only token (Managed Identity / service principal from Logic Apps).
+      // Gets the dedicated "triage" role — scoped to read-only investigation
+      // tools. If a broader role is needed in the future, map via app roles.
+      const appId =
+        (payload.appid as string) ??
+        (payload.azp as string) ??
+        (payload.sub as string);
+      if (appId) {
+        const name = (payload.app_displayname as string) ?? appId;
+        logger.info("Auth resolved via service principal", "auth", {
+          role: "triage",
+          provider: "service-principal",
+          appId,
+        });
+        return {
+          role: "triage",
+          name,
+          ownerId: appId,
+          provider: "service-principal",
+        };
+      }
     }
 
     // Invalid bearer token — don't fall through to session
