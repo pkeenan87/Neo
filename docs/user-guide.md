@@ -1044,6 +1044,122 @@ Body:
 - **True**: Close the incident via the Sentinel API, append Neo's `reasoning` as a comment.
 - **False**: Assign to the SOC analyst queue, attach Neo's `reasoning` and `evidence` as a comment.
 
+### Configuring the Logic App HTTP Action Step-by-Step
+
+This section walks through configuring the HTTP action in the Logic App designer to call the Neo triage API.
+
+#### 1. Add an HTTP action after the trigger
+
+In the Logic App designer, after the "When a new Microsoft Sentinel incident is created" trigger, add an **HTTP** action.
+
+#### 2. Configure the HTTP action
+
+Set the following fields in the action:
+
+| Field | Value |
+|-------|-------|
+| **Method** | `POST` |
+| **URI** | `https://neo.companyname.com/api/triage` |
+| **Headers** | `Content-Type`: `application/json` |
+
+> **Note**: Use your custom domain (`neo.companyname.com`) if the Logic App runs on the internal network. If the Logic App runs in Azure and cannot reach the internal domain, use the fallback: `https://app-neo-prod-001.azurewebsites.net/api/triage`.
+
+#### 3. Configure authentication
+
+In the HTTP action, expand **Authentication** and set:
+
+| Field | Value |
+|-------|-------|
+| **Authentication type** | Managed Identity |
+| **Managed Identity** | System-assigned |
+| **Audience** | `api://<your-neo-app-client-id>` |
+
+Replace `<your-neo-app-client-id>` with the Application (client) ID from Neo's Entra ID app registration (the same value as `AUTH_MICROSOFT_ENTRA_ID_ID`).
+
+#### 4. Set the request body
+
+In the **Body** field, switch to code view and paste the following JSON. The `@{...}` expressions are Logic App dynamic content references that pull values from the Sentinel trigger.
+
+```json
+{
+  "source": {
+    "product": "Sentinel",
+    "alertType": "@{triggerBody()?['properties']?['additionalData']?['alertProductNames']?[0]}",
+    "severity": "@{triggerBody()?['properties']?['severity']}",
+    "tenantId": "@{triggerBody()?['properties']?['additionalData']?['tenantId']}",
+    "alertId": "@{triggerBody()?['properties']?['incidentNumber']}",
+    "detectionTime": "@{triggerBody()?['properties']?['createdTimeUtc']}"
+  },
+  "payload": {
+    "essentials": {
+      "title": "@{triggerBody()?['properties']?['title']}",
+      "description": "@{triggerBody()?['properties']?['description']}",
+      "entities": {
+        "users": ["@{join(triggerBody()?['properties']?['relatedEntities']?['accounts'], ',')}"],
+        "devices": ["@{join(triggerBody()?['properties']?['relatedEntities']?['hosts'], ',')}"],
+        "ips": ["@{join(triggerBody()?['properties']?['relatedEntities']?['ips'], ',')}"]
+      },
+      "mitreTactics": "@{triggerBody()?['properties']?['additionalData']?['tactics']}"
+    },
+    "raw": @{triggerBody()}
+  },
+  "context": {
+    "requesterId": "logic-app-sentinel-triage",
+    "dryRun": false
+  }
+}
+```
+
+**Field reference**:
+
+| Field | Required | Description |
+|-------|----------|-------------|
+| `source.product` | Yes | One of: `Sentinel`, `DefenderXDR`, `EntraIDProtection`, `Purview`, `DefenderForCloudApps` |
+| `source.alertType` | Yes | The alert product name (e.g., "Microsoft Defender for Endpoint") |
+| `source.severity` | Yes | One of: `Informational`, `Low`, `Medium`, `High` |
+| `source.alertId` | Yes | Unique alert identifier (max 255 chars). Used for idempotency dedup |
+| `source.tenantId` | No | Azure tenant ID (used for multi-tenant disambiguation) |
+| `source.detectionTime` | No | ISO 8601 timestamp. Defaults to current time if omitted |
+| `payload.essentials.title` | Yes | Alert title displayed to analysts |
+| `payload.essentials.description` | No | Detailed description of the alert |
+| `payload.essentials.entities` | No | Related users, devices, IPs, and files for investigation |
+| `payload.raw` | No | Full original alert body (max 1 MB). Stored for audit but not sent to Claude |
+| `payload.links.portalUrl` | No | HTTPS link to the alert in the source portal |
+| `context.requesterId` | Yes | Identifier for the calling Logic App (used in logging) |
+| `context.dryRun` | No | Set to `true` to run the investigation without the caller acting on the verdict |
+| `context.analystNotes` | No | Free-text notes to include in the investigation prompt (max 10,000 chars) |
+
+#### 5. Add a condition to branch on the verdict
+
+After the HTTP action, add a **Condition** action:
+
+- **Left operand**: `body('HTTP')?['verdict']`
+- **Operator**: `is equal to`
+- **Right operand**: `benign`
+
+Add a second condition (nested or parallel) to check confidence:
+
+- **Left operand**: `body('HTTP')?['confidence']`
+- **Operator**: `is greater than or equal to`
+- **Right operand**: `0.80`
+
+#### 6. Handle the True/False branches
+
+**True branch** (benign + high confidence) — close the incident:
+- Add a "Microsoft Sentinel — Update incident" action
+- Set **Status** to `Closed`
+- Set **Classification** to `BenignPositive`
+- Set **Comment** to: `[Neo Auto-Triage] @{body('HTTP')?['reasoning']}`
+
+**False branch** (escalate or low confidence) — assign to analysts:
+- Add a "Microsoft Sentinel — Update incident" action
+- Set **Owner** to your SOC analyst group
+- Set **Comment** to: `[Neo Auto-Triage] Verdict: @{body('HTTP')?['verdict']} (confidence: @{body('HTTP')?['confidence']}). Reasoning: @{body('HTTP')?['reasoning']}`
+
+#### 7. Test with dry-run mode
+
+Before enabling auto-close, set `"dryRun": true` in the request body. This runs the full investigation pipeline but signals the Logic App not to act on the verdict. Review the responses in Neo's audit logs (Event Hub, filter by `channel: "triage"`) to validate accuracy before enabling live mode.
+
 ### Authentication Setup
 
 The Logic App authenticates to Neo via Managed Identity:
