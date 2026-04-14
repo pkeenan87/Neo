@@ -1426,14 +1426,14 @@ $pw = Read-Host -Prompt "PFX password" -AsSecureString
 
 1. **DNS**: Create a CNAME record pointing your custom domain to `<WebAppName>.azurewebsites.net`, or an A record pointing to the App Service IP. Also add the TXT verification record (`asuid.<custom-domain>`).
 2. **Certificate**: Have your TLS certificate ready as a PFX file. Since internal domains are not publicly resolvable, Azure managed certificates cannot be used — you must supply your own.
-3. **Entra ID redirect URI**: The script can auto-register the new redirect URI if you provide `-EntraAppId`. Otherwise, manually add `https://<custom-domain>/api/auth/callback/microsoft-entra-id` in the Entra ID app registration under Authentication > Redirect URIs. Keep the existing `azurewebsites.net` redirect URI.
+3. **Entra ID redirect URI**: The script can auto-register the new redirect URI if you provide `-EntraAppId`. Otherwise, manually add `https://<custom-domain>/api/auth/callback/microsoft-entra-id` in the Entra ID app registration under Authentication > Redirect URIs. **Only the custom-domain redirect URI is needed** — the `azurewebsites.net` URI should be removed to avoid confusion (see below).
 
-**How dual-domain works**:
+**How the two domains divide responsibilities**:
 
-- `AUTH_URL` must be **removed** (not set) from app settings. With `trustHost: true`, Auth.js derives the OAuth redirect URI from the incoming request host automatically. If `AUTH_URL` is set, it pins all callbacks to a single domain, causing PKCE cookie mismatches when users start login from the other domain.
+- **Custom domain (`neo.companyname.com`)** — the canonical host for **humans**. All interactive OAuth login goes through this domain. Set `AUTH_URL=https://neo.companyname.com` in your App Service settings so Auth.js pins the callback URL deterministically. This is required — Auth.js cannot safely derive the callback from the request Host header on Azure App Service, because internal container routing can inject bogus hostnames (e.g. `<container-id>.<port>`) that Entra rejects.
+- **`azurewebsites.net` domain** — the fallback specifically for the **Teams bot** (and any other external integration with its own auth mechanism). Teams requests hit `/api/teams/*`, which validates Bot Framework JWTs at the handler level and never invokes Auth.js OAuth. So Auth.js being pinned to the custom domain does not break Teams.
 - CSP (`connect-src 'self'`) and CSRF origin checks are domain-agnostic — they match whichever domain the request arrives on.
-- The `azurewebsites.net` domain stays active as a fallback. This is important if the Teams bot or external integrations need to reach the app from outside the internal network.
-- CLI users on the internal network should set `NEO_SERVER=https://neo.companyname.com`. Users connecting externally can use `NEO_SERVER=https://app-neo-prod-001.azurewebsites.net`.
+- CLI users on the internal network should set `NEO_SERVER=https://neo.companyname.com`. The CLI uses a separate public-client OAuth flow (`http://localhost:4000/callback`), not the web Auth.js flow, so it works against either domain.
 
 ---
 

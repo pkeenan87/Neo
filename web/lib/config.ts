@@ -110,8 +110,15 @@ export function validateConfig(): void {
   }
 
   const authUrl = process.env.AUTH_URL;
-  if (authUrl && process.env.NODE_ENV !== "development") {
-    console.warn("AUTH_URL is set — Auth.js will use it as the fixed callback base URL. For dual-domain support (custom domain + azurewebsites.net), remove AUTH_URL and rely on trustHost: true to derive the callback from the request host.");
+  if (!authUrl && process.env.NODE_ENV !== "development") {
+    console.warn(
+      "AUTH_URL is not set — Auth.js will derive the callback URL from the request Host header. " +
+      "On Azure App Service, internal container routing can inject bogus hostnames that Entra ID rejects. " +
+      "Set AUTH_URL to your canonical custom domain (e.g. https://neo.goodwinprocter.com).",
+    );
+  }
+  if (authUrl && !authUrl.startsWith("https://") && process.env.NODE_ENV !== "development") {
+    console.warn("AUTH_URL is not HTTPS — Auth.js cookies will fail on Azure App Service. Set AUTH_URL to your production HTTPS domain.");
   }
 
   if (env.MOCK_MODE) {
