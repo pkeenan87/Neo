@@ -11,14 +11,23 @@ import { logger } from "@/lib/logger";
 
 // On Azure App Service behind a reverse proxy, the default SameSite=Lax
 // cookies are dropped during the cross-origin OAuth redirect from Entra ID.
-// Force SameSite=None + Secure on OAuth flow cookies so they survive the
-// redirect cycle. The session token stays Lax to prevent CSRF.
+// Force SameSite=None + Secure on OAuth flow cookies for HTTPS deployments
+// so they survive the redirect cycle. The session token stays Lax to prevent CSRF.
 //
-// AUTH_URL is intentionally NOT set so Auth.js derives the callback URL from
-// the incoming request host (trustHost: true). This lets OAuth work on both
-// the custom domain and the azurewebsites.net fallback without cookie mismatch.
-// Secure cookies are enabled in production (all production deployments use HTTPS).
-const useSecureCookies = process.env.NODE_ENV === "production";
+// AUTH_URL MUST be set in production to the canonical custom domain (e.g.
+// https://neo.goodwinprocter.com). Relying on trustHost to derive the callback
+// URL from the incoming Host header is unsafe on Azure App Service — internal
+// container routing can surface bogus hostnames (e.g. "<container-id>.<port>")
+// which Auth.js then builds into a redirect URI that Entra ID rejects.
+// The Teams bot path bypasses Auth.js OAuth entirely (Bot Framework JWTs), so
+// a single pinned AUTH_URL works even though two domains serve the app.
+const useSecureCookies = (() => {
+  try {
+    return new URL(process.env.AUTH_URL ?? "").protocol === "https:";
+  } catch {
+    return false;
+  }
+})();
 
 const crossOriginCookie = { httpOnly: true, sameSite: "none" as const, path: "/", secure: true, maxAge: 900 };
 
@@ -59,11 +68,10 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
         params: {
           scope: "openid profile email User.Read",
           prompt: "select_account",
-          // redirect_uri is intentionally omitted so Auth.js derives it from
-          // the incoming request host (trustHost: true). This allows OAuth to
-          // work on both the custom internal domain and the fallback
-          // azurewebsites.net domain without code changes. Both redirect URIs
-          // must be registered in the Entra ID app registration.
+          // redirect_uri is omitted here — Auth.js composes it from AUTH_URL,
+          // which must be set in production. Only one redirect URI (the
+          // AUTH_URL + /api/auth/callback/microsoft-entra-id) needs to be
+          // registered in the Entra app registration.
         },
       },
     }),

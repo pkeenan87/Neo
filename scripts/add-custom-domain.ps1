@@ -185,27 +185,30 @@ if ($EntraAppId) {
 }
 
 # ─────────────────────────────────────────────────────────────
-#  Step 5: Remove AUTH_URL (if set) for dual-domain support
+#  Step 5: Pin AUTH_URL to the custom domain
 # ─────────────────────────────────────────────────────────────
-# AUTH_URL pins Auth.js to a single callback domain. When set, users who
-# start OAuth on one domain get redirected to AUTH_URL for the callback,
-# causing a PKCE cookie mismatch (cookie set on domain A, callback on domain B).
+# Auth.js MUST have AUTH_URL set in production on Azure App Service. Without
+# it, Auth.js derives the callback URL from the request Host header — and
+# Azure's internal container routing can inject bogus hostnames (e.g.
+# "<container-id>.<port>") that Entra ID rejects with AADSTS50011.
 #
-# With AUTH_URL removed and trustHost: true, Auth.js derives the callback
-# from the incoming request host — so OAuth works from either domain.
+# The Teams bot path does not use Auth.js OAuth (it uses Bot Framework JWTs),
+# so pinning AUTH_URL to the custom domain does not break the Teams fallback
+# via azurewebsites.net.
 
-Write-Host "`n  Removing AUTH_URL app setting for dual-domain OAuth support..." -ForegroundColor Cyan
+$authUrl = "https://$CustomDomain"
+Write-Host "`n  Setting AUTH_URL=$authUrl on the App Service..." -ForegroundColor Cyan
 
-az webapp config appsettings delete `
+az webapp config appsettings set `
     --name $WebAppName `
     --resource-group $ResourceGroupName `
-    --setting-names AUTH_URL 2>$null
+    --settings "AUTH_URL=$authUrl" `
+    --output none 2>$null
 
 if ($LASTEXITCODE -ne 0) {
-    Write-Host "`n  WARNING: Failed to remove AUTH_URL (it may not exist, or check permissions)." -ForegroundColor Yellow
-    Write-Host "  If AUTH_URL is still set, it will pin OAuth callbacks to a single domain.`n" -ForegroundColor Yellow
+    Write-Host "`n  WARNING: Failed to set AUTH_URL. OAuth will fall back to deriving the callback from the request Host header, which is unreliable on Azure App Service.`n" -ForegroundColor Yellow
 } else {
-    Write-Host "  AUTH_URL removed (Auth.js will derive callback from request host)." -ForegroundColor Green
+    Write-Host "  AUTH_URL set to $authUrl." -ForegroundColor Green
 }
 
 # ─────────────────────────────────────────────────────────────
@@ -219,13 +222,14 @@ Write-Host "  Fallback domain: https://$defaultHostname" -ForegroundColor White
 Write-Host ""
 Write-Host "  Verification checklist:" -ForegroundColor Cyan
 Write-Host "    [ ] https://$CustomDomain loads the app (internal network)" -ForegroundColor White
-Write-Host "    [ ] https://$defaultHostname still loads the app" -ForegroundColor White
+Write-Host "    [ ] https://$defaultHostname still loads the app (for Teams bot)" -ForegroundColor White
 Write-Host "    [ ] OAuth login works from https://$CustomDomain" -ForegroundColor White
-Write-Host "    [ ] OAuth login works from https://$defaultHostname" -ForegroundColor White
 Write-Host "    [ ] Teams bot still works via https://$defaultHostname" -ForegroundColor White
 Write-Host "    [ ] CLI users updated NEO_SERVER to https://$CustomDomain" -ForegroundColor White
 Write-Host ""
-Write-Host "  Entra ID redirect URIs (both must be registered):" -ForegroundColor Cyan
+Write-Host "  Entra ID redirect URI (only the custom domain is needed):" -ForegroundColor Cyan
 Write-Host "    https://$CustomDomain/api/auth/callback/microsoft-entra-id" -ForegroundColor White
-Write-Host "    https://$defaultHostname/api/auth/callback/microsoft-entra-id" -ForegroundColor White
+Write-Host ""
+Write-Host "  NOTE: If an azurewebsites.net redirect URI was previously registered," -ForegroundColor Yellow
+Write-Host "  you can remove it — OAuth now only happens on the custom domain." -ForegroundColor Yellow
 Write-Host ""
