@@ -108,12 +108,14 @@ export function composeUserContent(
   userText: string,
   existingMediaBlocks: readonly unknown[],
   csvBlocks: readonly Anthropic.Messages.TextBlockParam[],
+  txtBlocks: readonly Anthropic.Messages.TextBlockParam[] = [],
 ): Anthropic.Messages.MessageParam["content"] {
-  if (existingMediaBlocks.length === 0 && csvBlocks.length === 0) {
+  if (existingMediaBlocks.length === 0 && csvBlocks.length === 0 && txtBlocks.length === 0) {
     return userText;
   }
   const result: unknown[] = [
     ...existingMediaBlocks,
+    ...txtBlocks,
     ...csvBlocks,
     { type: "text", text: userText },
   ];

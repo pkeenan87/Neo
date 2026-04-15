@@ -5,13 +5,22 @@ import {
   ACCEPTED_IMAGE_TYPES,
   ACCEPTED_DOC_TYPES,
   ACCEPTED_CSV_TYPES,
+  ACCEPTED_TXT_TYPES,
   MAX_IMAGE_SIZE,
   MAX_DOC_SIZE,
   MAX_CSV_SIZE,
+  MAX_TXT_SIZE,
   MAX_FILES_PER_MESSAGE,
 } from "@/lib/types";
 
+function isTxtFile(file: File): boolean {
+  if (file.name.toLowerCase().endsWith(".csv")) return false;
+  if (ACCEPTED_TXT_TYPES.has(file.type)) return true;
+  return file.name.toLowerCase().endsWith(".txt");
+}
+
 function isCsvFile(file: File): boolean {
+  if (file.name.toLowerCase().endsWith(".txt")) return false;
   if (file.type === "text/csv" || file.type === "application/csv") return true;
   if (!file.name.toLowerCase().endsWith(".csv")) return false;
   // Browsers often report CSVs with ambiguous types — fall back to extension
@@ -29,12 +38,14 @@ function isAcceptedFile(file: File): boolean {
   return (
     ACCEPTED_IMAGE_TYPES.has(file.type) ||
     ACCEPTED_DOC_TYPES.has(file.type) ||
-    isCsvFile(file)
+    isCsvFile(file) ||
+    isTxtFile(file)
   );
 }
 
 function maxSizeForFile(file: File): number {
   if (isCsvFile(file)) return MAX_CSV_SIZE;
+  if (isTxtFile(file)) return MAX_TXT_SIZE;
   if (ACCEPTED_DOC_TYPES.has(file.type)) return MAX_DOC_SIZE;
   return MAX_IMAGE_SIZE;
 }
@@ -68,7 +79,7 @@ export function useFileUpload() {
       const toAdd: ClientFile[] = [];
       for (const file of incoming.slice(0, remaining)) {
         if (!isAcceptedFile(file)) {
-          setError(`Unsupported file type: ${file.type || file.name}. Use JPEG, PNG, GIF, WebP, PDF, or CSV.`);
+          setError(`Unsupported file type: ${file.type || file.name}. Use JPEG, PNG, GIF, WebP, PDF, CSV, or TXT.`);
           continue;
         }
         const max = maxSizeForFile(file);

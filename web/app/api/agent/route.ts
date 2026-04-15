@@ -15,7 +15,8 @@ import { isMultipartRequest, parseMultipart } from "@/lib/multipart-parser";
 import { buildContentBlocks, buildMediaBlocks, buildPersistedContent } from "@/lib/content-blocks";
 import { buildInlineCsvBlock, buildReferenceCsvBlock, composeUserContent } from "@/lib/csv-content-blocks";
 import { uploadFile, isUploadStorageConfigured, uploadCsv, deleteCsvBlob } from "@/lib/upload-storage";
-import { isCsvType } from "@/lib/file-validation";
+import { isCsvType, isTxtType } from "@/lib/file-validation";
+import { buildTxtBlock } from "@/lib/txt-content-blocks";
 import { classifyCsv } from "@/lib/csv-classifier";
 import { appendCsvAttachment, getCsvAttachments } from "@/lib/conversation-store";
 import { randomUUID } from "crypto";
@@ -223,9 +224,12 @@ async function handleAgentRequest(
   // uploaded to blob storage as reference-mode attachments.
   const mediaFiles: FileAttachment[] = [];
   const csvFiles: FileAttachment[] = [];
+  const txtFiles: FileAttachment[] = [];
   for (const file of attachedFiles) {
     if (isCsvType(file.mimetype, file.filename)) {
       csvFiles.push(file);
+    } else if (isTxtType(file.mimetype, file.filename)) {
+      txtFiles.push(file);
     } else {
       mediaFiles.push(file);
     }
@@ -238,6 +242,7 @@ async function handleAgentRequest(
   let persistedContent: string;
   const newCsvAttachments: CSVReference[] = [];
   const csvBlocks: Anthropic.Messages.TextBlockParam[] = [];
+  const txtBlocks: Anthropic.Messages.TextBlockParam[] = [];
 
   // Process CSVs before media: classification / 10-cap rejection short-circuits
   // the request before any media is base64-encoded or persisted. Note that for
@@ -315,14 +320,26 @@ async function handleAgentRequest(
     csvBlocks.push(buildReferenceCsvBlock(reference));
   }
 
-  if (mediaFiles.length > 0 || csvBlocks.length > 0) {
-    // When CSVs are present we use composeUserContent to enforce the spec
-    // ordering media → CSV → user text. When only media is present (no
-    // CSVs), the existing buildContentBlocks helper keeps the historical
-    // text → media ordering so image/PDF-only flows are unchanged.
-    if (csvBlocks.length > 0) {
+  // Process TXT files — always inline, no blob storage
+  for (const file of txtFiles) {
+    try {
+      txtBlocks.push(buildTxtBlock(file.filename, file.buffer));
+    } catch (err) {
+      return new Response(
+        JSON.stringify({ error: `Text file "${file.filename}" could not be processed: ${(err as Error).message}` }),
+        { status: 400, headers: { "Content-Type": "application/json" } },
+      );
+    }
+  }
+
+  if (mediaFiles.length > 0 || csvBlocks.length > 0 || txtBlocks.length > 0) {
+    // When CSVs or TXT files are present we use composeUserContent to
+    // enforce the ordering: media → TXT → CSV → user text. When only
+    // media is present, the existing buildContentBlocks helper keeps the
+    // historical text → media ordering so image/PDF-only flows are unchanged.
+    if (csvBlocks.length > 0 || txtBlocks.length > 0) {
       const mediaBlocks = buildMediaBlocks(mediaFiles);
-      claudeContent = composeUserContent(effectiveMessage, mediaBlocks, csvBlocks);
+      claudeContent = composeUserContent(effectiveMessage, mediaBlocks, csvBlocks, txtBlocks);
     } else {
       claudeContent = buildContentBlocks(effectiveMessage, mediaFiles);
     }
@@ -347,6 +364,11 @@ async function handleAgentRequest(
     // Reference-mode CSVs appear as file refs in the persisted message too.
     for (const ref of newCsvAttachments) {
       fileRefs.push({ filename: ref.filename, mimetype: "text/csv", blobUrl: ref.blobUrl });
+    }
+    // TXT files are inline-only (embedded in the Claude content blocks above).
+    // No blob URL to persist — the [Attached: ...] line is added below for display.
+    for (const file of txtFiles) {
+      fileRefs.push({ filename: file.filename, mimetype: "text/plain", blobUrl: "inline" });
     }
     persistedContent = buildPersistedContent(effectiveMessage, fileRefs);
   } else {

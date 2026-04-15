@@ -79,12 +79,16 @@ export const ACCEPTED_CSV_TYPES = new Set([
   "application/csv",
   "application/vnd.ms-excel",
   "application/octet-stream",
+]);
+
+export const ACCEPTED_TXT_TYPES = new Set([
   "text/plain",
 ]);
 
 export const MAX_IMAGE_SIZE = 20 * 1024 * 1024; // 20 MB
 export const MAX_DOC_SIZE = 32 * 1024 * 1024;   // 32 MB
 export const MAX_CSV_SIZE = 50 * 1024 * 1024;   // 50 MB
+export const MAX_TXT_SIZE = 2 * 1024 * 1024;    // 2 MB
 export const MAX_FILES_PER_MESSAGE = 5;
 
 // ── CSV classification thresholds ────────────────────────────
