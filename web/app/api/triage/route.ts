@@ -137,6 +137,83 @@ function validateTriageRequest(
     return { valid: false, error: "'context.analystNotes' exceeds 10,000-character limit." };
   }
 
+  // ── Normalize fields that Logic Apps may send as JSON strings ──
+  // Logic Apps expressions like @{json(...)} produce stringified JSON for
+  // arrays and objects. Parse them back into their expected types so
+  // downstream code (prompt builder, Cosmos persistence) gets clean data.
+
+  const MAX_TACTICS = 20;
+  const MAX_TACTIC_LENGTH = 128;
+  const MAX_ENTITY_ARRAY_LENGTH = 100;
+  const MAX_ENTITY_STRING_LENGTH = 512;
+  const ENTITY_ALLOWLIST = ["users", "devices", "ips", "files", "urls", "processes"];
+
+  // — mitreTactics
+  const rawTactics = essentials.mitreTactics;
+  let normalizedTactics: string[] | undefined;
+  if (Array.isArray(rawTactics)) {
+    normalizedTactics = rawTactics.filter((t): t is string => typeof t === "string");
+  } else if (typeof rawTactics === "string") {
+    try {
+      const parsedTactics = JSON.parse(rawTactics);
+      if (Array.isArray(parsedTactics)) {
+        normalizedTactics = parsedTactics.filter((t: unknown): t is string => typeof t === "string");
+      }
+    } catch {
+      console.warn("[triage] mitreTactics JSON parse failed, field omitted");
+    }
+  }
+  if (normalizedTactics) {
+    normalizedTactics = normalizedTactics
+      .slice(0, MAX_TACTICS)
+      .map((t) => (t.length > MAX_TACTIC_LENGTH ? t.slice(0, MAX_TACTIC_LENGTH) : t));
+  }
+
+  // — entities (allowlist fields to prevent extra keys leaking through)
+  const rawEntities = essentials.entities;
+  let parsedEntities: Record<string, unknown> | undefined;
+  if (rawEntities && typeof rawEntities === "object" && !Array.isArray(rawEntities)) {
+    parsedEntities = rawEntities as Record<string, unknown>;
+  } else if (typeof rawEntities === "string") {
+    try {
+      const parsed = JSON.parse(rawEntities);
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+        parsedEntities = parsed as Record<string, unknown>;
+      }
+    } catch {
+      console.warn("[triage] entities JSON parse failed, field omitted");
+    }
+  }
+
+  const normalizedEntities: Record<string, unknown> = Object.create(null);
+  if (parsedEntities) {
+    for (const key of ENTITY_ALLOWLIST) {
+      if (!Object.prototype.hasOwnProperty.call(parsedEntities, key)) continue;
+      let val = parsedEntities[key];
+
+      // Sub-fields may also be JSON strings
+      if (typeof val === "string") {
+        try {
+          val = JSON.parse(val);
+        } catch {
+          console.warn(`[triage] entities.${key} JSON parse failed, field omitted`);
+          continue;
+        }
+      }
+
+      // Cap array length and truncate string elements
+      if (Array.isArray(val)) {
+        normalizedEntities[key] = val.slice(0, MAX_ENTITY_ARRAY_LENGTH).map((item: unknown) =>
+          typeof item === "string" && item.length > MAX_ENTITY_STRING_LENGTH
+            ? item.slice(0, MAX_ENTITY_STRING_LENGTH)
+            : item,
+        );
+      } else if (val !== undefined) {
+        normalizedEntities[key] = val;
+      }
+    }
+  }
+
   return {
     valid: true,
     request: {
@@ -148,7 +225,16 @@ function validateTriageRequest(
         alertId: source.alertId as string,
         detectionTime: (source.detectionTime as string) ?? new Date().toISOString(),
       },
-      payload: payload as unknown as TriageRequest["payload"],
+      payload: {
+        essentials: {
+          title: essentials.title as string,
+          description: (essentials.description as string) ?? "",
+          entities: normalizedEntities as TriageRequest["payload"]["essentials"]["entities"],
+          mitreTactics: normalizedTactics,
+        },
+        raw: payload.raw as Record<string, unknown> | undefined,
+        links: payload.links as TriageRequest["payload"]["links"],
+      },
       context: {
         requesterId: context.requesterId as string,
         playbookRunId: (context.playbookRunId as string) ?? undefined,

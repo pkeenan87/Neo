@@ -144,11 +144,13 @@ export function buildTriageUserMessage(request: TriageRequest): string {
       : `\n\nRaw vendor payload:\n${rawJson}`;
   }
 
-  const entitiesSection = payload.essentials.entities
-    ? `\nEntities: ${JSON.stringify(payload.essentials.entities)}`
+  const entities = payload.essentials.entities;
+  const entitiesSection = entities && Object.keys(entities).length
+    ? `\nEntities: ${escapePromptField(JSON.stringify(entities))}`
     : "";
-  const mitreSection = payload.essentials.mitreTactics?.length
-    ? `\nMITRE Tactics: ${payload.essentials.mitreTactics.join(", ")}`
+  const tactics = payload.essentials.mitreTactics;
+  const mitreSection = Array.isArray(tactics) && tactics.length
+    ? `\nMITRE Tactics: ${tactics.map(escapePromptField).join(", ")}`
     : "";
   const notesSection = context.analystNotes
     ? `\n\n<analyst_notes>\n${escapePromptField(context.analystNotes)}\n</analyst_notes>`
