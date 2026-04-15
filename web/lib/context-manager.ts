@@ -186,6 +186,81 @@ async function compressOlderMessages(
   }
 }
 
+// ── Empty-content sanitizer ──────────────────────────────────
+
+// System-attributed placeholder so Claude does not treat the coerced
+// content as a directive from the user. Defense in depth — the sanitizer
+// only fires for empty content that would otherwise fail the API, but the
+// wording clarifies that this is a system-generated placeholder.
+const EMPTY_USER_PLACEHOLDER = "[system: empty message placeholder — not user input]";
+
+/**
+ * Coerce any `role: "user"` messages with empty content to a placeholder
+ * text block. Anthropic's API rejects user messages whose content is `""`
+ * or `[]` with a 400 "user messages must have non-empty content" error,
+ * which can brick a conversation if an empty message gets persisted or
+ * produced by context trimming.
+ *
+ * Returns a new array only if any coercion happened; otherwise returns
+ * the input array unchanged. Logs a warn for every coercion so the
+ * upstream cause can be investigated.
+ */
+export function sanitizeEmptyUserMessages(messages: Message[]): Message[] {
+  let changed = false;
+  const result = messages.map((msg, idx) => {
+    if (msg.role !== "user") return msg;
+
+    // String content: empty or whitespace-only
+    if (typeof msg.content === "string") {
+      if (msg.content.trim() === "") {
+        changed = true;
+        logger.warn("Coerced empty user message to placeholder", "context-manager", {
+          messageIndex: idx,
+          contentType: "string",
+        });
+        return { ...msg, content: EMPTY_USER_PLACEHOLDER };
+      }
+      return msg;
+    }
+
+    // Array content: empty array, or all blocks are empty-text with no
+    // non-text blocks.
+    if (Array.isArray(msg.content)) {
+      if (msg.content.length === 0) {
+        changed = true;
+        logger.warn("Coerced empty user message to placeholder", "context-manager", {
+          messageIndex: idx,
+          contentType: "array-empty",
+        });
+        return {
+          ...msg,
+          content: [{ type: "text" as const, text: EMPTY_USER_PLACEHOLDER }],
+        };
+      }
+
+      const hasNonText = msg.content.some((b) => b.type !== "text");
+      const allTextEmpty = msg.content.every(
+        (b) => b.type === "text" && (!b.text || b.text.trim() === ""),
+      );
+      if (!hasNonText && allTextEmpty) {
+        changed = true;
+        logger.warn("Coerced empty user message to placeholder", "context-manager", {
+          messageIndex: idx,
+          contentType: "array-all-empty-text",
+        });
+        return {
+          ...msg,
+          content: [{ type: "text" as const, text: EMPTY_USER_PLACEHOLDER }],
+        };
+      }
+    }
+
+    return msg;
+  });
+
+  return changed ? result : messages;
+}
+
 // ── Main entry point ─────────────────────────────────────────
 
 export async function prepareMessages(
@@ -214,10 +289,11 @@ export async function prepareMessages(
     });
 
     const compressed = await compressOlderMessages(truncatedMessages, PRESERVED_RECENT_MESSAGES);
-    const newTokens = estimateTokens(compressed) + systemPromptTokenEstimate;
+    const sanitized = sanitizeEmptyUserMessages(compressed);
+    const newTokens = estimateTokens(sanitized) + systemPromptTokenEstimate;
 
     return {
-      messages: compressed,
+      messages: sanitized,
       trimmed: true,
       method: "summary",
       originalTokens: totalEstimate,
@@ -226,9 +302,10 @@ export async function prepareMessages(
   }
 
   if (anyTruncated) {
-    const newTokens = estimateTokens(truncatedMessages) + systemPromptTokenEstimate;
+    const sanitized = sanitizeEmptyUserMessages(truncatedMessages);
+    const newTokens = estimateTokens(sanitized) + systemPromptTokenEstimate;
     return {
-      messages: truncatedMessages,
+      messages: sanitized,
       trimmed: true,
       method: "truncation",
       originalTokens: totalEstimate,
@@ -236,8 +313,9 @@ export async function prepareMessages(
     };
   }
 
+  const sanitized = sanitizeEmptyUserMessages(truncatedMessages);
   return {
-    messages: truncatedMessages,
+    messages: sanitized,
     trimmed: false,
     originalTokens: totalEstimate,
     newTokens: totalEstimate,

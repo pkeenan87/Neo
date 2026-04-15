@@ -222,6 +222,16 @@ export interface PendingTool {
   id: string;
   name: string;
   input: Record<string, unknown>;
+  /**
+   * Tool results from the same assistant turn that ran successfully BEFORE
+   * the destructive tool paused the loop. On resume, these are emitted
+   * alongside the confirmed/cancelled result so every `tool_use` block in
+   * the assistant message has a matching `tool_result`.
+   *
+   * Optional for backward compatibility with older persisted
+   * pendingConfirmation values in Cosmos (pre-fix conversations).
+   */
+  preExecutedResults?: Anthropic.Messages.ToolResultBlockParam[];
 }
 
 export interface Session {

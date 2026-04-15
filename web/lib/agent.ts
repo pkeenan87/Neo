@@ -6,7 +6,7 @@ import { getToolsForRole, type Role } from "./permissions";
 import { logger } from "./logger";
 import { getToolIntegration } from "./integration-registry";
 import { wrapToolResult } from "./injection-guard";
-import { prepareMessages, CHARS_PER_TOKEN } from "./context-manager";
+import { prepareMessages, sanitizeEmptyUserMessages, CHARS_PER_TOKEN } from "./context-manager";
 import type { Message, AgentLoopResult, AgentCallbacks, PendingTool, ModelPreference, TokenUsage, CSVReference } from "./types";
 
 const client = new Anthropic({ apiKey: env.ANTHROPIC_API_KEY });
@@ -210,12 +210,19 @@ export async function runAgentLoop(
       cache_control: { type: "ephemeral" },
     };
 
+    // Belt-and-suspenders: sanitize empty user messages again before hitting
+    // the SDK. prepareMessages already sanitizes, but this catches any path
+    // that might produce empty content after prepareMessages returns
+    // (e.g., future mid-loop mutations) and guarantees the Anthropic API
+    // never sees an empty user message.
+    const sdkMessages = sanitizeEmptyUserMessages(prepared.messages);
+
     const apiParams: Anthropic.Messages.MessageCreateParamsNonStreaming = {
       model,
       max_tokens: 4096,
       system: [systemBlock] as Anthropic.Messages.TextBlockParam[],
       tools: cachedTools as Anthropic.Messages.Tool[],
-      messages: prepared.messages,
+      messages: sdkMessages,
     };
     if (options.toolChoice) {
       apiParams.tool_choice = options.toolChoice;
@@ -290,9 +297,73 @@ export async function runAgentLoop(
         // Confirmation gate for destructive actions
         if (DESTRUCTIVE_TOOLS.has(name)) {
           logger.info("Confirmation gate triggered", "agent", { toolName: name, toolId: id });
+
+          // Rewrite the last assistant message to drop any tool_use blocks
+          // that appear AFTER this destructive one. Without this, those
+          // trailing tool_use blocks would be persisted with no matching
+          // tool_result, and the next API call would fail with
+          // "tool_use ids were found without tool_result blocks".
+          //
+          // We operate on response.content's index space, not toolUseBlocks',
+          // because interleaved text blocks must be preserved.
+          // Safe to mutate localMessages[lastAssistantIdx] because
+          // localMessages is a shallow copy of the caller's array (see
+          // `const localMessages = [...messages]` at function entry).
+          const lastAssistantIdx = localMessages.length - 1;
+          const destructiveContentIdx = response.content.findIndex(
+            (b) => b.type === "tool_use" && b.id === id,
+          );
+          if (destructiveContentIdx >= 0) {
+            localMessages[lastAssistantIdx] = {
+              role: "assistant",
+              content: response.content.slice(0, destructiveContentIdx + 1),
+            };
+
+            // Audit: surface any additional destructive tools that were
+            // silently dropped by the slice. Conservative by design — we
+            // never auto-execute more than one destructive tool per turn —
+            // but operators need to see this happened.
+            const droppedDestructiveIds = response.content
+              .slice(destructiveContentIdx + 1)
+              .filter(
+                (b): b is Anthropic.Messages.ToolUseBlock =>
+                  b.type === "tool_use" && DESTRUCTIVE_TOOLS.has(b.name),
+              )
+              .map((b) => ({ id: b.id, name: b.name }));
+            if (droppedDestructiveIds.length > 0) {
+              logger.warn(
+                "Multiple destructive tools in one turn — dropping trailing ones",
+                "agent",
+                { confirmedToolId: id, confirmedToolName: name, dropped: droppedDestructiveIds },
+              );
+            }
+          } else {
+            // Defensive: if the destructive tool's ID isn't found in
+            // response.content, we can't rewrite safely. This would leave
+            // trailing tool_use blocks unpaired and reproduce the original
+            // bug — so surface it loudly rather than silently proceeding.
+            logger.error(
+              "Destructive tool id not found in response.content — cannot rewrite assistant message",
+              "agent",
+              {
+                toolId: id,
+                toolName: name,
+                contentBlockCount: response.content.length,
+                contentTypes: response.content.map((b) => b.type),
+              },
+            );
+          }
+
           return {
             type: "confirmation_required",
-            tool: { id, name, input: input as Record<string, unknown> },
+            tool: {
+              id,
+              name,
+              input: input as Record<string, unknown>,
+              // Capture pre-destructive tool results so resumeAfterConfirmation
+              // can emit them alongside the confirmed/cancelled result.
+              preExecutedResults: [...toolResults],
+            },
             messages: localMessages,
           };
         }
@@ -478,7 +549,14 @@ export async function resumeAfterConfirmation(
     };
   }
 
-  localMessages.push({ role: "user", content: [toolResult] });
+  // Include pre-executed results (from non-destructive tools that ran in
+  // the same turn before the destructive one paused the loop) so every
+  // tool_use block in the assistant message has a matching tool_result.
+  const preExecuted = pendingTool.preExecutedResults ?? [];
+  localMessages.push({
+    role: "user",
+    content: [...preExecuted, toolResult],
+  });
 
   return runAgentLoop(localMessages, callbacks, role, sessionId, model, undefined, options);
 }

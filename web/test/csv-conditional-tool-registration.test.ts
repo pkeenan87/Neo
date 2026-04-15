@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import type Anthropic from "@anthropic-ai/sdk";
-import type { CSVReference } from "../lib/types";
+import type { CSVReference, Message } from "../lib/types";
 
 // Mock the Anthropic SDK so we can spy on the tool list passed to messages.create.
 const createMock = vi.fn();
@@ -29,6 +29,7 @@ vi.mock("../lib/context-manager", () => ({
     originalTokens: 0,
     newTokens: 0,
   }),
+  sanitizeEmptyUserMessages: (messages: Message[]) => messages,
   CHARS_PER_TOKEN: 4,
 }));
 
