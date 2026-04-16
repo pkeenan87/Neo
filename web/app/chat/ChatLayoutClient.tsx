@@ -9,6 +9,7 @@ interface ChatLayoutClientProps {
   userRole: string
   userImage?: string
   initialConversations: ConversationMeta[]
+  defaultModelName: string
   children: React.ReactNode
 }
 
@@ -17,11 +18,12 @@ export function ChatLayoutClient({
   userRole,
   userImage,
   initialConversations,
+  defaultModelName,
   children,
 }: ChatLayoutClientProps) {
   return (
     <ConversationCacheProvider>
-      <ChatLayoutContext.Provider value={{ userName, userRole, userImage, initialConversations }}>
+      <ChatLayoutContext.Provider value={{ userName, userRole, userImage, initialConversations, defaultModelName }}>
         {children}
       </ChatLayoutContext.Provider>
     </ConversationCacheProvider>

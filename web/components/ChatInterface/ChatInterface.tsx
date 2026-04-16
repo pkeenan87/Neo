@@ -107,6 +107,7 @@ export interface ChatInterfaceProps {
   userImage?: string
   initialConversations?: ConversationMeta[]
   initialConversation?: Conversation
+  defaultModelName?: string
   className?: string
 }
 
@@ -225,6 +226,7 @@ export function ChatInterface({
   userImage,
   initialConversations = [],
   initialConversation,
+  defaultModelName = 'Claude Sonnet',
   className,
 }: ChatInterfaceProps) {
   const { theme, toggleTheme } = useTheme()
@@ -956,7 +958,7 @@ export function ChatInterface({
 
           <div className={styles.statusGroup}>
             <div className={styles.statusText}>
-              <span>Powered by Claude Opus 4.6</span>
+              <span>Powered by {defaultModelName}</span>
             </div>
           </div>
         </header>

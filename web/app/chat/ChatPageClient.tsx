@@ -12,7 +12,7 @@ interface ChatPageClientProps {
 
 export function ChatPageClient({ initialConversation }: ChatPageClientProps) {
   const router = useRouter()
-  const { userName, userRole, userImage, initialConversations } = useChatLayout()
+  const { userName, userRole, userImage, initialConversations, defaultModelName } = useChatLayout()
 
   const handleLogout = () => {
     if (process.env.NEXT_PUBLIC_DEV_AUTH_BYPASS === 'true') {
@@ -30,6 +30,7 @@ export function ChatPageClient({ initialConversation }: ChatPageClientProps) {
       userImage={userImage}
       initialConversations={initialConversations}
       initialConversation={initialConversation}
+      defaultModelName={defaultModelName}
     />
   )
 }

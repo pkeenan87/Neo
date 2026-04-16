@@ -8,12 +8,14 @@ interface ChatLayoutValue {
   userRole: string
   userImage?: string
   initialConversations: ConversationMeta[]
+  defaultModelName: string
 }
 
 export const ChatLayoutContext = createContext<ChatLayoutValue>({
   userName: '',
   userRole: '',
   initialConversations: [],
+  defaultModelName: 'Claude Sonnet',
 })
 
 export function useChatLayout(): ChatLayoutValue {
