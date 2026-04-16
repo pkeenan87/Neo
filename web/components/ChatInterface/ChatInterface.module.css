@@ -374,7 +374,7 @@
 }
 
 .messagesInner {
-  max-width: 48rem;
+  max-width: 56rem;
   margin-left: auto;
   margin-right: auto;
   width: 100%;
@@ -444,7 +444,11 @@
   color: #b9bbbe;
 }
 
-/* ─── Message bubbles ─── */
+/* ─── Message bubbles ───
+   Bubble itself never overflows. Children that need horizontal scroll
+   (markdown tables, fenced code blocks) wrap themselves in their own
+   scroll containers (see MarkdownRenderer.module.css). The bubble's
+   max-width is the hard ceiling. */
 .msgBubbleAssistant {
   display: inline-block;
   padding: 1rem;
@@ -454,9 +458,11 @@
   line-height: 1.625;
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1), 0 1px 2px rgba(0, 0, 0, 0.06);
   max-width: 100%;
-  overflow-x: auto;
+  min-width: 0;
   background: #fff;
   color: #1e293b;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 :global(html.dark) .msgBubbleAssistant {
@@ -473,9 +479,16 @@
   font-size: 0.875rem;
   line-height: 1.625;
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1), 0 1px 2px rgba(0, 0, 0, 0.06);
-  max-width: max-content;
+  /* Cap at the column width; long unbroken tokens get character-broken
+     by overflow-wrap below. Without max-width here, max-content would
+     let a 1000-char paste push the bubble outside the column. */
+  max-width: 100%;
+  min-width: 0;
   background: #f1f5f9;
   color: #334155;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  white-space: pre-wrap;
 }
 
 :global(html.dark) .msgBubbleUser {
@@ -492,7 +505,7 @@
 }
 
 .inputInner {
-  max-width: 48rem;
+  max-width: 56rem;
   margin-left: auto;
   margin-right: auto;
   width: 100%;
@@ -835,6 +848,44 @@
 :global(html.dark) .skillBadge {
   background: rgba(59, 165, 93, 0.1);
   color: #4ade80;
+}
+
+/* ─── Attachment badges (text-family file uploads) ─── */
+.attachmentBadgeRow {
+  @apply flex flex-wrap gap-2 mb-2;
+}
+
+.attachmentBadge {
+  @apply inline-flex items-center gap-2 px-2 py-1 rounded-lg text-xs font-medium border max-w-full overflow-hidden;
+  /* brand-500 with low alpha for surface; brand-600 for text — both are
+     design-system tokens (see tailwind.config.ts). */
+  background: rgb(100 116 139 / 0.10);
+  color: theme('colors.brand.600');
+  border-color: rgb(100 116 139 / 0.20);
+}
+
+:global(html.dark) .attachmentBadge {
+  background: rgb(148 163 184 / 0.12);
+  color: theme('colors.brand.300');
+  border-color: rgb(148 163 184 / 0.25);
+}
+
+.attachmentBadgeName {
+  @apply truncate;
+  max-width: 16rem;
+}
+
+.attachmentBadgeSize {
+  /* Use a full-opacity muted color (brand-500) instead of opacity:0.7 on
+     a darker color — opacity reduction at 11px text drops contrast below
+     the WCAG AA 4.5:1 threshold. brand-500 on white passes ~4.6:1. */
+  font-size: 0.6875rem;
+  color: theme('colors.brand.500');
+  white-space: nowrap;
+}
+
+:global(html.dark) .attachmentBadgeSize {
+  color: theme('colors.brand.400');
 }
 
 /* ─── Interrupted badge ─── */
@@ -1188,4 +1239,35 @@
 .toolSummaryItemName {
   font-family: var(--font-mono), monospace;
   font-size: 0.6875rem;
+}
+
+/* ─────────────────────────────────────────────────────────────
+   Mobile responsiveness (<768px)
+   - Tighter horizontal padding on bubbles + composer so more content fits
+   - Composer starts as a single row; expands as the user types
+   - Padding adjustments on the input area to match
+   ───────────────────────────────────────────────────────────── */
+@media (max-width: 767px) {
+  .messagesInner {
+    padding-top: 1rem;
+    padding-bottom: 1rem;
+    gap: 1.25rem;
+  }
+
+  .msgBubbleAssistant,
+  .msgBubbleUser {
+    padding: 0.75rem;
+  }
+
+  .inputArea {
+    padding: 0.5rem;
+  }
+
+  .textarea {
+    padding: 0.625rem 1rem;
+    min-height: 2.75rem;
+    /* iOS Safari auto-zooms when a focused input has font-size < 16px.
+       The threshold is exactly 16px, so we set the full 1rem here. */
+    font-size: 1rem;
+  }
 }

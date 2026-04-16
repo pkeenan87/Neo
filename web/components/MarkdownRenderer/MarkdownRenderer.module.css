@@ -1,3 +1,5 @@
+@reference "../../app/globals.css";
+
 /* ─── Wrapper ─── */
 .wrapper {
   line-height: 1.625;
@@ -14,37 +16,54 @@
   margin-bottom: 0;
 }
 
-/* ─── Headings ─── */
+/* ─── Headings ───
+   Use a true heading hierarchy rather than uppercase "section labels".
+   The previous letter-spacing + uppercase H3 styling looked like
+   stylized section labels and was inconsistent with the rest of the
+   design system. */
 .heading1 {
-  font-size: 1.125rem;
+  font-size: 1.5rem;
   font-weight: 700;
-  letter-spacing: 0.05em;
-  margin-top: 1.5rem;
-  margin-bottom: 0.5rem;
+  letter-spacing: -0.01em;
+  line-height: 1.25;
+  margin-top: 2rem;
+  margin-bottom: 1rem;
 }
 
 .heading2 {
-  font-size: 1rem;
+  font-size: 1.25rem;
   font-weight: 700;
-  letter-spacing: 0.05em;
-  margin-top: 1.25rem;
-  margin-bottom: 0.5rem;
+  letter-spacing: -0.01em;
+  line-height: 1.3;
+  margin-top: 1.5rem;
+  margin-bottom: 0.75rem;
 }
 
 .heading3 {
-  font-size: 0.875rem;
-  font-weight: 700;
-  letter-spacing: 0.05em;
-  text-transform: uppercase;
+  font-size: 1.0625rem;
+  font-weight: 600;
+  line-height: 1.35;
   margin-top: 1rem;
   margin-bottom: 0.5rem;
 }
 
 .heading4 {
-  font-size: 0.875rem;
+  /* Body text inside the bubble is 0.875rem; H4 is 1rem so the visual
+     hierarchy reads clearly even though the semantic <h4> already
+     announces correctly to screen readers. */
+  font-size: 1rem;
   font-weight: 600;
+  line-height: 1.4;
   margin-top: 0.75rem;
   margin-bottom: 0.25rem;
+}
+
+/* First heading in the message body should not push down from the bubble. */
+.wrapper > .heading1:first-child,
+.wrapper > .heading2:first-child,
+.wrapper > .heading3:first-child,
+.wrapper > .heading4:first-child {
+  margin-top: 0;
 }
 
 /* ─── Paragraph ─── */
@@ -140,6 +159,15 @@
   background: transparent;
 }
 
+.codeBlock:focus-visible {
+  outline: 2px solid theme('colors.brand.700');
+  outline-offset: -2px;
+}
+
+:global(html.dark) .codeBlock:focus-visible {
+  outline-color: theme('colors.accent.400');
+}
+
 .codeContent {
   font-family: inherit;
 }
@@ -163,6 +191,16 @@
   overflow-x: auto;
   max-width: 100%;
   margin-bottom: 0.75rem;
+}
+
+.tableWrapper:focus-visible {
+  outline: 2px solid theme('colors.brand.700');
+  outline-offset: 2px;
+  border-radius: 0.25rem;
+}
+
+:global(html.dark) .tableWrapper:focus-visible {
+  outline-color: theme('colors.accent.400');
 }
 
 .table {
