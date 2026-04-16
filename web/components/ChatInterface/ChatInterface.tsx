@@ -29,6 +29,7 @@ import { MarkdownRenderer, ThinkingBubble, UserAvatar, FileAttachmentBar } from 
 import { useFileUpload } from '@/hooks/useFileUpload'
 import styles from './ChatInterface.module.css'
 import type { Conversation, ConversationMeta, PendingTool } from '@/lib/types'
+import { extractTextAttachments, formatAttachmentSize, type ChatAttachment } from '@/lib/chat-attachments'
 
 // ─────────────────────────────────────────────────────────────
 //  Types for NDJSON stream events and content blocks
@@ -41,6 +42,7 @@ interface ChatMessage {
   toolsUsed?: string[]
   skillBadge?: string
   interrupted?: boolean
+  attachments?: ChatAttachment[]
 }
 
 interface SessionEvent { type: 'session'; sessionId: string }
@@ -153,6 +155,17 @@ function conversationToChatMessages(conv: Conversation): ChatMessage[] {
           ? msg.content.filter(isTextBlock).map((b: TextBlock) => b.text).join('\n')
           : ''
 
+      // Extract any text-family file attachments (.txt/.json/.log/.md
+      // wrapped in <text_attachment> blocks by lib/txt-content-blocks.ts).
+      // We render these as badges above the markdown body instead of
+      // letting the file body show up inline in the conversation.
+      // NOTE: `attachments` is forwarded into BOTH the skill-rewrite
+      // branch AND the regular branch below, so a skill-invocation
+      // message that also has an attachment keeps both behaviors.
+      const extracted = extractTextAttachments(content)
+      content = extracted.text
+      const attachments = extracted.attachments
+
       // Detect expanded skill invocation messages and replace with the
       // original user input so reload matches the live experience.
       // The full skill instructions are internal — only the user's
@@ -168,6 +181,7 @@ function conversationToChatMessages(conv: Conversation): ChatMessage[] {
             id: crypto.randomUUID(),
             role: 'user',
             content: userInput || `/${skillName.toLowerCase().replace(/\s+/g, '-')}`,
+            ...(attachments.length > 0 && { attachments }),
           })
           // 2. Push the skill badge as a synthetic assistant message (mirrors live stream)
           chatMessages.push({
@@ -190,12 +204,13 @@ function conversationToChatMessages(conv: Conversation): ChatMessage[] {
         content = content.replace(INTERRUPTED_SUFFIX_RE, '').trim()
       }
 
-      if (content || isInterrupted) {
+      if (content || isInterrupted || attachments.length > 0) {
         chatMessages.push({
           id: crypto.randomUUID(),
           role: msg.role,
           content,
           ...(isInterrupted && { interrupted: true }),
+          ...(attachments.length > 0 && { attachments }),
         })
       }
     }
@@ -214,7 +229,26 @@ export function ChatInterface({
 }: ChatInterfaceProps) {
   const { theme, toggleTheme } = useTheme()
   const cache = useConversationCache()
-  const [isSidebarOpen, setIsSidebarOpen] = useState(true)
+  // Sidebar starts open. The initial state MUST match SSR output to avoid
+  // a React hydration mismatch — so we always render `true` on first paint
+  // and correct to the real media-query result in a one-shot effect on
+  // mount. On mobile this means a single frame with the sidebar visible
+  // before it collapses; the alternative (reading matchMedia in the
+  // initializer) produces a hydration warning since SSR has no `window`.
+  const [isSidebarOpen, setIsSidebarOpen] = useState<boolean>(true)
+
+  useEffect(() => {
+    const mql = window.matchMedia('(max-width: 767px)')
+    setIsSidebarOpen(!mql.matches)
+    const onChange = (e: MediaQueryListEvent) => {
+      // Only force-collapse on transition INTO mobile. Leaving mobile
+      // (rotating to landscape / resizing wider) preserves whatever the
+      // user has set so we don't fight their explicit choice.
+      if (e.matches) setIsSidebarOpen(false)
+    }
+    mql.addEventListener('change', onChange)
+    return () => mql.removeEventListener('change', onChange)
+  }, [])
   const [messages, setMessages] = useState<ChatMessage[]>(() => {
     if (initialConversation) {
       const loaded = conversationToChatMessages(initialConversation)
@@ -965,10 +999,30 @@ export function ChatInterface({
                         : styles.msgBubbleUser
                     }
                   >
+                    {msg.attachments && msg.attachments.length > 0 && (
+                      <div className={styles.attachmentBadgeRow} role="list" aria-label="Attached files">
+                        {msg.attachments.map((att) => {
+                          const sizeHint = formatAttachmentSize(att.sizeBytes)
+                          return (
+                            <span
+                              key={`${att.filename}-${att.sizeBytes}`}
+                              role="listitem"
+                              className={styles.attachmentBadge}
+                            >
+                              <span aria-hidden="true">📎</span>
+                              <span className={styles.attachmentBadgeName}>{att.filename}</span>
+                              {sizeHint && (
+                                <span className={styles.attachmentBadgeSize}>{sizeHint}</span>
+                              )}
+                            </span>
+                          )
+                        })}
+                      </div>
+                    )}
                     {msg.skillBadge
                       ? <span className={styles.skillBadge}>Skill: {msg.skillBadge}</span>
                       : msg.role === 'assistant'
-                      ? <MarkdownRenderer content={msg.content} />
+                      ? msg.content && <MarkdownRenderer content={msg.content} />
                       : msg.content}
                     {msg.interrupted && (
                       <span className={styles.interruptedBadge}>Interrupted</span>

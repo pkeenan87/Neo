@@ -54,7 +54,16 @@ const components: Components = {
     <blockquote className={styles.blockquote}>{children}</blockquote>
   ),
   table: ({ children }) => (
-    <div className={styles.tableWrapper}>
+    // tabIndex enables keyboard horizontal scrolling. We deliberately do
+    // NOT add role="region" here — every table would otherwise become a
+    // landmark and pollute screen-reader landmark navigation with
+    // duplicate "Scrollable table" entries on responses with multiple
+    // tables.
+    <div
+      className={styles.tableWrapper}
+      tabIndex={0}
+      aria-label="Scrollable table"
+    >
       <table className={styles.table}>{children}</table>
     </div>
   ),
@@ -79,7 +88,17 @@ const components: Components = {
         <div className={styles.codeBlockHeader}>
           <CopyButton text={codeText} />
         </div>
-        <pre className={styles.codeBlock}>{children}</pre>
+        {/* tabIndex enables keyboard horizontal scrolling. role="region"
+            is deliberately omitted here — ARIA-in-HTML disallows it on
+            <pre>, and applying it to every code block would flood
+            landmark navigation with duplicate entries. */}
+        <pre
+          className={styles.codeBlock}
+          tabIndex={0}
+          aria-label="Scrollable code block"
+        >
+          {children}
+        </pre>
       </div>
     )
   },
