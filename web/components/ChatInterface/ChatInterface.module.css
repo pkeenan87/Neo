@@ -369,6 +369,7 @@
 .messagesArea {
   flex: 1;
   overflow-y: auto;
+  overflow-x: hidden; /* prevent wide code blocks / tables from causing page-level horizontal scroll */
   padding: 1rem;
   z-index: 10;
 }
@@ -421,6 +422,8 @@
   flex-direction: column;
   gap: 0.5rem;
   text-align: left;
+  min-width: 0;
+  overflow-x: hidden;
 }
 
 .msgContentUser {
