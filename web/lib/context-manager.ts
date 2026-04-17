@@ -82,7 +82,10 @@ export function truncateToolResult(content: string, capTokens: number): string {
 
 // ── Deep copy + per-result truncation ────────────────────────
 
-function truncateToolResults(messages: Message[]): { messages: Message[]; anyTruncated: boolean } {
+export function truncateToolResults(
+  messages: Message[],
+  capTokens: number = PER_TOOL_RESULT_TOKEN_CAP,
+): { messages: Message[]; anyTruncated: boolean } {
   let anyTruncated = false;
 
   const out: Message[] = messages.map((msg) => {
@@ -94,7 +97,7 @@ function truncateToolResults(messages: Message[]): { messages: Message[]; anyTru
       const tr = block as Anthropic.Messages.ToolResultBlockParam;
       if (typeof tr.content !== "string") return block;
 
-      const truncated = truncateToolResult(tr.content, PER_TOOL_RESULT_TOKEN_CAP);
+      const truncated = truncateToolResult(tr.content, capTokens);
       if (truncated !== tr.content) {
         anyTruncated = true;
         return { ...tr, content: truncated };
@@ -108,11 +111,159 @@ function truncateToolResults(messages: Message[]): { messages: Message[]; anyTru
   return { messages: out, anyTruncated };
 }
 
+// ── Tool-pair-aware slicing ──────────────────────────────────
+
+/**
+ * Check if a message contains tool_use blocks (assistant message that
+ * called tools and expects tool_result blocks in the next message).
+ */
+function hasToolUseBlocks(msg: Message): boolean {
+  if (!Array.isArray(msg.content)) return false;
+  return msg.content.some((b) => b.type === "tool_use");
+}
+
+/**
+ * Check if a message contains tool_result blocks (user message that
+ * carries results for tool_use blocks from the previous message).
+ */
+function hasToolResultBlocks(msg: Message): boolean {
+  if (!Array.isArray(msg.content)) return false;
+  return msg.content.some((b) => b.type === "tool_result");
+}
+
+/**
+ * Find a safe slice boundary that does not split a tool_use→tool_result
+ * pair. The Claude API requires every tool_use block in an assistant
+ * message to have a matching tool_result in the immediately following
+ * user message. Slicing between them produces an invalid conversation.
+ *
+ * Given a target index for `messages.slice(targetIndex)`, this returns
+ * an adjusted index that avoids splitting pairs:
+ * - If messages[targetIndex] is a user message with tool_result blocks,
+ *   move backward to include the preceding assistant tool_use message.
+ * - If messages[targetIndex-1] is an assistant message with tool_use
+ *   blocks and messages[targetIndex] is NOT its matching tool_result,
+ *   also move backward.
+ */
+function findSafeSliceStart(messages: Message[], targetIndex: number): number {
+  if (targetIndex <= 0) return 0;
+  if (targetIndex >= messages.length) return messages.length;
+
+  // If we're about to start at a tool_result message, include the
+  // preceding assistant message that holds the matching tool_use blocks.
+  const msg = messages[targetIndex];
+  if (msg.role === "user" && hasToolResultBlocks(msg) && targetIndex > 0) {
+    const prev = messages[targetIndex - 1];
+    if (prev.role === "assistant" && hasToolUseBlocks(prev)) {
+      return targetIndex - 1;
+    }
+  }
+
+  return targetIndex;
+}
+
+// ── Conversation shape validation ────────────────────────────
+
+/**
+ * Validate and repair the conversation shape so every tool_use block
+ * has a matching tool_result in the next message and vice versa.
+ * Removes orphaned blocks that would cause a 400 error from the API.
+ */
+export function validateAndRepairConversationShape(messages: Message[]): Message[] {
+  let repaired = false;
+  const result: Message[] = [];
+
+  for (let i = 0; i < messages.length; i++) {
+    const msg = messages[i];
+
+    // Repair assistant messages: remove tool_use blocks whose IDs don't
+    // appear as tool_result in the next user message.
+    if (msg.role === "assistant" && Array.isArray(msg.content) && hasToolUseBlocks(msg)) {
+      const nextMsg = messages[i + 1];
+      const nextToolResultIds = new Set<string>();
+      if (nextMsg?.role === "user" && Array.isArray(nextMsg.content)) {
+        for (const b of nextMsg.content) {
+          if (b.type === "tool_result") {
+            nextToolResultIds.add((b as Anthropic.Messages.ToolResultBlockParam).tool_use_id);
+          }
+        }
+      }
+
+      const filtered = msg.content.filter((b) => {
+        if (b.type !== "tool_use") return true;
+        const id = (b as Anthropic.Messages.ToolUseBlockParam).id;
+        if (nextToolResultIds.has(id)) return true;
+        repaired = true;
+        logger.warn("Removed orphaned tool_use block", "context-manager", {
+          toolUseId: id,
+          messageIndex: i,
+        });
+        return false;
+      });
+
+      if (filtered.length === 0) {
+        result.push({ ...msg, content: "[tool calls removed during context compression]" });
+      } else if (filtered.length !== msg.content.length) {
+        result.push({ ...msg, content: filtered });
+      } else {
+        result.push(msg);
+      }
+      continue;
+    }
+
+    // Repair user messages: remove tool_result blocks whose IDs don't
+    // appear as tool_use in the previous assistant message.
+    if (msg.role === "user" && Array.isArray(msg.content) && hasToolResultBlocks(msg)) {
+      const prevMsg = messages[i - 1];
+      const prevToolUseIds = new Set<string>();
+      if (prevMsg?.role === "assistant" && Array.isArray(prevMsg.content)) {
+        for (const b of prevMsg.content) {
+          if (b.type === "tool_use") {
+            prevToolUseIds.add((b as Anthropic.Messages.ToolUseBlockParam).id);
+          }
+        }
+      }
+
+      const filtered = msg.content.filter((b) => {
+        if (b.type !== "tool_result") return true;
+        const id = (b as Anthropic.Messages.ToolResultBlockParam).tool_use_id;
+        if (prevToolUseIds.has(id)) return true;
+        repaired = true;
+        logger.warn("Removed orphaned tool_result block", "context-manager", {
+          toolUseId: id,
+          messageIndex: i,
+        });
+        return false;
+      });
+
+      if (filtered.length === 0) {
+        result.push({ ...msg, content: "[tool results removed during context compression]" });
+      } else if (filtered.length !== msg.content.length) {
+        result.push({ ...msg, content: filtered });
+      } else {
+        result.push(msg);
+      }
+      continue;
+    }
+
+    result.push(msg);
+  }
+
+  if (repaired) {
+    logger.info("Conversation shape repaired", "context-manager", {
+      messageCount: messages.length,
+    });
+  }
+
+  return result;
+}
+
 // ── Conversation compression ─────────────────────────────────
 
 async function compressOlderMessages(
   messages: Message[],
   preserveCount: number,
+  systemPromptTokenEstimate: number,
 ): Promise<Message[]> {
   if (messages.length <= preserveCount + 1) return messages;
 
@@ -126,16 +277,33 @@ async function compressOlderMessages(
     }
   }
 
+  // Compute the recent slice boundary, respecting tool pairs
+  const rawRecentStart = messages.length - preserveCount;
+  const safeRecentStart = findSafeSliceStart(messages, rawRecentStart);
+
   const anchor = messages.slice(0, anchorIndex + 1);
-  const middle = messages.slice(anchorIndex + 1, messages.length - preserveCount);
-  const recent = messages.slice(messages.length - preserveCount);
+  const middle = messages.slice(anchorIndex + 1, safeRecentStart);
+  let recent = messages.slice(safeRecentStart);
 
   if (middle.length === 0) return messages;
 
-  // Cap middle messages sent to Haiku to avoid unbounded input cost
-  const cappedMiddle = middle.slice(-MAX_MIDDLE_MESSAGES_FOR_SUMMARY);
+  // Cap middle messages sent to Haiku to avoid unbounded input cost.
+  // Ensure the cap boundary respects tool pairs.
+  const rawCapStart = middle.length - MAX_MIDDLE_MESSAGES_FOR_SUMMARY;
+  const safeCapStart = rawCapStart <= 0
+    ? 0
+    : findSafeSliceStart(middle, rawCapStart);
+  const cappedMiddle = middle.slice(safeCapStart);
+
+  // Use assistant role for summary/fallback to prevent injection
+  const summaryRole = "assistant" as const;
+
+  let result: Message[];
 
   try {
+    // Validate cappedMiddle shape before sending to Haiku
+    const validatedMiddle = validateAndRepairConversationShape(cappedMiddle);
+
     const response = await anthropicClient.messages.create({
       model: HAIKU_MODEL,
       max_tokens: 1024,
@@ -145,7 +313,7 @@ async function compressOlderMessages(
         "tools that were used, and any actions taken or recommended. Be concise and factual. " +
         "Output only the bullet points.",
       messages: [
-        ...cappedMiddle,
+        ...validatedMiddle,
         { role: "user", content: "Please summarize the conversation above." },
       ],
     });
@@ -161,29 +329,75 @@ async function compressOlderMessages(
       .map((b) => b.text)
       .join("\n");
 
-    // Use assistant role so the summary cannot act as user instructions
     const summaryMessage: Message = {
-      role: "assistant",
+      role: summaryRole,
       content: `[Context compressed — earlier investigation summary (system-generated, not user input):]\n${summaryText}`,
     };
 
-    return [...anchor, summaryMessage, ...recent];
+    result = [...anchor, summaryMessage, ...recent];
   } catch (err) {
     logger.warn("Context summarization failed, using hard truncation fallback", "context-manager", {
       errorMessage: (err as Error).message,
       droppedMessages: middle.length,
     });
 
-    // Use assistant role to prevent injection via fallback message
     const fallbackMessage: Message = {
-      role: "assistant",
+      role: summaryRole,
       content:
         "[Earlier conversation context was removed to stay within token limits. " +
         "Key findings may need to be re-investigated.]",
     };
 
-    return [...anchor, fallbackMessage, ...recent];
+    result = [...anchor, fallbackMessage, ...recent];
   }
+
+  // Emergency progressive truncation: if the result still exceeds the
+  // threshold, drop the oldest messages from the recent window (pair-aware)
+  // until the estimate is under budget. This prevents the "prompt is too
+  // long" error that killed sessions during the 2026-04-16 incident.
+  //
+  // Minimum viable shape: anchor (0) + summary placeholder (1) + at least
+  // one recent message (2). Below this floor we cannot drop further.
+  const MIN_RESULT_LENGTH = 3;
+  let emergencyEstimate = estimateTokens(result) + systemPromptTokenEstimate;
+  while (emergencyEstimate > TRIM_TRIGGER_THRESHOLD && result.length > MIN_RESULT_LENGTH) {
+    // Use the same pair-aware helper as the outer slicing code
+    const rawDropIndex = 2;
+    const safeDropIndex = findSafeSliceStart(result, rawDropIndex);
+    let dropEnd = safeDropIndex + 1;
+    if (dropEnd < result.length && result[safeDropIndex].role === "assistant" &&
+        hasToolUseBlocks(result[safeDropIndex]) && result[dropEnd].role === "user" &&
+        hasToolResultBlocks(result[dropEnd])) {
+      dropEnd = safeDropIndex + 2;
+    }
+
+    logger.warn("Emergency truncation: dropping messages to fit context", "context-manager", {
+      droppedFromIndex: safeDropIndex,
+      droppedCount: dropEnd - safeDropIndex,
+      estimatedTokens: emergencyEstimate,
+      threshold: TRIM_TRIGGER_THRESHOLD,
+    });
+
+    result = [...result.slice(0, safeDropIndex), ...result.slice(dropEnd)];
+    emergencyEstimate = estimateTokens(result) + systemPromptTokenEstimate;
+  }
+
+  if (emergencyEstimate > TRIM_TRIGGER_THRESHOLD) {
+    logger.error(
+      "Emergency truncation exhausted: minimum conversation still exceeds threshold",
+      "context-manager",
+      {
+        estimatedTokens: emergencyEstimate,
+        threshold: TRIM_TRIGGER_THRESHOLD,
+        remainingMessages: result.length,
+      },
+    );
+  }
+
+  // Validate shape after emergency loop (catches any orphans introduced by drops)
+  result = validateAndRepairConversationShape(result);
+
+  return result;
 }
 
 // ── Empty-content sanitizer ──────────────────────────────────
@@ -288,7 +502,13 @@ export async function prepareMessages(
       messageCount: truncatedMessages.length,
     });
 
-    const compressed = await compressOlderMessages(truncatedMessages, PRESERVED_RECENT_MESSAGES);
+    // compressOlderMessages() handles shape validation and emergency
+    // truncation internally — no need to re-validate here.
+    const compressed = await compressOlderMessages(
+      truncatedMessages,
+      PRESERVED_RECENT_MESSAGES,
+      systemPromptTokenEstimate,
+    );
     const sanitized = sanitizeEmptyUserMessages(compressed);
     const newTokens = estimateTokens(sanitized) + systemPromptTokenEstimate;
 

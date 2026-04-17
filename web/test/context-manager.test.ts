@@ -18,7 +18,13 @@ vi.mock("@anthropic-ai/sdk", () => {
   };
 });
 
-import { estimateTokens, truncateToolResult, prepareMessages } from "../lib/context-manager";
+import {
+  estimateTokens,
+  truncateToolResult,
+  truncateToolResults,
+  prepareMessages,
+  validateAndRepairConversationShape,
+} from "../lib/context-manager";
 
 // ── estimateTokens ───────────────────────────────────────────
 
@@ -189,5 +195,238 @@ describe("prepareMessages", () => {
     const fallbackMsg = result.messages[1];
     expect(fallbackMsg.role).toBe("assistant");
     expect(fallbackMsg.content).toContain("removed to stay within token limits");
+  });
+
+  it("preserves tool_use/tool_result pairs when compressing", async () => {
+    const messages: Message[] = [
+      { role: "user", content: "Investigate user jsmith" },
+    ];
+
+    // Build 15 tool call pairs to push past the recent-message boundary
+    for (let i = 0; i < 15; i++) {
+      messages.push({
+        role: "assistant",
+        content: [
+          { type: "text" as const, text: `Running query ${i}` },
+          { type: "tool_use" as const, id: `tool-${i}`, name: "run_sentinel_kql", input: { query: `query ${i}` } },
+        ],
+      });
+      messages.push({
+        role: "user",
+        content: [
+          { type: "tool_result" as const, tool_use_id: `tool-${i}`, content: `Result ${i}: ${"data ".repeat(50)}` },
+        ],
+      });
+    }
+
+    const result = await prepareMessages(messages, 170_000, 2000);
+
+    expect(result.trimmed).toBe(true);
+
+    // Verify no orphaned tool blocks in the output
+    for (let i = 0; i < result.messages.length; i++) {
+      const msg = result.messages[i];
+      if (!Array.isArray(msg.content)) continue;
+
+      for (const block of msg.content) {
+        if (block.type === "tool_use") {
+          // Must have a matching tool_result in the next message
+          const next = result.messages[i + 1];
+          expect(next).toBeDefined();
+          expect(Array.isArray(next.content)).toBe(true);
+          const resultIds = (next.content as { type: string; tool_use_id?: string }[])
+            .filter((b) => b.type === "tool_result")
+            .map((b) => b.tool_use_id);
+          expect(resultIds).toContain((block as { id: string }).id);
+        }
+        if (block.type === "tool_result") {
+          // Must have a matching tool_use in the previous message
+          const prev = result.messages[i - 1];
+          expect(prev).toBeDefined();
+          expect(Array.isArray(prev.content)).toBe(true);
+          const useIds = (prev.content as { type: string; id?: string }[])
+            .filter((b) => b.type === "tool_use")
+            .map((b) => b.id);
+          expect(useIds).toContain((block as { tool_use_id: string }).tool_use_id);
+        }
+      }
+    }
+  });
+
+  it("emergency truncation drops messages when compressed result still exceeds threshold", async () => {
+    // Build a conversation with huge tool results that will still be large
+    // after compression. Use a massive systemPromptTokenEstimate to force
+    // the emergency path even after Haiku summarization succeeds.
+    const messages: Message[] = [
+      { role: "user", content: "Investigate the breach" },
+    ];
+
+    for (let i = 0; i < 20; i++) {
+      messages.push({
+        role: "assistant",
+        content: [
+          { type: "tool_use" as const, id: `t-${i}`, name: "run_sentinel_kql", input: { q: i } },
+        ],
+      });
+      messages.push({
+        role: "user",
+        content: [
+          { type: "tool_result" as const, tool_use_id: `t-${i}`, content: `Result ${i}: ${"x".repeat(5000)}` },
+        ],
+      });
+    }
+
+    // systemPromptTokenEstimate of 130K + message tokens will exceed 140K threshold
+    // even after Haiku compresses the middle. This forces the emergency loop.
+    const result = await prepareMessages(messages, 170_000, 130_000);
+
+    expect(result.trimmed).toBe(true);
+    // Should have fewer messages than the preserved recent count
+    expect(result.messages.length).toBeLessThan(messages.length);
+    // Should still be a valid conversation (at least anchor + summary + something)
+    expect(result.messages.length).toBeGreaterThanOrEqual(3);
+
+    // Verify no orphaned tool blocks after emergency drops
+    for (let i = 0; i < result.messages.length; i++) {
+      const msg = result.messages[i];
+      if (!Array.isArray(msg.content)) continue;
+      for (const block of msg.content) {
+        if (block.type === "tool_result") {
+          const prev = result.messages[i - 1];
+          expect(prev).toBeDefined();
+          if (Array.isArray(prev.content)) {
+            const useIds = (prev.content as { type: string; id?: string }[])
+              .filter((b) => b.type === "tool_use")
+              .map((b) => b.id);
+            expect(useIds).toContain((block as { tool_use_id: string }).tool_use_id);
+          }
+        }
+      }
+    }
+  });
+});
+
+// ── validateAndRepairConversationShape ───────────────────────
+
+describe("validateAndRepairConversationShape", () => {
+  it("removes orphaned tool_result blocks", () => {
+    const messages: Message[] = [
+      { role: "assistant", content: "Some text response" },
+      {
+        role: "user",
+        content: [
+          { type: "tool_result" as const, tool_use_id: "orphaned-id", content: "result data" },
+          { type: "text" as const, text: "user follow-up" },
+        ],
+      },
+    ];
+
+    const repaired = validateAndRepairConversationShape(messages);
+
+    // The orphaned tool_result should be removed
+    const userMsg = repaired[1];
+    expect(Array.isArray(userMsg.content)).toBe(true);
+    const blocks = userMsg.content as { type: string; tool_use_id?: string }[];
+    expect(blocks.some((b) => b.type === "tool_result")).toBe(false);
+    expect(blocks.some((b) => b.type === "text")).toBe(true);
+  });
+
+  it("removes orphaned tool_use blocks", () => {
+    const messages: Message[] = [
+      {
+        role: "assistant",
+        content: [
+          { type: "text" as const, text: "Let me check" },
+          { type: "tool_use" as const, id: "orphaned-use", name: "get_user_info", input: {} },
+        ],
+      },
+      { role: "user", content: "Actually, never mind" },
+    ];
+
+    const repaired = validateAndRepairConversationShape(messages);
+
+    const assistantMsg = repaired[0];
+    expect(Array.isArray(assistantMsg.content)).toBe(true);
+    const blocks = assistantMsg.content as { type: string; id?: string }[];
+    expect(blocks.some((b) => b.type === "tool_use")).toBe(false);
+    expect(blocks.some((b) => b.type === "text")).toBe(true);
+  });
+
+  it("preserves valid tool_use/tool_result pairs", () => {
+    const messages: Message[] = [
+      {
+        role: "assistant",
+        content: [
+          { type: "tool_use" as const, id: "valid-1", name: "run_sentinel_kql", input: { query: "test" } },
+        ],
+      },
+      {
+        role: "user",
+        content: [
+          { type: "tool_result" as const, tool_use_id: "valid-1", content: "query results" },
+        ],
+      },
+    ];
+
+    const repaired = validateAndRepairConversationShape(messages);
+
+    // Both messages should be unchanged
+    const assistantBlocks = repaired[0].content as { type: string }[];
+    expect(assistantBlocks).toHaveLength(1);
+    expect(assistantBlocks[0].type).toBe("tool_use");
+
+    const userBlocks = repaired[1].content as { type: string }[];
+    expect(userBlocks).toHaveLength(1);
+    expect(userBlocks[0].type).toBe("tool_result");
+  });
+
+  it("replaces empty message content after removing all blocks", () => {
+    const messages: Message[] = [
+      { role: "assistant", content: "Some context" },
+      {
+        role: "user",
+        content: [
+          { type: "tool_result" as const, tool_use_id: "missing-id", content: "orphaned" },
+        ],
+      },
+    ];
+
+    const repaired = validateAndRepairConversationShape(messages);
+
+    // The user message should have placeholder content, not an empty array
+    const userMsg = repaired[1];
+    expect(typeof userMsg.content).toBe("string");
+    expect(userMsg.content).toContain("removed during context compression");
+  });
+});
+
+// ── truncateToolResults (exported with custom cap) ──────────
+
+describe("truncateToolResults with custom cap", () => {
+  it("uses a lower cap for persistence truncation", () => {
+    const messages: Message[] = [
+      {
+        role: "user",
+        content: [
+          {
+            type: "tool_result" as const,
+            tool_use_id: "kql-1",
+            content: "x".repeat(100_000), // ~28.5K tokens at 3.5 chars/token
+          },
+        ],
+      },
+    ];
+
+    // Default 50K cap — should not truncate
+    const { anyTruncated: truncatedDefault } = truncateToolResults(messages);
+    expect(truncatedDefault).toBe(false);
+
+    // 10K cap (persistence) — should truncate
+    const { messages: truncated, anyTruncated } = truncateToolResults(messages, 10_000);
+    expect(anyTruncated).toBe(true);
+
+    const block = (truncated[0].content as { type: string; content?: string }[])[0];
+    expect(block.content!.length).toBeLessThan(100_000);
+    expect(block.content).toContain("[Result truncated");
   });
 });

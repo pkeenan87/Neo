@@ -16,6 +16,8 @@ import type {
 } from "./types";
 import { CSV_MAX_REFERENCE_ATTACHMENTS, CsvAttachmentCapError } from "./types";
 import type { SessionStore } from "./session-store";
+import { truncateToolResults } from "./context-manager";
+import { PERSISTENCE_TOOL_RESULT_TOKEN_CAP } from "./config";
 
 // ─────────────────────────────────────────────────────────────
 //  Cosmos DB client (lazy init)
@@ -403,13 +405,27 @@ export class CosmosSessionStore implements SessionStore {
     const ownerId = await this.resolveOwner(id);
     if (!ownerId) return;
 
+    // Truncate tool results before persistence to keep the Cosmos document
+    // under the 2 MB item limit. In-memory and API-bound messages retain
+    // full results for the current session; only the persisted copy is truncated.
+    const { messages: truncatedForPersistence, anyTruncated } = truncateToolResults(
+      messages,
+      PERSISTENCE_TOOL_RESULT_TOKEN_CAP,
+    );
+    if (anyTruncated) {
+      logger.info("Tool results truncated for Cosmos persistence", "conversation-store", {
+        conversationId: id,
+        cap: PERSISTENCE_TOOL_RESULT_TOKEN_CAP,
+      });
+    }
+
     const attempt = async () => {
       const container = getContainer();
       const { resource, etag } = await container.item(id, ownerId).read<Conversation>();
       if (!resource) return;
       if (!etag) throw new Error(`Missing ETag for conversation ${id}`);
 
-      resource.messages = messages;
+      resource.messages = truncatedForPersistence;
       resource.messageCount = messages.length;
       resource.updatedAt = new Date().toISOString();
       if (title && !resource.title) resource.title = title;

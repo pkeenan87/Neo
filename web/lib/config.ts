@@ -12,10 +12,15 @@ dotenv.config({ path: resolve(__dirname, "../../.env") });
 
 // ── Context Window Management ────────────────────────────────
 // All values are in estimated tokens (not characters).
+// Configurable via env vars without rebuilding — tune during incidents.
 export const CONTEXT_TOKEN_LIMIT = 180_000;
-export const TRIM_TRIGGER_THRESHOLD = 160_000;
-export const PER_TOOL_RESULT_TOKEN_CAP = 50_000;
-export const PRESERVED_RECENT_MESSAGES = 10;
+export const TRIM_TRIGGER_THRESHOLD = parsePositiveInt("TRIM_TRIGGER_THRESHOLD", 140_000);
+export const PER_TOOL_RESULT_TOKEN_CAP = parsePositiveInt("PER_TOOL_RESULT_TOKEN_CAP", 50_000);
+export const PRESERVED_RECENT_MESSAGES = parsePositiveInt("PRESERVED_RECENT_MESSAGES", 10);
+// Lower cap for Cosmos persistence — full results stay in memory for the
+// current session, but persisted messages use truncated copies to stay
+// under Cosmos DB's 2 MB document limit.
+export const PERSISTENCE_TOOL_RESULT_TOKEN_CAP = parsePositiveInt("PERSISTENCE_TOOL_RESULT_TOKEN_CAP", 10_000);
 
 // ── Model Selection ──────────────────────────────────────────
 
@@ -119,6 +124,19 @@ export function validateConfig(): void {
   }
   if (authUrl && !authUrl.startsWith("https://") && process.env.NODE_ENV !== "development") {
     console.warn("AUTH_URL is not HTTPS — Auth.js cookies will fail on Azure App Service. Set AUTH_URL to your production HTTPS domain.");
+  }
+
+  if (TRIM_TRIGGER_THRESHOLD >= CONTEXT_TOKEN_LIMIT) {
+    console.warn(
+      `TRIM_TRIGGER_THRESHOLD (${TRIM_TRIGGER_THRESHOLD}) >= CONTEXT_TOKEN_LIMIT (${CONTEXT_TOKEN_LIMIT}) — ` +
+      `context compression may never trigger. Lower TRIM_TRIGGER_THRESHOLD or raise CONTEXT_TOKEN_LIMIT.`,
+    );
+  }
+  if (PERSISTENCE_TOOL_RESULT_TOKEN_CAP > PER_TOOL_RESULT_TOKEN_CAP) {
+    console.warn(
+      `PERSISTENCE_TOOL_RESULT_TOKEN_CAP (${PERSISTENCE_TOOL_RESULT_TOKEN_CAP}) exceeds ` +
+      `PER_TOOL_RESULT_TOKEN_CAP (${PER_TOOL_RESULT_TOKEN_CAP}) — Cosmos document size protection may not hold.`,
+    );
   }
 
   if (env.MOCK_MODE) {
