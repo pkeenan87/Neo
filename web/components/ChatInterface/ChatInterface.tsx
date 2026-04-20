@@ -29,7 +29,7 @@ import { useConversationCache } from '@/context/ConversationCacheContext'
 import { MarkdownRenderer, MessageActions, ThinkingBubble, UserAvatar, FileAttachmentBar } from '@/components'
 import { useFileUpload } from '@/hooks/useFileUpload'
 import styles from './ChatInterface.module.css'
-import type { Conversation, ConversationMeta, PendingTool } from '@/lib/types'
+import type { Conversation, ConversationMeta, PendingTool, ToolTrace } from '@/lib/types'
 import { extractTextAttachments, formatAttachmentSize, type ChatAttachment } from '@/lib/chat-attachments'
 
 // ─────────────────────────────────────────────────────────────
@@ -41,6 +41,14 @@ interface ChatMessage {
   role: 'user' | 'assistant'
   content: string
   toolsUsed?: string[]
+  /**
+   * Full per-tool trace (input + output + optional durationMs). Populated
+   * during live streaming from `tool_result` events and reconstructed on
+   * reload from the persisted tool_use / tool_result blocks. When present,
+   * the UI renders expandable accordions in place of the legacy name-only
+   * bullet list.
+   */
+  toolTraces?: ToolTrace[]
   skillBadge?: string
   interrupted?: boolean
   attachments?: ChatAttachment[]
@@ -49,6 +57,7 @@ interface ChatMessage {
 interface SessionEvent { type: 'session'; sessionId: string }
 interface ThinkingEvent { type: 'thinking' }
 interface ToolCallEvent { type: 'tool_call'; tool: string; input: Record<string, unknown> }
+interface ToolResultEvent { type: 'tool_result'; tool: string; input: Record<string, unknown>; output: unknown; durationMs: number; isError?: boolean }
 interface ConfirmationEvent { type: 'confirmation_required'; tool: PendingTool }
 interface ResponseEvent { type: 'response'; text: string; interrupted?: boolean }
 interface ErrorEvent { type: 'error'; message: string; code?: string }
@@ -59,6 +68,7 @@ type StreamEvent =
   | SessionEvent
   | ThinkingEvent
   | ToolCallEvent
+  | ToolResultEvent
   | ConfirmationEvent
   | ResponseEvent
   | ErrorEvent
@@ -95,6 +105,87 @@ function isIntermediateAssistantTurn(content: unknown): boolean {
 
 function isStreamEvent(e: unknown): e is StreamEvent {
   return typeof e === 'object' && e !== null && typeof (e as StreamEvent).type === 'string'
+}
+
+// Pull tool_use blocks out of an assistant message (returns [] if the
+// content shape doesn't carry any — e.g. a plain string response).
+function extractToolUseBlocks(
+  content: unknown,
+): Array<{ id: string; name: string; input: Record<string, unknown> }> {
+  if (!Array.isArray(content)) return []
+  const out: Array<{ id: string; name: string; input: Record<string, unknown> }> = []
+  for (const block of content) {
+    if (
+      typeof block === 'object' &&
+      block !== null &&
+      (block as { type: string }).type === 'tool_use'
+    ) {
+      const b = block as { id: string; name: string; input: Record<string, unknown> }
+      out.push({ id: b.id, name: b.name, input: b.input })
+    }
+  }
+  return out
+}
+
+// Pull tool_result blocks out of a user message (the carrier the API uses
+// to ship tool outputs back to the next turn).
+function extractToolResultBlocks(
+  content: unknown,
+): Array<{ tool_use_id: string; content: unknown; is_error?: boolean }> {
+  if (!Array.isArray(content)) return []
+  const out: Array<{ tool_use_id: string; content: unknown; is_error?: boolean }> = []
+  for (const block of content) {
+    if (
+      typeof block === 'object' &&
+      block !== null &&
+      (block as { type: string }).type === 'tool_result'
+    ) {
+      const b = block as { tool_use_id: string; content: unknown; is_error?: boolean }
+      out.push({ tool_use_id: b.tool_use_id, content: b.content, is_error: b.is_error })
+    }
+  }
+  return out
+}
+
+// A user message that is ONLY tool_result blocks (not real user text) —
+// these are plumbing messages from the API and aren't shown in the UI.
+function isToolResultsMessage(content: unknown): boolean {
+  if (!Array.isArray(content) || content.length === 0) return false
+  return content.every(
+    (b: unknown) =>
+      typeof b === 'object' &&
+      b !== null &&
+      (b as { type: string }).type === 'tool_result',
+  )
+}
+
+// Human-friendly wall-clock duration for the tool-trace summary row.
+function formatDuration(ms: number): string {
+  if (ms < 1000) return `${Math.round(ms)}ms`
+  const s = ms / 1000
+  return s < 10 ? `${s.toFixed(2)}s` : `${Math.round(s)}s`
+}
+
+// JSON-ify a value safely — the tool output can be a string (already
+// JSON-stringified by the SDK), a plain object, or an array. We try to
+// parse-then-pretty so the user sees indented JSON when possible, and
+// fall back to the raw string if it's not valid JSON (e.g. plain text).
+function safeStringify(value: unknown): string {
+  if (typeof value === 'string') {
+    // Opportunistically pretty-print — tool outputs are often JSON
+    // strings that would otherwise render as an unreadable single line.
+    try {
+      const parsed: unknown = JSON.parse(value)
+      return JSON.stringify(parsed, null, 2)
+    } catch {
+      return value
+    }
+  }
+  try {
+    return JSON.stringify(value, null, 2)
+  } catch {
+    return String(value)
+  }
 }
 
 // Scroll the tail-anchor element into view. Honors `prefers-reduced-motion`
@@ -156,8 +247,54 @@ const INTERRUPTED_SUFFIX_RE = /\s*\[interrupted\]\s*$/
 
 function conversationToChatMessages(conv: Conversation): ChatMessage[] {
   const chatMessages: ChatMessage[] = []
+  // Reconstruct tool traces on reload by pairing persisted tool_use blocks
+  // (from intermediate assistant turns) with their tool_result carriers
+  // (the plumbing user messages). Traces accumulated within a turn are
+  // attached to the FINAL text assistant message of that turn, then the
+  // accumulator resets when the next real user text message arrives.
+  const pendingToolUse = new Map<
+    string,
+    { name: string; input: Record<string, unknown> }
+  >()
+  let pendingTraces: ToolTrace[] = []
+
   for (const msg of conv.messages ?? []) {
     if (msg.role === 'user' || msg.role === 'assistant') {
+      // User-side plumbing: a message that's purely tool_result blocks
+      // carries tool outputs back to the next turn. Pair them with
+      // previously-seen tool_use blocks and drop the message — it's not
+      // a visible user turn.
+      if (msg.role === 'user' && isToolResultsMessage(msg.content)) {
+        for (const r of extractToolResultBlocks(msg.content)) {
+          const tu = pendingToolUse.get(r.tool_use_id)
+          if (tu) {
+            pendingTraces.push({
+              name: tu.name,
+              input: tu.input,
+              output: r.content,
+              isError: r.is_error === true,
+            })
+            pendingToolUse.delete(r.tool_use_id)
+          }
+        }
+        continue
+      }
+
+      // A real user text message → new turn. Reset the trace accumulator
+      // so traces from the prior answer don't leak forward.
+      if (msg.role === 'user') {
+        pendingTraces = []
+        pendingToolUse.clear()
+      }
+
+      // Record any tool_use blocks on this assistant turn so we can pair
+      // them with the tool_result that follows.
+      if (msg.role === 'assistant') {
+        for (const tu of extractToolUseBlocks(msg.content)) {
+          pendingToolUse.set(tu.id, { name: tu.name, input: tu.input })
+        }
+      }
+
       // Skip intermediate assistant turns (tool-use reasoning / thinking)
       // so reload matches the live streaming experience where only the
       // final response is shown.
@@ -220,13 +357,21 @@ function conversationToChatMessages(conv: Conversation): ChatMessage[] {
       }
 
       if (content || isInterrupted || attachments.length > 0) {
+        const attachTraces =
+          msg.role === 'assistant' && pendingTraces.length > 0
         chatMessages.push({
           id: crypto.randomUUID(),
           role: msg.role,
           content,
           ...(isInterrupted && { interrupted: true }),
           ...(attachments.length > 0 && { attachments }),
+          ...(attachTraces && { toolTraces: [...pendingTraces] }),
         })
+        // Reset after attaching so the next turn starts clean.
+        if (attachTraces) {
+          pendingTraces = []
+          pendingToolUse.clear()
+        }
       }
     }
   }
@@ -537,6 +682,7 @@ export function ChatInterface({
     let buffer = ''
     const MAX_TOOLS = 50
     const toolsUsed: string[] = []
+    const toolTraces: ToolTrace[] = []
 
     while (true) {
       const { done, value } = await reader.read()
@@ -570,6 +716,19 @@ export function ChatInterface({
               }
               setCurrentToolName(event.tool)
               break
+            case 'tool_result':
+              // Cap at MAX_TOOLS to mirror the toolsUsed cap and bound
+              // memory growth on exceptionally long agent turns.
+              if (toolTraces.length < MAX_TOOLS) {
+                toolTraces.push({
+                  name: event.tool,
+                  input: event.input,
+                  output: event.output,
+                  durationMs: event.durationMs,
+                  isError: event.isError,
+                })
+              }
+              break
             case 'confirmation_required':
               setIsThinking(false)
               setPendingConfirmation(event.tool)
@@ -591,6 +750,7 @@ export function ChatInterface({
                   role: 'assistant',
                   content: event.text,
                   toolsUsed: toolsUsed.length > 0 ? [...toolsUsed] : undefined,
+                  toolTraces: toolTraces.length > 0 ? [...toolTraces] : undefined,
                   interrupted: event.interrupted,
                 },
               ])
@@ -1074,10 +1234,60 @@ export function ChatInterface({
                     {msg.interrupted && (
                       <span className={styles.interruptedBadge}>Interrupted</span>
                     )}
-                    {msg.toolsUsed && msg.toolsUsed.length > 0 && (
+                    {msg.toolTraces && msg.toolTraces.length > 0 ? (
                       <div className={styles.toolSummary}>
-                        <div id={`tools-label-${msg.id}`} className={styles.toolSummaryLabel}>Tools used:</div>
-                        <ul role="list" aria-labelledby={`tools-label-${msg.id}`} className={styles.toolSummaryList}>
+                        <div id={`tools-label-${msg.id}`} className={styles.toolSummaryLabel}>
+                          Tools used:
+                        </div>
+                        <ul
+                          role="list"
+                          aria-labelledby={`tools-label-${msg.id}`}
+                          className={styles.toolTraceList}
+                        >
+                          {msg.toolTraces.map((trace, i) => (
+                            <li key={`${i}-${trace.name}`} className={styles.toolTraceItem}>
+                              <details className={styles.toolTrace}>
+                                <summary className={styles.toolTraceSummary}>
+                                  <span className={styles.toolTraceSummaryName}>
+                                    {trace.name}
+                                  </span>
+                                  {typeof trace.durationMs === 'number' && (
+                                    <span className={styles.toolTraceDuration}>
+                                      {formatDuration(trace.durationMs)}
+                                    </span>
+                                  )}
+                                  {trace.isError && (
+                                    <span className={styles.toolTraceErrorBadge}>error</span>
+                                  )}
+                                </summary>
+                                <div className={styles.toolTraceBody}>
+                                  <div className={styles.toolTraceKey}>Input</div>
+                                  <pre className={styles.toolTracePre}>
+                                    {safeStringify(trace.input)}
+                                  </pre>
+                                  <div className={styles.toolTraceKey}>Output</div>
+                                  <pre className={styles.toolTracePre}>
+                                    {safeStringify(trace.output)}
+                                  </pre>
+                                </div>
+                              </details>
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+                    ) : msg.toolsUsed && msg.toolsUsed.length > 0 ? (
+                      // Legacy path: old conversations persisted before the
+                      // tool_result stream event shipped. No input/output to
+                      // expand — render the name-only bullet list.
+                      <div className={styles.toolSummary}>
+                        <div id={`tools-label-${msg.id}`} className={styles.toolSummaryLabel}>
+                          Tools used:
+                        </div>
+                        <ul
+                          role="list"
+                          aria-labelledby={`tools-label-${msg.id}`}
+                          className={styles.toolSummaryList}
+                        >
                           {msg.toolsUsed.map((tool, i) => (
                             <li key={`${i}-${tool}`} className={styles.toolSummaryItem}>
                               <span aria-hidden="true" className={styles.toolSummaryBullet}>&bull;</span>
@@ -1086,7 +1296,7 @@ export function ChatInterface({
                           ))}
                         </ul>
                       </div>
-                    )}
+                    ) : null}
                   </div>
                   {/* Action toolbar under completed assistant messages only.
                       Skip user messages, empty skill-badge placeholders, and

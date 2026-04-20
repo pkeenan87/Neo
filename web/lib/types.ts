@@ -195,6 +195,7 @@ export type AgentEventType =
   | "session"
   | "thinking"
   | "tool_call"
+  | "tool_result"
   | "confirmation_required"
   | "response"
   | "error"
@@ -203,10 +204,27 @@ export type AgentEventType =
   | "skill_invocation"
   | "interrupted";
 
+/**
+ * Captured record of a single tool execution — input, output, duration.
+ * Streamed to the UI via `tool_result` events so the chat can render an
+ * expandable "raw data" trace under an assistant message. durationMs is
+ * only populated during live streaming; on reload it may be undefined
+ * (we can reconstruct input/output from persisted message blocks but
+ * wall-clock duration isn't persisted).
+ */
+export interface ToolTrace {
+  name: string;
+  input: Record<string, unknown>;
+  output: unknown;
+  durationMs?: number;
+  isError?: boolean;
+}
+
 export type AgentEvent =
   | { type: "session"; sessionId: string }
   | { type: "thinking" }
   | { type: "tool_call"; tool: string; input: Record<string, unknown> }
+  | { type: "tool_result"; tool: string; input: Record<string, unknown>; output: unknown; durationMs: number; isError?: boolean }
   | { type: "confirmation_required"; tool: PendingTool }
   | { type: "response"; text: string; interrupted?: boolean }
   | { type: "error"; message: string; code?: string }
@@ -330,6 +348,12 @@ export type AgentLoopResult =
 export interface AgentCallbacks {
   onThinking?: () => void;
   onToolCall?: (name: string, input: Record<string, unknown>) => void;
+  /**
+   * Fired after each tool execution completes (success or error). Carries
+   * the full input + output + wall-clock duration so the UI can render an
+   * expandable raw-data trace under the assistant message.
+   */
+  onToolResult?: (trace: ToolTrace) => void;
   /**
    * Fired each time context is trimmed within a single agent loop run.
    * May fire multiple times if truncation recurs on subsequent turns.

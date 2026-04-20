@@ -126,6 +126,20 @@ export async function POST(request: NextRequest) {
             onToolCall: (name, input) => {
               void writer.write(encodeNDJSON({ type: "tool_call", tool: name, input })).catch(() => {});
             },
+            onToolResult: (trace) => {
+              void writer
+                .write(
+                  encodeNDJSON({
+                    type: "tool_result",
+                    tool: trace.name,
+                    input: trace.input,
+                    output: trace.output,
+                    durationMs: trace.durationMs ?? 0,
+                    isError: trace.isError,
+                  }),
+                )
+                .catch(() => {});
+            },
             onTurnComplete: (messages) => {
               session.messages = messages;
               void sessionStore.saveMessages(body.sessionId, messages).catch((saveErr) => {

@@ -1285,6 +1285,155 @@
   font-size: 0.6875rem;
 }
 
+/* ─── Expandable tool traces ───
+   Replaces the bullet list when tool input + output are available.
+   Each <details> is collapsed by default; the summary row shows the
+   tool name, duration, and an error badge if the tool failed. The
+   body renders input + output as pretty-printed JSON in <pre>. */
+.toolTraceList {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.toolTraceItem {
+  padding: 0;
+  margin: 0;
+}
+
+.toolTrace {
+  border: 1px solid #e2e8f0;
+  border-radius: 0.375rem;
+  background: #f8fafc;
+  overflow: hidden;
+}
+
+:global(html.dark) .toolTrace {
+  border-color: rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.toolTraceSummary {
+  list-style: none;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.375rem 0.5rem;
+  cursor: pointer;
+  font-size: 0.6875rem;
+  user-select: none;
+}
+
+/* Hide default triangle in Chrome/Safari; we keep the native disclosure
+   cue in the summary text itself via [open] styling. */
+.toolTraceSummary::-webkit-details-marker {
+  display: none;
+}
+
+.toolTraceSummary::before {
+  content: '▸';
+  display: inline-block;
+  width: 0.75rem;
+  text-align: center;
+  color: #94a3b8;
+  transition: transform 120ms ease;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .toolTraceSummary::before {
+    transition: none;
+  }
+}
+
+.toolTrace[open] > .toolTraceSummary::before {
+  transform: rotate(90deg);
+}
+
+.toolTraceSummaryName {
+  @apply font-mono;
+  color: #334155;
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+:global(html.dark) .toolTraceSummaryName {
+  color: #dbdee1;
+}
+
+.toolTraceDuration {
+  @apply font-mono;
+  font-size: 0.625rem;
+  color: #94a3b8;
+  padding: 0.0625rem 0.375rem;
+  border-radius: 0.25rem;
+  background: #e2e8f0;
+}
+
+:global(html.dark) .toolTraceDuration {
+  background: rgba(255, 255, 255, 0.06);
+  color: #b9bbbe;
+}
+
+.toolTraceErrorBadge {
+  font-size: 0.625rem;
+  color: #fff;
+  padding: 0.0625rem 0.375rem;
+  border-radius: 0.25rem;
+  background: theme('colors.error.500');
+}
+
+.toolTraceBody {
+  padding: 0.5rem;
+  border-top: 1px solid #e2e8f0;
+  background: #fff;
+  display: flex;
+  flex-direction: column;
+  gap: 0.375rem;
+}
+
+:global(html.dark) .toolTraceBody {
+  border-top-color: rgba(255, 255, 255, 0.06);
+  background: #1e1f22;
+}
+
+.toolTraceKey {
+  font-size: 0.625rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: #64748b;
+}
+
+:global(html.dark) .toolTraceKey {
+  color: #b9bbbe;
+}
+
+.toolTracePre {
+  @apply font-mono;
+  margin: 0;
+  padding: 0.5rem;
+  font-size: 0.6875rem;
+  line-height: 1.45;
+  background: #f1f5f9;
+  color: #0f172a;
+  border-radius: 0.25rem;
+  overflow-x: auto;
+  white-space: pre;
+  max-height: 20rem;
+  overflow-y: auto;
+}
+
+:global(html.dark) .toolTracePre {
+  background: rgba(0, 0, 0, 0.25);
+  color: #dbdee1;
+}
+
 /* ─────────────────────────────────────────────────────────────
    Mobile responsiveness (<768px)
    - Tighter horizontal padding on bubbles + composer so more content fits

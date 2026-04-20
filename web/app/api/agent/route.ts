@@ -457,6 +457,20 @@ async function handleAgentRequest(
             onToolCall: (name, input) => {
               void writer.write(encodeNDJSON({ type: "tool_call", tool: name, input })).catch(() => {});
             },
+            onToolResult: (trace) => {
+              void writer
+                .write(
+                  encodeNDJSON({
+                    type: "tool_result",
+                    tool: trace.name,
+                    input: trace.input,
+                    output: trace.output,
+                    durationMs: trace.durationMs ?? 0,
+                    isError: trace.isError,
+                  }),
+                )
+                .catch(() => {});
+            },
             onContextTrimmed: (originalTokens, newTokens, method) => {
               void writer.write(encodeNDJSON({ type: "context_trimmed", originalTokens, newTokens, method })).catch(() => {});
             },

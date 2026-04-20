@@ -383,6 +383,15 @@ export async function runAgentLoop(
             durationMs,
             status: "success",
           });
+          if (callbacks.onToolResult) {
+            callbacks.onToolResult({
+              name,
+              input: input as Record<string, unknown>,
+              output: result,
+              durationMs,
+              isError: false,
+            });
+          }
           toolResults.push({
             type: "tool_result",
             tool_use_id: id,
@@ -398,10 +407,20 @@ export async function runAgentLoop(
             status: "error",
             errorMessage: (err as Error).message?.slice(0, 500),
           });
+          const errorOutput = { error: (err as Error).message, tool: name };
+          if (callbacks.onToolResult) {
+            callbacks.onToolResult({
+              name,
+              input: input as Record<string, unknown>,
+              output: errorOutput,
+              durationMs,
+              isError: true,
+            });
+          }
           toolResults.push({
             type: "tool_result",
             tool_use_id: id,
-            content: wrapToolResult(name, { error: (err as Error).message, tool: name }, { sessionId }),
+            content: wrapToolResult(name, errorOutput, { sessionId }),
             is_error: true,
           });
         }
@@ -518,6 +537,9 @@ export async function resumeAfterConfirmation(
         durationMs,
         status: "success",
       });
+      if (callbacks.onToolResult) {
+        callbacks.onToolResult({ name, input, output: result, durationMs, isError: false });
+      }
       toolResult = {
         type: "tool_result",
         tool_use_id: id,
@@ -533,10 +555,14 @@ export async function resumeAfterConfirmation(
         status: "error",
         errorMessage: (err as Error).message?.slice(0, 500),
       });
+      const errorOutput = { error: (err as Error).message };
+      if (callbacks.onToolResult) {
+        callbacks.onToolResult({ name, input, output: errorOutput, durationMs, isError: true });
+      }
       toolResult = {
         type: "tool_result",
         tool_use_id: id,
-        content: wrapToolResult(name, { error: (err as Error).message }, { sessionId }),
+        content: wrapToolResult(name, errorOutput, { sessionId }),
         is_error: true,
       };
     }
