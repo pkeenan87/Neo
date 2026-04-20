@@ -568,10 +568,25 @@ export async function resumeAfterConfirmation(
     }
   } else {
     logger.info("Tool cancelled", "agent", { toolName: name, toolId: id });
+    const cancelOutput = { cancelled: true, message: "User cancelled this action." };
+    // Emit a synthetic tool_result event so the live UI sees the cancelled
+    // trace. Without this, pendingToolUse on the client accumulates an
+    // unmatched entry and the UI shows a tool_use with no paired result.
+    // durationMs: 0 since no work was done. isError: true so the trace
+    // renders with the failure badge.
+    if (callbacks.onToolResult) {
+      callbacks.onToolResult({
+        name,
+        input,
+        output: cancelOutput,
+        durationMs: 0,
+        isError: true,
+      });
+    }
     toolResult = {
       type: "tool_result",
       tool_use_id: id,
-      content: JSON.stringify({ cancelled: true, message: "User cancelled this action." }),
+      content: JSON.stringify(cancelOutput),
     };
   }
 

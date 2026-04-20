@@ -109,6 +109,9 @@ function isStreamEvent(e: unknown): e is StreamEvent {
 
 // Pull tool_use blocks out of an assistant message (returns [] if the
 // content shape doesn't carry any — e.g. a plain string response).
+// Defensively skips blocks missing id/name so a malformed persisted
+// message produces no trace rather than a ghost accordion with
+// undefined in the header.
 function extractToolUseBlocks(
   content: unknown,
 ): Array<{ id: string; name: string; input: Record<string, unknown> }> {
@@ -120,15 +123,21 @@ function extractToolUseBlocks(
       block !== null &&
       (block as { type: string }).type === 'tool_use'
     ) {
-      const b = block as { id: string; name: string; input: Record<string, unknown> }
-      out.push({ id: b.id, name: b.name, input: b.input })
+      const b = block as { id?: unknown; name?: unknown; input?: unknown }
+      if (typeof b.id !== 'string' || typeof b.name !== 'string') continue
+      const input =
+        typeof b.input === 'object' && b.input !== null
+          ? (b.input as Record<string, unknown>)
+          : {}
+      out.push({ id: b.id, name: b.name, input })
     }
   }
   return out
 }
 
 // Pull tool_result blocks out of a user message (the carrier the API uses
-// to ship tool outputs back to the next turn).
+// to ship tool outputs back to the next turn). Same defensive skip as
+// above when tool_use_id is missing.
 function extractToolResultBlocks(
   content: unknown,
 ): Array<{ tool_use_id: string; content: unknown; is_error?: boolean }> {
@@ -140,8 +149,13 @@ function extractToolResultBlocks(
       block !== null &&
       (block as { type: string }).type === 'tool_result'
     ) {
-      const b = block as { tool_use_id: string; content: unknown; is_error?: boolean }
-      out.push({ tool_use_id: b.tool_use_id, content: b.content, is_error: b.is_error })
+      const b = block as { tool_use_id?: unknown; content?: unknown; is_error?: unknown }
+      if (typeof b.tool_use_id !== 'string') continue
+      out.push({
+        tool_use_id: b.tool_use_id,
+        content: b.content,
+        is_error: b.is_error === true,
+      })
     }
   }
   return out
@@ -166,26 +180,66 @@ function formatDuration(ms: number): string {
   return s < 10 ? `${s.toFixed(2)}s` : `${Math.round(s)}s`
 }
 
-// JSON-ify a value safely — the tool output can be a string (already
-// JSON-stringified by the SDK), a plain object, or an array. We try to
-// parse-then-pretty so the user sees indented JSON when possible, and
-// fall back to the raw string if it's not valid JSON (e.g. plain text).
+// Per-trace output character cap for the UI. 100K chars covers essentially
+// all realistic tool outputs while preventing a runaway KQL response from
+// pushing component state into multi-MB territory. Orthogonal to the
+// server-side 50K-token cap in context-manager.ts which bounds what goes
+// back to the model; this one only bounds what we render.
+const TRACE_CHAR_CAP = 100_000
+
+// Cheap check: does a string look like JSON? We only try to JSON.parse
+// when the first non-whitespace char is plausibly the start of a JSON
+// token. Prevents safeStringify from double-parsing plain-text outputs
+// (e.g. "3.14159e+2" → "314.159") that happen to be JSON-parseable.
+function looksLikeJson(s: string): boolean {
+  for (let i = 0; i < s.length; i++) {
+    const c = s[i]
+    if (c === ' ' || c === '\t' || c === '\n' || c === '\r') continue
+    return (
+      c === '{' ||
+      c === '[' ||
+      c === '"' ||
+      c === '-' ||
+      (c >= '0' && c <= '9') ||
+      c === 't' ||
+      c === 'f' ||
+      c === 'n'
+    )
+  }
+  return false
+}
+
+// JSON-ify a tool-trace value for display. Handles: pre-stringified JSON
+// (pretty-prints it), plain strings (passes through), plain objects
+// (pretty-prints). Caps the result to TRACE_CHAR_CAP so one huge payload
+// can't blow up client memory.
 function safeStringify(value: unknown): string {
+  let out: string
   if (typeof value === 'string') {
-    // Opportunistically pretty-print — tool outputs are often JSON
-    // strings that would otherwise render as an unreadable single line.
+    if (looksLikeJson(value)) {
+      try {
+        const parsed: unknown = JSON.parse(value)
+        out = JSON.stringify(parsed, null, 2)
+      } catch {
+        out = value
+      }
+    } else {
+      out = value
+    }
+  } else {
     try {
-      const parsed: unknown = JSON.parse(value)
-      return JSON.stringify(parsed, null, 2)
+      out = JSON.stringify(value, null, 2)
     } catch {
-      return value
+      out = String(value)
     }
   }
-  try {
-    return JSON.stringify(value, null, 2)
-  } catch {
-    return String(value)
+  if (out.length > TRACE_CHAR_CAP) {
+    return (
+      out.slice(0, TRACE_CHAR_CAP) +
+      `\n\n… (output truncated — ${out.length - TRACE_CHAR_CAP} chars omitted)`
+    )
   }
+  return out
 }
 
 // Scroll the tail-anchor element into view. Honors `prefers-reduced-motion`
@@ -1244,35 +1298,79 @@ export function ChatInterface({
                           aria-labelledby={`tools-label-${msg.id}`}
                           className={styles.toolTraceList}
                         >
-                          {msg.toolTraces.map((trace, i) => (
-                            <li key={`${i}-${trace.name}`} className={styles.toolTraceItem}>
-                              <details className={styles.toolTrace}>
-                                <summary className={styles.toolTraceSummary}>
-                                  <span className={styles.toolTraceSummaryName}>
-                                    {trace.name}
-                                  </span>
-                                  {typeof trace.durationMs === 'number' && (
-                                    <span className={styles.toolTraceDuration}>
-                                      {formatDuration(trace.durationMs)}
+                          {msg.toolTraces.map((trace, i) => {
+                            // Compose a robust aria-label that always carries
+                            // the failure state, even under AT verbosity
+                            // settings that skip the badge span.
+                            const summaryLabel = [
+                              trace.name,
+                              typeof trace.durationMs === 'number'
+                                ? formatDuration(trace.durationMs)
+                                : null,
+                              trace.isError ? 'failed' : null,
+                            ]
+                              .filter(Boolean)
+                              .join(', ')
+                            return (
+                              <li
+                                key={`${i}-${trace.name}`}
+                                className={styles.toolTraceItem}
+                              >
+                                <details className={styles.toolTrace}>
+                                  <summary
+                                    className={styles.toolTraceSummary}
+                                    aria-label={summaryLabel}
+                                  >
+                                    <span className={styles.toolTraceSummaryName}>
+                                      {trace.name}
                                     </span>
-                                  )}
-                                  {trace.isError && (
-                                    <span className={styles.toolTraceErrorBadge}>error</span>
-                                  )}
-                                </summary>
-                                <div className={styles.toolTraceBody}>
-                                  <div className={styles.toolTraceKey}>Input</div>
-                                  <pre className={styles.toolTracePre}>
-                                    {safeStringify(trace.input)}
-                                  </pre>
-                                  <div className={styles.toolTraceKey}>Output</div>
-                                  <pre className={styles.toolTracePre}>
-                                    {safeStringify(trace.output)}
-                                  </pre>
-                                </div>
-                              </details>
-                            </li>
-                          ))}
+                                    {typeof trace.durationMs === 'number' && (
+                                      <span
+                                        className={styles.toolTraceDuration}
+                                        aria-hidden="true"
+                                      >
+                                        {formatDuration(trace.durationMs)}
+                                      </span>
+                                    )}
+                                    {trace.isError && (
+                                      <span
+                                        className={styles.toolTraceErrorBadge}
+                                        aria-hidden="true"
+                                      >
+                                        error
+                                      </span>
+                                    )}
+                                  </summary>
+                                  {/* aria-live="off" scopes this subtree
+                                      out of the ancestor role="log"
+                                      aria-live="polite" region so expanding
+                                      a trace doesn't trigger an SR deluge
+                                      of the entire JSON body. */}
+                                  <div
+                                    className={styles.toolTraceBody}
+                                    aria-live="off"
+                                  >
+                                    <div className={styles.toolTraceKey}>Input</div>
+                                    <pre
+                                      className={styles.toolTracePre}
+                                      tabIndex={0}
+                                      aria-label={`${trace.name} input`}
+                                    >
+                                      {safeStringify(trace.input)}
+                                    </pre>
+                                    <div className={styles.toolTraceKey}>Output</div>
+                                    <pre
+                                      className={styles.toolTracePre}
+                                      tabIndex={0}
+                                      aria-label={`${trace.name} output`}
+                                    >
+                                      {safeStringify(trace.output)}
+                                    </pre>
+                                  </div>
+                                </details>
+                              </li>
+                            )
+                          })}
                         </ul>
                       </div>
                     ) : msg.toolsUsed && msg.toolsUsed.length > 0 ? (

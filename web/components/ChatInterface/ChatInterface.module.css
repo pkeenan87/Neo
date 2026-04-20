@@ -1305,9 +1305,9 @@
 }
 
 .toolTrace {
-  border: 1px solid #e2e8f0;
+  border: 1px solid theme('colors.border.default');
   border-radius: 0.375rem;
-  background: #f8fafc;
+  background: theme('colors.surface.default');
   overflow: hidden;
 }
 
@@ -1317,6 +1317,10 @@
 }
 
 .toolTraceSummary {
+  /* `list-style: none` suppresses the Firefox summary::marker triangle;
+     the ::-webkit-details-marker rule below does the same for Blink/
+     WebKit. The ▸ ::before pseudo-element replaces both with a single
+     custom disclosure cue that rotates on [open]. */
   list-style: none;
   display: flex;
   align-items: center;
@@ -1327,8 +1331,19 @@
   user-select: none;
 }
 
-/* Hide default triangle in Chrome/Safari; we keep the native disclosure
-   cue in the summary text itself via [open] styling. */
+.toolTraceSummary:focus-visible {
+  outline: 2px solid theme('colors.brand.700');
+  outline-offset: -2px;
+  border-radius: 0.25rem;
+}
+
+:global(html.dark) .toolTraceSummary:focus-visible {
+  outline-color: theme('colors.accent.400');
+}
+
+/* Paired with `list-style: none` above — together they suppress the
+   browser-native disclosure triangle across Firefox, Chrome, and Safari
+   so the ▸ pseudo-element below is the sole visual cue. */
 .toolTraceSummary::-webkit-details-marker {
   display: none;
 }
@@ -1338,7 +1353,7 @@
   display: inline-block;
   width: 0.75rem;
   text-align: center;
-  color: #94a3b8;
+  color: theme('colors.brand.400');
   transition: transform 120ms ease;
 }
 
@@ -1354,7 +1369,7 @@
 
 .toolTraceSummaryName {
   @apply font-mono;
-  color: #334155;
+  color: theme('colors.brand.700');
   flex: 1;
   min-width: 0;
   overflow: hidden;
@@ -1369,10 +1384,10 @@
 .toolTraceDuration {
   @apply font-mono;
   font-size: 0.625rem;
-  color: #94a3b8;
+  color: theme('colors.brand.400');
   padding: 0.0625rem 0.375rem;
   border-radius: 0.25rem;
-  background: #e2e8f0;
+  background: theme('colors.border.default');
 }
 
 :global(html.dark) .toolTraceDuration {
@@ -1390,8 +1405,8 @@
 
 .toolTraceBody {
   padding: 0.5rem;
-  border-top: 1px solid #e2e8f0;
-  background: #fff;
+  border-top: 1px solid theme('colors.border.default');
+  background: theme('colors.surface.raised');
   display: flex;
   flex-direction: column;
   gap: 0.375rem;
@@ -1407,7 +1422,7 @@
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.05em;
-  color: #64748b;
+  color: theme('colors.brand.500');
 }
 
 :global(html.dark) .toolTraceKey {
@@ -1420,8 +1435,8 @@
   padding: 0.5rem;
   font-size: 0.6875rem;
   line-height: 1.45;
-  background: #f1f5f9;
-  color: #0f172a;
+  background: theme('colors.surface.sunken');
+  color: theme('colors.brand.900');
   border-radius: 0.25rem;
   overflow-x: auto;
   white-space: pre;
@@ -1432,6 +1447,15 @@
 :global(html.dark) .toolTracePre {
   background: rgba(0, 0, 0, 0.25);
   color: #dbdee1;
+}
+
+.toolTracePre:focus-visible {
+  outline: 2px solid theme('colors.brand.700');
+  outline-offset: -2px;
+}
+
+:global(html.dark) .toolTracePre:focus-visible {
+  outline-color: theme('colors.accent.400');
 }
 
 /* ─────────────────────────────────────────────────────────────
