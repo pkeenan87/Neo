@@ -370,6 +370,12 @@
   flex: 1;
   overflow-y: auto;
   overflow-x: hidden; /* prevent wide code blocks / tables from causing page-level horizontal scroll */
+  /* Reserve the scrollbar track width whether a scrollbar is drawn or
+     not. Without this, the AnimatePresence mount/unmount of the
+     "thinking" indicator pushes content height across the overflow
+     threshold and the browser flickers the scrollbar in and out.
+     See _plans/blinking-scrollbar-fix.md. */
+  scrollbar-gutter: stable;
   padding: 1rem;
   z-index: 10;
 }

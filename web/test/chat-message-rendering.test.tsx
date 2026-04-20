@@ -1,5 +1,8 @@
 import { describe, it, expect, afterEach } from 'vitest'
 import { render, screen, cleanup } from '@testing-library/react'
+import { readFileSync } from 'node:fs'
+import { resolve, dirname } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { MarkdownRenderer } from '../components/MarkdownRenderer/MarkdownRenderer'
 
 describe('MarkdownRenderer — heading scale', () => {
@@ -64,5 +67,35 @@ describe('MarkdownRenderer — code block scroll wrapper', () => {
     const pre = container.querySelector('pre')
     expect(pre).toBeTruthy()
     expect(pre!.getAttribute('role')).toBeNull()
+  })
+})
+
+describe('messages area — scrollbar gutter', () => {
+  // Regression guard for the "blinking scrollbar during agent thinking" fix.
+  // If this assertion ever fails, the scrollbar flicker is back.
+  // jsdom doesn't fully compute styles for CSS-module class names, so we
+  // verify the rule exists by reading the source file directly.
+  it('.messagesArea declares scrollbar-gutter: stable', () => {
+    // Use fileURLToPath(import.meta.url) for ESM safety — vitest injects
+    // __dirname for CJS compatibility today but the explicit form is
+    // portable to strict-ESM runners too.
+    const thisDir = dirname(fileURLToPath(import.meta.url))
+    const cssPath = resolve(
+      thisDir,
+      '../components/ChatInterface/ChatInterface.module.css',
+    )
+    const css = readFileSync(cssPath, 'utf-8')
+
+    // Extract the .messagesArea block — from the selector line to the
+    // first closing brace. Non-greedy to stop at the FIRST `}` after
+    // the selector so nested-or-adjacent rules aren't captured.
+    const match = /\.messagesArea\s*\{([\s\S]*?)\}/.exec(css)
+    // Use an explicit guard (not `expect(...).toBeTruthy()`) so a missing
+    // rule surfaces a descriptive error rather than crashing with
+    // "Cannot read properties of null" on the assertion below.
+    if (!match) {
+      throw new Error('.messagesArea rule should exist in ChatInterface.module.css')
+    }
+    expect(match[1]).toMatch(/scrollbar-gutter\s*:\s*stable/)
   })
 })
