@@ -282,6 +282,12 @@ export function ChatInterface({
   const [slashSkills, setSlashSkills] = useState<Array<{ id: string; name: string; description: string; parameters: string[] }>>([])
   const slashFetchedRef = useRef(false)
   const messagesEndRef = useRef<HTMLDivElement>(null)
+  const messagesAreaRef = useRef<HTMLDivElement>(null)
+  // Sticky-scroll gate: true while the user's viewport is pinned near the
+  // bottom of the messages list. A scroll listener on .messagesArea keeps
+  // this in sync. We read it before every auto-scroll so we don't yank
+  // users back to the bottom when they've scrolled up to re-read history.
+  const stickToBottomRef = useRef(true)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const editInputRef = useRef<HTMLInputElement>(null)
   const confirmBtnRef = useRef<HTMLButtonElement>(null)
@@ -302,9 +308,38 @@ export function ChatInterface({
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [initialConversation])
 
+  // Track whether the user is pinned near the bottom. Done via a scroll
+  // listener (rather than computing inside the auto-scroll effect below)
+  // because by the time that effect runs, scrollHeight has already grown
+  // with the new content — a post-update near-bottom check would read
+  // false for a user who was actually pinned at the bottom.
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
-  }, [messages])
+    const el = messagesAreaRef.current
+    if (!el) return
+    const onScroll = () => {
+      const distance = el.scrollHeight - el.scrollTop - el.clientHeight
+      stickToBottomRef.current = distance < 100
+    }
+    el.addEventListener('scroll', onScroll, { passive: true })
+    return () => el.removeEventListener('scroll', onScroll)
+  }, [])
+
+  useEffect(() => {
+    // Also re-run on thinking/tool transitions: the AnimatePresence
+    // indicator mounts BELOW the last message after the 'thinking' event
+    // arrives, which is after the messages-array scroll has already
+    // landed on the user's message. Without this follow-up, the indicator
+    // sits below the viewport and looks hidden behind the input.
+    //
+    // Sticky-scroll gate: only auto-scroll if the user was near the bottom
+    // before this update, OR if the last message is from the user (they
+    // just sent it and expect to see it). This preserves reading position
+    // when the user has scrolled up to review history mid-stream.
+    const lastIsUser = messages[messages.length - 1]?.role === 'user'
+    if (stickToBottomRef.current || lastIsUser) {
+      messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
+    }
+  }, [messages, isThinking, currentToolName])
 
   useEffect(() => {
     const el = textareaRef.current
@@ -965,6 +1000,7 @@ export function ChatInterface({
 
         {/* Messages */}
         <div
+          ref={messagesAreaRef}
           className={`${styles.messagesArea} custom-scrollbar`}
           role="log"
           aria-live="polite"
