@@ -28,6 +28,7 @@ const config: Config = {
         accent: {
           400: '#4cba6e', // hover state
           500: '#3ba55d', // primary interactive color in dark mode
+          600: '#15693a', // darker shade — used for icon/text over light success tints to clear WCAG AA 4.5:1
         },
         surface: {
           default: '#f8fafc', // page background
