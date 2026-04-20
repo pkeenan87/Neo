@@ -121,33 +121,9 @@
   background: rgba(0, 0, 0, 0.2);
 }
 
-.copyButton {
-  font-size: 0.6875rem;
-  padding: 0.125rem 0.5rem;
-  border-radius: 0.25rem;
-  border: 1px solid #e2e8f0;
-  background: #fff;
-  color: #64748b;
-  cursor: pointer;
-  font-family: inherit;
-  transition: all 150ms;
-}
-
-.copyButton:hover {
-  background: #f1f5f9;
-  color: #0f172a;
-}
-
-:global(html.dark) .copyButton {
-  border-color: rgba(255, 255, 255, 0.10);
-  background: rgba(255, 255, 255, 0.06);
-  color: #b9bbbe;
-}
-
-:global(html.dark) .copyButton:hover {
-  background: rgba(255, 255, 255, 0.10);
-  color: #dbdee1;
-}
+/* The .copyButton styles previously here now live in
+   components/CopyButton/CopyButton.module.css, since the button is
+   shared between the code-block header and the MessageActions toolbar. */
 
 .codeBlock {
   margin: 0;

@@ -1,10 +1,11 @@
 'use client'
 
-import { useState, useCallback, type ReactNode } from 'react'
+import { type ReactNode } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import rehypeSanitize from 'rehype-sanitize'
 import type { Components } from 'react-markdown'
+import { CopyButton } from '@/components'
 import styles from './MarkdownRenderer.module.css'
 
 export interface MarkdownRendererProps {
@@ -14,31 +15,6 @@ export interface MarkdownRendererProps {
 
 function normalizeText(text: string): string {
   return text.replace(/\r\n/g, '\n').replace(/\r/g, '\n')
-}
-
-function CopyButton({ text }: { text: string }) {
-  const [copied, setCopied] = useState(false)
-
-  const handleCopy = useCallback(async () => {
-    try {
-      await navigator.clipboard.writeText(text)
-      setCopied(true)
-      setTimeout(() => setCopied(false), 2000)
-    } catch {
-      // Fallback for environments without clipboard API
-    }
-  }, [text])
-
-  return (
-    <button
-      type="button"
-      onClick={handleCopy}
-      className={styles.copyButton}
-      aria-label="Copy code to clipboard"
-    >
-      {copied ? 'Copied!' : 'Copy'}
-    </button>
-  )
 }
 
 const components: Components = {
@@ -86,7 +62,12 @@ const components: Components = {
     return (
       <div className={styles.codeBlockWrapper}>
         <div className={styles.codeBlockHeader}>
-          <CopyButton text={codeText} />
+          <CopyButton
+            text={codeText}
+            variant="text"
+            size="sm"
+            label="Copy code to clipboard"
+          />
         </div>
         {/* tabIndex enables keyboard horizontal scrolling. role="region"
             is deliberately omitted here — ARIA-in-HTML disallows it on

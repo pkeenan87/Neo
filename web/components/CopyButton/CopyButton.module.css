@@ -1,0 +1,112 @@
+@reference "../../app/globals.css";
+
+/* ─── Base button ───
+   Icon-or-text copy button used by the MessageActions toolbar and the
+   MarkdownRenderer code-block header. Keeps a minimum 32×32 hit target
+   for touch friendliness regardless of variant. */
+.button {
+  @apply inline-flex items-center justify-center font-body transition-colors;
+  border: 1px solid theme('colors.border.default');
+  background: theme('colors.surface.raised');
+  color: theme('colors.brand.600');
+  border-radius: 0.375rem;
+  cursor: pointer;
+  /* 32×32 minimum hit target */
+  min-width: 2rem;
+  min-height: 2rem;
+}
+
+.button:hover {
+  background: theme('colors.brand.50');
+  color: theme('colors.brand.900');
+}
+
+.button:focus-visible {
+  outline: 2px solid theme('colors.brand.700');
+  outline-offset: 2px;
+}
+
+:global(html.dark) .button {
+  border-color: rgb(255 255 255 / 0.10);
+  background: rgb(255 255 255 / 0.06);
+  color: theme('colors.brand.300');
+}
+
+:global(html.dark) .button:hover {
+  background: rgb(255 255 255 / 0.10);
+  color: theme('colors.brand.200');
+}
+
+:global(html.dark) .button:focus-visible {
+  outline-color: theme('colors.accent.400');
+}
+
+/* ─── Size variants ─── */
+.sm {
+  padding: 0.25rem 0.5rem;
+  font-size: 0.6875rem;
+}
+
+.md {
+  padding: 0.375rem 0.75rem;
+  font-size: 0.8125rem;
+}
+
+/* ─── Variant: icon vs text ─── */
+.icon {
+  /* Icon-only buttons are square — override min-width so padding
+     keeps them compact. */
+  gap: 0;
+}
+
+.text {
+  gap: 0.375rem;
+  min-width: auto;
+}
+
+/* ─── State: copied ───
+   Success tint. Uses a low-alpha accent background in both modes and
+   accent-600 for the icon/text color so the indicator clears WCAG AA
+   4.5:1 contrast on the light surface (accent-500 was ~3.6:1). */
+.button.copied {
+  background: rgb(59 165 93 / 0.12);
+  color: theme('colors.accent.600');
+  border-color: rgb(59 165 93 / 0.35);
+}
+
+:global(html.dark) .button.copied {
+  background: rgb(76 186 110 / 0.14);
+  color: theme('colors.accent.400');
+  border-color: rgb(76 186 110 / 0.35);
+}
+
+/* ─── Visually-hidden live region ───
+   Carries the transient "Copied to clipboard" / "Copy failed" announcement
+   via an aria-live span. Standard sr-only recipe (Bootstrap / Tailwind): a
+   1×1 clipped box that's painted off-screen but still part of the a11y tree. */
+.srOnly {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* ─── State: failed ───
+   Warning tint pulled from the design token scale. Keeps readable
+   contrast on both light and dark surfaces. */
+.button.failed {
+  background: theme('colors.warning.50');
+  color: theme('colors.warning.500');
+  border-color: rgb(245 158 11 / 0.35);
+}
+
+:global(html.dark) .button.failed {
+  background: rgb(245 158 11 / 0.12);
+  color: theme('colors.warning.500');
+  border-color: rgb(245 158 11 / 0.35);
+}
