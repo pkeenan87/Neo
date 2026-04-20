@@ -96,6 +96,19 @@ function isStreamEvent(e: unknown): e is StreamEvent {
   return typeof e === 'object' && e !== null && typeof (e as StreamEvent).type === 'string'
 }
 
+// Scroll the tail-anchor element into view. Honors `prefers-reduced-motion`
+// — users who opt out of motion at the OS level get an instant jump rather
+// than a smooth animation. Shared by both the messages-change scroll and
+// the indicator-first-mount scroll so there's one source of truth for the
+// scroll behavior.
+function scrollToEnd(anchor: HTMLElement | null) {
+  if (!anchor) return
+  const prefersReducedMotion =
+    typeof window !== 'undefined' &&
+    window.matchMedia('(prefers-reduced-motion: reduce)').matches
+  anchor.scrollIntoView({ behavior: prefersReducedMotion ? 'instant' : 'smooth' })
+}
+
 // ─────────────────────────────────────────────────────────────
 //  Props & constants
 // ─────────────────────────────────────────────────────────────
@@ -282,6 +295,11 @@ export function ChatInterface({
   const [slashSkills, setSlashSkills] = useState<Array<{ id: string; name: string; description: string; parameters: string[] }>>([])
   const slashFetchedRef = useRef(false)
   const messagesEndRef = useRef<HTMLDivElement>(null)
+  // Tracks whether the thinking/tool indicator was visible on the previous
+  // render, so we can detect its *initial* mount and scroll it into view
+  // only on that transition — not on every tool_call swap mid-stream,
+  // which otherwise keeps macOS overlay scrollbars visible.
+  const prevIndicatorVisibleRef = useRef(false)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const editInputRef = useRef<HTMLInputElement>(null)
   const confirmBtnRef = useRef<HTMLButtonElement>(null)
@@ -303,8 +321,28 @@ export function ChatInterface({
   }, [initialConversation])
 
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
+    scrollToEnd(messagesEndRef.current)
   }, [messages])
+
+  useEffect(() => {
+    // The AnimatePresence thinking/tool indicator appears after the last
+    // message. The messages-change scroll above fires BEFORE the indicator
+    // mounts, so the indicator can end up below the viewport. Scroll the
+    // tail anchor (messagesEndRef) into view on the first appearance only
+    // — rapid tool_call swaps mid-stream should not re-scroll, since
+    // continuous scroll activity keeps overlay scrollbars visible.
+    const indicatorVisible = isThinking || currentToolName !== null
+    if (indicatorVisible && !prevIndicatorVisibleRef.current) {
+      scrollToEnd(messagesEndRef.current)
+    }
+    prevIndicatorVisibleRef.current = indicatorVisible
+    // Reset on unmount so React StrictMode's mount → unmount → remount
+    // cycle starts the gate from a clean `false` rather than letting the
+    // ref-reinitialization make the first indicator mount scroll twice.
+    return () => {
+      prevIndicatorVisibleRef.current = false
+    }
+  }, [isThinking, currentToolName])
 
   useEffect(() => {
     const el = textareaRef.current
