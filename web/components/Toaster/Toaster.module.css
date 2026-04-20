@@ -1,0 +1,172 @@
+@reference "../../app/globals.css";
+
+/* ─── Portal container ───
+   Fixed to the bottom-right on desktop, stretched to bottom-center on
+   mobile. Pointer events are pass-through on the container itself so the
+   app under it stays usable; individual toasts re-enable pointer events. */
+.container {
+  position: fixed;
+  bottom: 1.5rem;
+  right: 1.5rem;
+  z-index: 100;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  pointer-events: none;
+  max-width: calc(100vw - 3rem);
+}
+
+@media (max-width: 767px) {
+  .container {
+    bottom: 1rem;
+    right: 1rem;
+    left: 1rem;
+    max-width: none;
+  }
+}
+
+/* ─── Toast card ─── */
+.toast {
+  @apply font-body;
+  display: flex;
+  align-items: flex-start;
+  gap: 0.75rem;
+  padding: 0.75rem 1rem;
+  min-width: 18rem;
+  max-width: 26rem;
+  border-radius: 0.5rem;
+  border: 1px solid theme('colors.border.default');
+  background: theme('colors.surface.raised');
+  color: theme('colors.brand.900');
+  box-shadow: 0 8px 20px rgba(15, 23, 42, 0.10), 0 2px 6px rgba(15, 23, 42, 0.06);
+  pointer-events: auto;
+}
+
+:global(html.dark) .toast {
+  border-color: rgba(255, 255, 255, 0.10);
+  background: #2b2d31;
+  color: #dbdee1;
+  box-shadow: 0 8px 20px rgba(0, 0, 0, 0.35), 0 2px 6px rgba(0, 0, 0, 0.25);
+}
+
+.icon {
+  width: 20px;
+  height: 20px;
+  flex-shrink: 0;
+  margin-top: 0.125rem;
+}
+
+.body {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.125rem;
+}
+
+.title {
+  font-size: 0.875rem;
+  font-weight: 600;
+  line-height: 1.35;
+}
+
+.description {
+  font-size: 0.8125rem;
+  line-height: 1.4;
+  color: theme('colors.brand.500');
+}
+
+:global(html.dark) .description {
+  color: #b9bbbe;
+}
+
+/* ─── Dismiss button ─── */
+.dismissBtn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0.25rem;
+  border: none;
+  background: transparent;
+  color: theme('colors.brand.500');
+  border-radius: 0.25rem;
+  cursor: pointer;
+  transition: background-color 120ms;
+  flex-shrink: 0;
+  margin-top: -0.125rem;
+  margin-right: -0.25rem;
+}
+
+.dismissBtn:hover {
+  background: theme('colors.brand.50');
+  color: theme('colors.brand.900');
+}
+
+:global(html.dark) .dismissBtn {
+  color: #b9bbbe;
+}
+
+:global(html.dark) .dismissBtn:hover {
+  background: rgba(255, 255, 255, 0.08);
+  color: #fff;
+}
+
+.dismissBtn:focus-visible {
+  outline: 2px solid theme('colors.brand.700');
+  outline-offset: 2px;
+}
+
+:global(html.dark) .dismissBtn:focus-visible {
+  outline-color: theme('colors.accent.400');
+}
+
+/* ─── Per-intent accent stripe + icon color ───
+   Uses a left border as a low-chrome intent cue so the toast card stays
+   calm in both themes. Icon pulls the same semantic color. */
+.success {
+  border-left: 3px solid theme('colors.accent.600');
+}
+
+.success .icon {
+  color: theme('colors.accent.600');
+}
+
+:global(html.dark) .success {
+  border-left-color: theme('colors.accent.400');
+}
+
+:global(html.dark) .success .icon {
+  color: theme('colors.accent.400');
+}
+
+.error {
+  border-left: 3px solid theme('colors.error.500');
+}
+
+.error .icon {
+  color: theme('colors.error.500');
+}
+
+.warning {
+  border-left: 3px solid theme('colors.warning.500');
+}
+
+.warning .icon {
+  color: theme('colors.warning.500');
+}
+
+.info {
+  border-left: 3px solid theme('colors.brand.500');
+}
+
+.info .icon {
+  color: theme('colors.brand.500');
+}
+
+:global(html.dark) .info {
+  border-left-color: theme('colors.brand.300');
+}
+
+:global(html.dark) .info .icon {
+  color: theme('colors.brand.300');
+}

@@ -1,9 +1,17 @@
 import { describe, it, expect, afterEach } from 'vitest'
-import { render, screen, cleanup } from '@testing-library/react'
+import { render as rtlRender, screen, cleanup } from '@testing-library/react'
+import type { ReactElement } from 'react'
 import { readFileSync } from 'node:fs'
 import { resolve, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { MarkdownRenderer } from '../components/MarkdownRenderer/MarkdownRenderer'
+import { ToastProvider } from '../context/ToastContext'
+
+// MarkdownRenderer includes CopyButton in each code-block header; CopyButton
+// now calls useToast(), so tests must wrap in ToastProvider.
+function render(ui: ReactElement) {
+  return rtlRender(<ToastProvider>{ui}</ToastProvider>)
+}
 
 describe('MarkdownRenderer — heading scale', () => {
   afterEach(() => cleanup())

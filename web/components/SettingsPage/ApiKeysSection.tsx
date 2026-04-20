@@ -1,11 +1,10 @@
 'use client'
 
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { Copy, Check, X } from 'lucide-react'
+import { Copy, Check } from 'lucide-react'
 import type { ApiKeyRecordPublic } from '@/lib/api-key-store'
+import { useToast } from '@/context/ToastContext'
 import styles from './SettingsPage.module.css'
-
-type FeedbackState = { type: 'idle' } | { type: 'success'; message: string } | { type: 'error'; message: string }
 
 function formatDate(iso: string | null): string {
   if (!iso) return '—'
@@ -31,7 +30,7 @@ const STATUS_LABELS: Record<string, string> = {
 export function ApiKeysSection() {
   const [keys, setKeys] = useState<ApiKeyRecordPublic[]>([])
   const [loading, setLoading] = useState(true)
-  const [feedback, setFeedback] = useState<FeedbackState>({ type: 'idle' })
+  const { toast } = useToast()
 
   // Create form state
   const [label, setLabel] = useState('')
@@ -83,7 +82,6 @@ export function ApiKeysSection() {
 
   const handleCreate = async () => {
     setCreating(true)
-    setFeedback({ type: 'idle' })
 
     try {
       const res = await fetch('/api/api-keys', {
@@ -99,7 +97,7 @@ export function ApiKeysSection() {
       const data = await res.json()
 
       if (!res.ok) {
-        setFeedback({ type: 'error', message: data.error ?? 'Failed to create key.' })
+        toast({ intent: 'error', title: 'Failed to create key', description: data.error })
       } else {
         setNewKey(data.rawKey)
         setLabel('')
@@ -107,7 +105,7 @@ export function ApiKeysSection() {
         void fetchKeys()
       }
     } catch {
-      setFeedback({ type: 'error', message: 'Network error.' })
+      toast({ intent: 'error', title: 'Network error' })
     } finally {
       setCreating(false)
     }
@@ -119,14 +117,14 @@ export function ApiKeysSection() {
     try {
       const res = await fetch(`/api/api-keys/${id}`, { method: 'DELETE' })
       if (res.ok) {
-        setFeedback({ type: 'success', message: 'Key revoked.' })
+        toast({ intent: 'success', title: 'Key revoked' })
         void fetchKeys()
       } else {
         const data = await res.json()
-        setFeedback({ type: 'error', message: data.error ?? 'Failed to revoke.' })
+        toast({ intent: 'error', title: 'Failed to revoke key', description: data.error })
       }
     } catch {
-      setFeedback({ type: 'error', message: 'Network error.' })
+      toast({ intent: 'error', title: 'Network error' })
     }
   }
 
@@ -209,15 +207,9 @@ export function ApiKeysSection() {
         </button>
       </form>
 
-      {/* Feedback */}
+      {/* In-flight hint for the create action (success/error go to toasts) */}
       <div role="status" aria-live="polite" aria-atomic="true">
         {creating && <span className={styles.keyFieldHintText}>Creating key, please wait...</span>}
-        {feedback.type !== 'idle' && (
-          <div className={feedback.type === 'success' ? styles.keyFeedbackSuccess : styles.keyFeedbackError}>
-            {feedback.type === 'success' ? <Check size={14} aria-hidden="true" /> : <X size={14} aria-hidden="true" />}
-            {feedback.message}
-          </div>
-        )}
       </div>
 
       {/* Keys table */}

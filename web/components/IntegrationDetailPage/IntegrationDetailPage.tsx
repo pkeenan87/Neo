@@ -3,8 +3,9 @@
 import { useState } from 'react'
 import Link from 'next/link'
 import Image from 'next/image'
-import { ArrowLeft, Shield, ShieldAlert, Users, Info, Check, X } from 'lucide-react'
+import { ArrowLeft, Shield, ShieldAlert, Users, Info } from 'lucide-react'
 import type { IntegrationInfo } from '@/lib/types'
+import { useToast } from '@/context/ToastContext'
 import styles from './IntegrationDetailPage.module.css'
 
 const ICONS: Record<string, React.ComponentType<{ size?: number }>> = {
@@ -19,8 +20,6 @@ export interface IntegrationDetailPageProps {
   className?: string
 }
 
-type FeedbackState = { type: 'idle' } | { type: 'success'; message: string } | { type: 'error'; message: string }
-
 export function IntegrationDetailPage({
   integration,
   secretStatuses,
@@ -29,8 +28,7 @@ export function IntegrationDetailPage({
   const [values, setValues] = useState<Record<string, string>>({})
   const [saving, setSaving] = useState(false)
   const [testing, setTesting] = useState(false)
-  const [feedback, setFeedback] = useState<FeedbackState>({ type: 'idle' })
-  const [testResult, setTestResult] = useState<FeedbackState>({ type: 'idle' })
+  const { toast } = useToast()
 
   const Icon = ICONS[integration.iconName]
 
@@ -40,7 +38,6 @@ export function IntegrationDetailPage({
 
   const handleSave = async () => {
     setSaving(true)
-    setFeedback({ type: 'idle' })
 
     try {
       const res = await fetch(`/api/integrations/${integration.slug}`, {
@@ -52,13 +49,17 @@ export function IntegrationDetailPage({
       const data = await res.json()
 
       if (!res.ok) {
-        setFeedback({ type: 'error', message: data.error ?? 'Failed to save' })
+        toast({ intent: 'error', title: 'Failed to save', description: data.error })
       } else {
-        setFeedback({ type: 'success', message: `Updated ${data.updated?.length ?? 0} secret(s).` })
+        toast({
+          intent: 'success',
+          title: 'Integration saved',
+          description: `Updated ${data.updated?.length ?? 0} secret(s).`,
+        })
         setValues({})
       }
     } catch {
-      setFeedback({ type: 'error', message: 'Network error. Check your connection.' })
+      toast({ intent: 'error', title: 'Network error', description: 'Check your connection.' })
     } finally {
       setSaving(false)
     }
@@ -66,7 +67,6 @@ export function IntegrationDetailPage({
 
   const handleTest = async () => {
     setTesting(true)
-    setTestResult({ type: 'idle' })
 
     try {
       const res = await fetch(`/api/integrations/${integration.slug}/test`, {
@@ -76,12 +76,16 @@ export function IntegrationDetailPage({
       const data = await res.json()
 
       if (data.success) {
-        setTestResult({ type: 'success', message: 'Connection successful.' })
+        toast({ intent: 'success', title: 'Connection successful' })
       } else {
-        setTestResult({ type: 'error', message: data.error ?? 'Connection failed.' })
+        toast({
+          intent: 'error',
+          title: 'Connection failed',
+          description: data.error,
+        })
       }
     } catch {
-      setTestResult({ type: 'error', message: 'Network error.' })
+      toast({ intent: 'error', title: 'Network error' })
     } finally {
       setTesting(false)
     }
@@ -166,15 +170,6 @@ export function IntegrationDetailPage({
           ))}
         </fieldset>
 
-        <div role="status" aria-live="polite" aria-atomic="true">
-          {feedback.type !== 'idle' && (
-            <div className={feedback.type === 'success' ? styles.feedbackSuccess : styles.feedbackError}>
-              {feedback.type === 'success' ? <Check size={16} aria-hidden="true" /> : <X size={16} aria-hidden="true" />}
-              {feedback.message}
-            </div>
-          )}
-        </div>
-
         <div className={styles.actions}>
           <button
             type="button"
@@ -192,15 +187,6 @@ export function IntegrationDetailPage({
           >
             {testing ? 'Testing...' : 'Test Connection'}
           </button>
-        </div>
-
-        <div role="status" aria-live="polite" aria-atomic="true">
-          {testResult.type !== 'idle' && (
-            <div className={testResult.type === 'success' ? styles.feedbackSuccess : styles.feedbackError}>
-              {testResult.type === 'success' ? <Check size={16} aria-hidden="true" /> : <X size={16} aria-hidden="true" />}
-              {testResult.message}
-            </div>
-          )}
         </div>
       </section>
     </div>

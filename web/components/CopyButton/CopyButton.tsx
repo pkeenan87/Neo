@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Copy, Check, AlertCircle } from 'lucide-react'
+import { useToast } from '@/context/ToastContext'
 import styles from './CopyButton.module.css'
 
 export type CopyButtonSize = 'sm' | 'md'
@@ -61,6 +62,7 @@ export function CopyButton({
 }: CopyButtonProps) {
   const [status, setStatus] = useState<Status>('idle')
   const revertTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const { toast } = useToast()
 
   // Clear any pending revert timer on unmount so a click → unmount mid-flight
   // doesn't produce a setState-on-unmounted-component warning.
@@ -99,7 +101,12 @@ export function CopyButton({
       ok = execCommandFallback(text)
     }
     schedule(ok ? 'copied' : 'failed')
-  }, [text, schedule])
+    toast(
+      ok
+        ? { intent: 'success', title: 'Copied to clipboard' }
+        : { intent: 'error', title: 'Copy failed' },
+    )
+  }, [text, schedule, toast])
 
   const iconSize = size === 'md' ? 20 : 16
   const renderIcon = () => {
@@ -125,34 +132,20 @@ export function CopyButton({
     .join(' ')
 
   // For variant="text", the visible "Copy"/"Copied!"/"Copy failed" text serves as
-  // the accessible name (WCAG 2.5.3 Label in Name). For variant="icon", we supply
-  // a static aria-label — the transient status ("Copied to clipboard" / "Copy failed")
-  // is announced via the sr-only aria-live region below, which avoids SR bugs
-  // where a changing aria-label on a focused element is not re-announced.
+  // the accessible name (WCAG 2.5.3 Label in Name). For variant="icon", a static
+  // aria-label describes the button; the transient status is announced globally
+  // via the Toaster (which renders a role="status"/role="alert" toast on each
+  // copy attempt) so we don't need a per-button live region here anymore.
   const iconAriaLabel = label ?? IDLE_LABEL_FALLBACK
-  const liveMessage =
-    status === 'copied'
-      ? 'Copied to clipboard'
-      : status === 'failed'
-      ? 'Copy failed'
-      : ''
 
-  // The aria-live span is rendered as a sibling of the button (not a child) so
-  // it doesn't leak into the button's textContent — and because a live region
-  // nested in a focusable control is a questionable ARIA pattern.
   return (
-    <>
-      <button
-        type="button"
-        onClick={handleCopy}
-        aria-label={variant === 'icon' ? iconAriaLabel : undefined}
-        className={classes}
-      >
-        {variant === 'icon' ? renderIcon() : renderText()}
-      </button>
-      <span role="status" aria-live="polite" className={styles.srOnly}>
-        {liveMessage}
-      </span>
-    </>
+    <button
+      type="button"
+      onClick={handleCopy}
+      aria-label={variant === 'icon' ? iconAriaLabel : undefined}
+      className={classes}
+    >
+      {variant === 'icon' ? renderIcon() : renderText()}
+    </button>
   )
 }

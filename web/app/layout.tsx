@@ -3,6 +3,8 @@ import { headers } from 'next/headers'
 import { JetBrains_Mono, Inter } from 'next/font/google'
 import { Agentation } from 'agentation'
 import { ThemeProvider } from '@/context/ThemeContext'
+import { ToastProvider } from '@/context/ToastContext'
+import { Toaster } from '@/components'
 import './globals.css'
 
 // Dual-font system (see _plans/gemini-ui-audit.md Phase 2):
@@ -59,7 +61,12 @@ export default async function RootLayout({
         <script nonce={nonce} suppressHydrationWarning dangerouslySetInnerHTML={{ __html: themeScript }} />
       </head>
       <body className="font-body">
-        <ThemeProvider>{children}</ThemeProvider>
+        <ThemeProvider>
+          <ToastProvider>
+            {children}
+            <Toaster />
+          </ToastProvider>
+        </ThemeProvider>
         {process.env.NODE_ENV === 'development' && <Agentation />}
       </body>
     </html>

@@ -80,21 +80,6 @@
   border-color: rgb(76 186 110 / 0.35);
 }
 
-/* ─── Visually-hidden live region ───
-   Carries the transient "Copied to clipboard" / "Copy failed" announcement
-   via an aria-live span. Standard sr-only recipe (Bootstrap / Tailwind): a
-   1×1 clipped box that's painted off-screen but still part of the a11y tree. */
-.srOnly {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  padding: 0;
-  margin: -1px;
-  overflow: hidden;
-  clip: rect(0, 0, 0, 0);
-  white-space: nowrap;
-  border: 0;
-}
 
 /* ─── State: failed ───
    Warning tint pulled from the design token scale. Keeps readable

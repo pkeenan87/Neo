@@ -2,6 +2,7 @@ import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest'
 import { render, cleanup } from '@testing-library/react'
 import React from 'react'
 import { MessageActions } from '../components/MessageActions'
+import { ToastProvider } from '../context/ToastContext'
 
 // The full ChatInterface component requires a lot of context (auth,
 // theme, conversation cache, framer-motion, next/image, etc.). For the
@@ -26,20 +27,23 @@ function Harness({
   messages: MiniMessage[]
   isLoading: boolean
 }) {
+  // ToastProvider wraps so the nested CopyButton's useToast() call resolves.
   return (
-    <div>
-      {messages.map((msg, idx) => (
-        <div key={idx} data-testid={`msg-${idx}`}>
-          <span>{msg.content}</span>
-          {msg.role === 'assistant' &&
-            msg.content &&
-            !msg.skillBadge &&
-            !(isLoading && idx === messages.length - 1) && (
-              <MessageActions content={msg.content} />
-            )}
-        </div>
-      ))}
-    </div>
+    <ToastProvider>
+      <div>
+        {messages.map((msg, idx) => (
+          <div key={idx} data-testid={`msg-${idx}`}>
+            <span>{msg.content}</span>
+            {msg.role === 'assistant' &&
+              msg.content &&
+              !msg.skillBadge &&
+              !(isLoading && idx === messages.length - 1) && (
+                <MessageActions content={msg.content} />
+              )}
+          </div>
+        ))}
+      </div>
+    </ToastProvider>
   )
 }
 
