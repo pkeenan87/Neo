@@ -1,0 +1,17 @@
+@reference "../../app/globals.css";
+
+/* ─── Message actions toolbar ───
+   Sits below a completed assistant message bubble, left-aligned with
+   the bubble's bottom edge. No background / border — the toolbar reads
+   as a subtle footer row, not a separate surface. */
+.toolbar {
+  @apply flex items-center gap-2;
+  margin-top: 0.5rem;
+}
+
+@media (max-width: 767px) {
+  .toolbar {
+    gap: 0.25rem;
+    margin-top: 0.375rem;
+  }
+}

@@ -25,7 +25,7 @@ import {
 import Link from 'next/link'
 import { useTheme } from '@/context/ThemeContext'
 import { useConversationCache } from '@/context/ConversationCacheContext'
-import { MarkdownRenderer, ThinkingBubble, UserAvatar, FileAttachmentBar } from '@/components'
+import { MarkdownRenderer, MessageActions, ThinkingBubble, UserAvatar, FileAttachmentBar } from '@/components'
 import { useFileUpload } from '@/hooks/useFileUpload'
 import styles from './ChatInterface.module.css'
 import type { Conversation, ConversationMeta, PendingTool } from '@/lib/types'
@@ -971,7 +971,7 @@ export function ChatInterface({
           aria-relevant="additions"
         >
           <div className={styles.messagesInner}>
-            {messages.map(msg => (
+            {messages.map((msg, idx) => (
               <motion.div
                 key={msg.id}
                 initial={{ opacity: 0, y: 10 }}
@@ -1043,6 +1043,16 @@ export function ChatInterface({
                       </div>
                     )}
                   </div>
+                  {/* Action toolbar under completed assistant messages only.
+                      Skip user messages, empty skill-badge placeholders, and
+                      any assistant message that's still streaming (which is
+                      always the last message while isLoading is true). */}
+                  {msg.role === 'assistant' &&
+                    msg.content &&
+                    !msg.skillBadge &&
+                    !(isLoading && idx === messages.length - 1) && (
+                      <MessageActions content={msg.content} />
+                    )}
                 </div>
               </motion.div>
             ))}
