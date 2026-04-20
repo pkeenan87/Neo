@@ -1003,7 +1003,7 @@ export function ChatInterface({
 
         {/* Messages */}
         <div
-          className={styles.messagesArea}
+          className={`${styles.messagesArea} custom-scrollbar`}
           role="log"
           aria-live="polite"
           aria-relevant="additions"
