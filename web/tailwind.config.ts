@@ -61,9 +61,11 @@ const config: Config = {
         },
       },
       fontFamily: {
-        // Single mono font across all roles per design-tokens.md
-        display: ['var(--font-mono)', 'ui-monospace', 'SFMono-Regular', 'monospace'],
-        body:    ['var(--font-mono)', 'ui-monospace', 'SFMono-Regular', 'monospace'],
+        // Dual-font system (see _plans/gemini-ui-audit.md Phase 2):
+        //   display + body → Inter (sans) for headings, UI text, markdown prose
+        //   mono → JetBrains Mono for code, IPs, hashes, tool names, KQL
+        display: ['var(--font-sans)', 'ui-sans-serif', 'system-ui', '-apple-system', 'Segoe UI', 'Roboto', 'sans-serif'],
+        body:    ['var(--font-sans)', 'ui-sans-serif', 'system-ui', '-apple-system', 'Segoe UI', 'Roboto', 'sans-serif'],
         mono:    ['var(--font-mono)', 'ui-monospace', 'SFMono-Regular', 'monospace'],
       },
       boxShadow: {

@@ -131,7 +131,7 @@
   overflow-x: auto;
   font-size: 0.8125rem;
   line-height: 1.5;
-  font-family: inherit;
+  @apply font-mono;
   background: transparent;
 }
 
@@ -145,7 +145,7 @@
 }
 
 .codeContent {
-  font-family: inherit;
+  @apply font-mono;
 }
 
 /* ─── Inline code ─── */
@@ -154,7 +154,7 @@
   padding: 0.125rem 0.375rem;
   border-radius: 0.25rem;
   font-size: 0.85em;
-  font-family: inherit;
+  @apply font-mono;
 }
 
 :global(html.dark) .inlineCode {

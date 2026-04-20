@@ -1,11 +1,20 @@
 import type { Metadata } from 'next'
 import { headers } from 'next/headers'
-import { JetBrains_Mono } from 'next/font/google'
+import { JetBrains_Mono, Inter } from 'next/font/google'
 import { Agentation } from 'agentation'
 import { ThemeProvider } from '@/context/ThemeContext'
 import './globals.css'
 
-// Single mono font across all roles per design-tokens.md
+// Dual-font system (see _plans/gemini-ui-audit.md Phase 2):
+//   --font-sans → Inter for UI, body copy, markdown prose
+//   --font-mono → JetBrains Mono for code, IPs, hashes, tool names
+const inter = Inter({
+  subsets: ['latin'],
+  variable: '--font-sans',
+  weight: ['400', '500', '600', '700'],
+  display: 'swap',
+})
+
 const jetbrainsMono = JetBrains_Mono({
   subsets: ['latin'],
   variable: '--font-mono',
@@ -40,12 +49,16 @@ export default async function RootLayout({
 
   return (
     // Light mode is default — ThemeContext adds .dark class when toggled
-    <html lang="en" className={jetbrainsMono.variable} suppressHydrationWarning>
+    <html
+      lang="en"
+      className={`${inter.variable} ${jetbrainsMono.variable}`}
+      suppressHydrationWarning
+    >
       <head>
         {/* suppressHydrationWarning: nonce differs between SSR and client */}
         <script nonce={nonce} suppressHydrationWarning dangerouslySetInnerHTML={{ __html: themeScript }} />
       </head>
-      <body className="font-mono">
+      <body className="font-body">
         <ThemeProvider>{children}</ThemeProvider>
         {process.env.NODE_ENV === 'development' && <Agentation />}
       </body>

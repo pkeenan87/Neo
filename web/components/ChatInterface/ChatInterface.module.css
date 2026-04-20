@@ -4,7 +4,7 @@
 .container {
   display: flex;
   height: 100dvh;
-  font-family: var(--font-mono), monospace;
+  @apply font-body;
   overflow: hidden;
   background-color: #f8fafc;
   color: #0f172a;

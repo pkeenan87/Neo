@@ -67,7 +67,7 @@
 }
 
 .toolName {
-  font-family: inherit;
+  @apply font-mono;
 }
 
 /* ── Form ──────────────────────────────────────────────────── */
