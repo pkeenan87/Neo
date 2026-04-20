@@ -3,7 +3,7 @@
 import { useState } from 'react'
 import Link from 'next/link'
 import Image from 'next/image'
-import { Shield, ShieldAlert, Users, Search, ArrowLeft } from 'lucide-react'
+import { Shield, ShieldAlert, Users, Search, ArrowLeft, SearchX } from 'lucide-react'
 import type { IntegrationInfo } from '@/lib/types'
 import styles from './IntegrationsPage.module.css'
 
@@ -112,9 +112,14 @@ export function IntegrationsPage({
         })}
       </div>
 
-      <p role="status" aria-live="polite" className={styles.emptyState}>
-        {filtered.length === 0 ? 'No integrations match your search.' : ''}
-      </p>
+      {filtered.length === 0 ? (
+        <div role="status" aria-live="polite" className={styles.emptyState}>
+          <SearchX className={styles.emptyStateIcon} aria-hidden="true" />
+          <p>No integrations match your search.</p>
+        </div>
+      ) : (
+        <p role="status" aria-live="polite" className={styles.srOnly} />
+      )}
     </div>
   )
 }

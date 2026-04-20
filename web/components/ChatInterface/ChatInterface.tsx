@@ -21,6 +21,7 @@ import {
   Loader2,
   Paperclip,
   Square,
+  MessageSquareDashed,
 } from 'lucide-react'
 import Link from 'next/link'
 import { useTheme } from '@/context/ThemeContext'
@@ -864,7 +865,13 @@ export function ChatInterface({
               Recent Conversations
             </div>
             {conversations.length === 0 && (
-              <div className={styles.emptyState}>No conversations yet</div>
+              <div className={styles.emptyState}>
+                <MessageSquareDashed
+                  className={styles.emptyStateIcon}
+                  aria-hidden="true"
+                />
+                <span>No conversations yet</span>
+              </div>
             )}
             {conversations.map((conv) => (
               <button
@@ -1311,15 +1318,23 @@ export function ChatInterface({
                       <Square className="w-4 h-4" fill="currentColor" />
                     </button>
                   ) : (
-                    <button
-                      type="button"
-                      onClick={() => { void handleSendMessage() }}
-                      disabled={!inputValue.trim() && !fileUpload.hasFiles}
-                      aria-label="Send message"
-                      className={styles.sendBtn}
-                    >
-                      <ArrowUp className="w-5 h-5" />
-                    </button>
+                    (() => {
+                      const sendReady = inputValue.trim().length > 0 || fileUpload.hasFiles
+                      const sendClasses = sendReady
+                        ? `${styles.sendBtn} ${styles.ready}`
+                        : styles.sendBtn
+                      return (
+                        <button
+                          type="button"
+                          onClick={() => { void handleSendMessage() }}
+                          disabled={!sendReady}
+                          aria-label="Send message"
+                          className={sendClasses}
+                        >
+                          <ArrowUp className="w-5 h-5" />
+                        </button>
+                      )
+                    })()
                   )}
                 </div>
               </div>

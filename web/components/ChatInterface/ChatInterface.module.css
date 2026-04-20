@@ -715,6 +715,29 @@
   background: #4cba6e;
 }
 
+/* ─── Send button "ready" state ───
+   Applied when the textarea has content or a file is attached. Emphasizes
+   the primary action so the user's eye is drawn once they're ready to
+   submit. Layered OVER the base .sendBtn so dark-mode rules still apply. */
+.sendBtn.ready {
+  background: #000;
+  box-shadow: 0 0 0 2px rgba(15, 23, 42, 0.08), 0 2px 6px rgba(15, 23, 42, 0.18);
+}
+
+.sendBtn.ready:hover:not(:disabled) {
+  background: #0f172a;
+}
+
+:global(html.dark) .sendBtn.ready {
+  background: #4cba6e;
+  color: #0f172a;
+  box-shadow: 0 0 0 2px rgba(59, 165, 93, 0.15), 0 0 18px rgba(59, 165, 93, 0.35);
+}
+
+:global(html.dark) .sendBtn.ready:hover:not(:disabled) {
+  background: #5fd17e;
+}
+
 .stopBtn {
   padding: 0.5rem;
   border-radius: 0.375rem;
@@ -935,13 +958,25 @@
 
 /* ─── Empty state ─── */
 .emptyState {
-  padding: 0.5rem;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  padding: 2rem 0.5rem;
   font-size: 0.75rem;
   color: #94a3b8;
+  text-align: center;
+}
+
+.emptyStateIcon {
+  width: 28px;
+  height: 28px;
+  opacity: 0.7;
 }
 
 :global(html.dark) .emptyState {
-  color: rgba(255, 255, 255, 0.10);
+  color: rgba(255, 255, 255, 0.55);
 }
 
 /* ─── Conversation list items ─── */
