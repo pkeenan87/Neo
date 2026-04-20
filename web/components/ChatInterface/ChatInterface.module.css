@@ -378,6 +378,45 @@
   scrollbar-gutter: stable;
   padding: 1rem;
   z-index: 10;
+  /* Firefox: hidden by default, revealed on hover. */
+  scrollbar-width: thin;
+  scrollbar-color: transparent transparent;
+}
+
+.messagesArea:hover {
+  scrollbar-color: rgba(0, 0, 0, 0.15) transparent;
+}
+
+:global(html.dark) .messagesArea:hover {
+  scrollbar-color: rgba(255, 255, 255, 0.2) transparent;
+}
+
+/* WebKit: thumb is transparent by default so the bar does not flicker
+   in and out as content height oscillates during streaming (thinking
+   indicator mount/unmount, motion `y` offsets, message appends). It
+   only paints when the user hovers the messages area to inspect their
+   scroll position. The gutter above keeps layout stable regardless. */
+.messagesArea::-webkit-scrollbar {
+  width: 4px;
+}
+.messagesArea::-webkit-scrollbar-track {
+  background: transparent;
+}
+.messagesArea::-webkit-scrollbar-thumb {
+  background: transparent;
+  border-radius: 10px;
+}
+.messagesArea:hover::-webkit-scrollbar-thumb {
+  background: rgba(0, 0, 0, 0.1);
+}
+.messagesArea:hover::-webkit-scrollbar-thumb:hover {
+  background: rgba(0, 0, 0, 0.2);
+}
+:global(html.dark) .messagesArea:hover::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.2);
+}
+:global(html.dark) .messagesArea:hover::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.3);
 }
 
 .messagesInner {
