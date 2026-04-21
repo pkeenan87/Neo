@@ -983,7 +983,7 @@
 .conversationItem {
   width: 100%;
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   gap: 0.5rem;
   padding: 0.5rem;
   border-radius: 0.375rem;
@@ -995,6 +995,14 @@
   background: transparent;
   border: none;
   cursor: pointer;
+}
+
+/* Icon top-aligns with the title cap-height. The 2px nudge compensates
+   for the title's line-box leading so the icon reads aligned with the
+   visible top of the text rather than the line-box top. */
+.conversationIcon {
+  @apply w-4 h-4 shrink-0;
+  margin-top: 2px;
 }
 
 .conversationItem:hover {
@@ -1051,6 +1059,9 @@
   gap: 0.25rem;
   opacity: 0;
   transition: opacity 150ms;
+  /* Parent row is flex-start so the title-icon pair aligns at the top;
+     keep the action buttons vertically centered with the row. */
+  align-self: center;
 }
 
 .conversationItem:hover .conversationActions,

@@ -1130,7 +1130,7 @@ export function ChatInterface({
                   </div>
                 ) : (
                   <>
-                    <MessageSquare className="w-4 h-4 shrink-0" aria-hidden="true" />
+                    <MessageSquare className={styles.conversationIcon} aria-hidden="true" />
                     <div className={styles.conversationInfo}>
                       <span className={styles.conversationTitle}>
                         {conv.title || 'New conversation'}
