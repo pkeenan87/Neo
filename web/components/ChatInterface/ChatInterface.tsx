@@ -1130,20 +1130,13 @@ export function ChatInterface({
                   </div>
                 ) : (
                   <>
-                    <div className={styles.conversationInfo}>
-                      <div className={styles.conversationTitleRow}>
-                        <MessageSquare
-                          className={styles.conversationIcon}
-                          aria-hidden="true"
-                        />
-                        <span className={styles.conversationTitle}>
-                          {conv.title || 'New conversation'}
-                        </span>
-                      </div>
-                      <span className={styles.conversationTimestamp}>
-                        {relativeTime(conv.updatedAt)}
-                      </span>
-                    </div>
+                    <MessageSquare
+                      className={styles.conversationIcon}
+                      aria-hidden="true"
+                    />
+                    <span className={styles.conversationTitle}>
+                      {conv.title || 'New conversation'}
+                    </span>
                     <div className={styles.conversationActions}>
                       <button
                         type="button"
@@ -1162,6 +1155,9 @@ export function ChatInterface({
                         <Trash2 className="w-3 h-3" />
                       </button>
                     </div>
+                    <span className={styles.conversationTimestamp}>
+                      {relativeTime(conv.updatedAt)}
+                    </span>
                   </>
                 )}
               </button>
