@@ -1,5 +1,5 @@
 import Anthropic from "@anthropic-ai/sdk";
-import { env, getSystemPrompt, DEFAULT_MODEL, HAIKU_MODEL } from "./config";
+import { env, getSystemPrompt, DEFAULT_MODEL, HAIKU_MODEL, resolveMaxTokens } from "./config";
 import { DESTRUCTIVE_TOOLS } from "./tools";
 import { executeTool } from "./executors";
 import { getToolsForRole, type Role } from "./permissions";
@@ -7,7 +7,37 @@ import { logger } from "./logger";
 import { getToolIntegration } from "./integration-registry";
 import { wrapToolResult } from "./injection-guard";
 import { prepareMessages, sanitizeEmptyUserMessages, CHARS_PER_TOKEN } from "./context-manager";
+import { IncompleteToolUseError } from "./types";
 import type { Message, AgentLoopResult, AgentCallbacks, PendingTool, ModelPreference, TokenUsage, CSVReference } from "./types";
+
+// Cheap heuristic: detect whether a turn started from a skill invocation
+// so we can pick the larger MAX_TOKENS_SKILL budget. The skill handler in
+// app/api/agent/route.ts prefixes the user's first message with
+// `[SKILL INVOCATION: <name>]` before the loop runs — we scan the
+// earliest user message (skipping tool_result plumbing) for that marker.
+const SKILL_INVOCATION_PREFIX = "[SKILL INVOCATION:";
+
+function detectSkillInvocation(messages: Message[]): boolean {
+  for (const msg of messages) {
+    if (msg.role !== "user") continue;
+    if (typeof msg.content === "string") {
+      return msg.content.startsWith(SKILL_INVOCATION_PREFIX);
+    }
+    if (!Array.isArray(msg.content)) continue;
+    // Skip pure tool_result plumbing messages — not a user's text turn.
+    const isToolResultCarrier = msg.content.every(
+      (b) => typeof b === "object" && b !== null && (b as { type: string }).type === "tool_result",
+    );
+    if (isToolResultCarrier) continue;
+    // First real user text block wins.
+    const firstText = msg.content.find(
+      (b): b is Anthropic.Messages.TextBlockParam =>
+        typeof b === "object" && b !== null && (b as { type: string }).type === "text",
+    );
+    if (firstText) return firstText.text.startsWith(SKILL_INVOCATION_PREFIX);
+  }
+  return false;
+}
 
 const client = new Anthropic({ apiKey: env.ANTHROPIC_API_KEY });
 
@@ -107,6 +137,13 @@ export interface RunAgentLoopOptions {
    * via their input schema.
    */
   nonExecutableTools?: Set<string>;
+  /**
+   * When true, this turn uses the larger MAX_TOKENS_SKILL budget instead
+   * of MAX_TOKENS_DEFAULT. When false, explicitly forces the default
+   * budget (e.g. triage). When undefined, the loop auto-detects by
+   * scanning the first user message for the `[SKILL INVOCATION:` prefix.
+   */
+  skillInvocation?: boolean;
 }
 
 export async function runAgentLoop(
@@ -164,6 +201,17 @@ export async function runAgentLoop(
   const systemPromptTokenEstimate = Math.ceil(systemPrompt.length / CHARS_PER_TOKEN);
   let lastInputTokens: number | null = null;
 
+  // Pick the output budget once for this entire loop run. Skill invocations
+  // need more room than plain chat (multi-step investigations, tables),
+  // so the skill-prefix check lifts them to MAX_TOKENS_SKILL. Callers
+  // can force the flag (e.g. triage uses false to keep the default) via
+  // options.skillInvocation; otherwise we auto-detect from the messages.
+  const skillInvocation =
+    options.skillInvocation !== undefined
+      ? options.skillInvocation
+      : detectSkillInvocation(localMessages);
+  const maxTokens = resolveMaxTokens(model, { skillInvocation });
+
   // Build tools with cache_control on the last item so the entire prefix is cached.
   const csvAttachments = options.csvAttachments ?? [];
   const hasCsvAttachments = csvAttachments.length > 0;
@@ -219,7 +267,7 @@ export async function runAgentLoop(
 
     const apiParams: Anthropic.Messages.MessageCreateParamsNonStreaming = {
       model,
-      max_tokens: 4096,
+      max_tokens: maxTokens,
       system: [systemBlock] as Anthropic.Messages.TextBlockParam[],
       tools: cachedTools as Anthropic.Messages.Tool[],
       messages: sdkMessages,
@@ -432,6 +480,60 @@ export async function runAgentLoop(
       // Check abort signal after tool execution phase completes
       if (signal?.aborted) return buildInterruptedResult();
       continue;
+    }
+
+    // Output budget exhausted. Handle gracefully instead of throwing: if the
+    // model ran out mid-tool-call we can't continue safely (would leave an
+    // orphan tool_use), so surface that as a distinct error; otherwise we
+    // return the partial text as a truncated response so the user still
+    // sees what was generated and can ask Neo to continue.
+    if (response.stop_reason === "max_tokens") {
+      const lastBlock = response.content[response.content.length - 1];
+      const lastIsToolUse = lastBlock?.type === "tool_use";
+      logger.emitEvent("max_tokens_reached", "Output budget exhausted", "agent", {
+        sessionId,
+        skillInvocation,
+        requestedMaxTokens: maxTokens,
+        inputTokens: response.usage.input_tokens,
+        outputTokens: response.usage.output_tokens,
+        phase: lastIsToolUse ? "tool_use" : "text",
+        model,
+      });
+      if (lastIsToolUse) {
+        const toolName = (lastBlock as Anthropic.Messages.ToolUseBlock).name;
+        throw new IncompleteToolUseError(toolName);
+      }
+
+      const text = response.content
+        .filter((b): b is Anthropic.Messages.TextBlock => b.type === "text")
+        .map((b) => b.text)
+        .join("\n");
+
+      // Mark the assistant message as truncated in-place so the persisted
+      // copy survives a reload. Mirrors the `[interrupted]` pattern above.
+      const lastAssistantIdx = localMessages.length - 1;
+      const lastAssistant = localMessages[lastAssistantIdx];
+      if (lastAssistant && lastAssistant.role === "assistant") {
+        if (typeof lastAssistant.content === "string") {
+          lastAssistant.content = `${lastAssistant.content}\n[truncated]`;
+        } else if (Array.isArray(lastAssistant.content)) {
+          const alreadyMarked = lastAssistant.content.some(
+            (b) =>
+              typeof b === "object" &&
+              b !== null &&
+              (b as { type: string }).type === "text" &&
+              /\[truncated\]\s*$/.test((b as { text?: string }).text ?? ""),
+          );
+          if (!alreadyMarked) {
+            lastAssistant.content.push({ type: "text", text: "[truncated]" });
+          }
+        }
+      }
+
+      if (callbacks.onTurnComplete) callbacks.onTurnComplete(localMessages);
+
+      logger.info("Agent loop completed (truncated)", "agent");
+      return { type: "response", text, messages: localMessages, truncated: true };
     }
 
     logger.warn(`Unexpected stop_reason: ${response.stop_reason}`, "agent");

@@ -492,7 +492,13 @@ async function handleAgentRequest(
           sessionId,
           model,
           signal,
-          { csvAttachments: conversationCsvAttachments },
+          {
+            csvAttachments: conversationCsvAttachments,
+            // Forward the already-resolved skill flag so the agent loop
+            // picks MAX_TOKENS_SKILL without re-parsing the injected
+            // `[SKILL INVOCATION: ...]` prefix.
+            skillInvocation: resolvedSkill !== null,
+          },
         );
 
         // Emit session_interrupted event if the loop was aborted
@@ -511,6 +517,26 @@ async function handleAgentRequest(
       } catch (err) {
         // Note: AbortError is caught inside runAgentLoop and returned as
         // { interrupted: true } — this catch block only handles real errors.
+
+        // IncompleteToolUseError: the model ran out of output budget while
+        // writing a tool_use block. There's no partial text to show and
+        // the incomplete tool_use would corrupt the next turn, so we do
+        // NOT persist the assistant turn — just surface a friendly error.
+        if ((err as Error).name === "IncompleteToolUseError") {
+          logger.warn("Agent loop truncated mid-tool-use", "api/agent", {
+            sessionId,
+            errorMessage: (err as Error).message,
+          });
+          await writer.write(
+            encodeNDJSON({
+              type: "error",
+              message:
+                "The agent couldn't finish planning the next step within the token budget. Try a more focused follow-up.",
+              code: "INCOMPLETE_TOOL_USE",
+            }),
+          );
+          return;
+        }
 
         // Fire-and-forget: save whatever messages accumulated before the error
         void sessionStore.saveMessages(sessionId, session.messages).catch((saveErr) => {

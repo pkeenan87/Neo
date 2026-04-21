@@ -26,6 +26,7 @@ import {
 import Link from 'next/link'
 import { useTheme } from '@/context/ThemeContext'
 import { useConversationCache } from '@/context/ConversationCacheContext'
+import { useToast } from '@/context/ToastContext'
 import { MarkdownRenderer, MessageActions, ThinkingBubble, UserAvatar, FileAttachmentBar } from '@/components'
 import { useFileUpload } from '@/hooks/useFileUpload'
 import styles from './ChatInterface.module.css'
@@ -51,6 +52,13 @@ interface ChatMessage {
   toolTraces?: ToolTrace[]
   skillBadge?: string
   interrupted?: boolean
+  /**
+   * The assistant turn hit the model's max_tokens ceiling — rendered
+   * partial. The ChatInterface shows a "Truncated" badge and a warning
+   * toast. Reload hydration sets this from the `[truncated]` suffix on
+   * the persisted message content (stripped before render).
+   */
+  truncated?: boolean
   attachments?: ChatAttachment[]
 }
 
@@ -59,7 +67,7 @@ interface ThinkingEvent { type: 'thinking' }
 interface ToolCallEvent { type: 'tool_call'; tool: string; input: Record<string, unknown> }
 interface ToolResultEvent { type: 'tool_result'; tool: string; input: Record<string, unknown>; output: unknown; durationMs: number; isError?: boolean }
 interface ConfirmationEvent { type: 'confirmation_required'; tool: PendingTool }
-interface ResponseEvent { type: 'response'; text: string; interrupted?: boolean }
+interface ResponseEvent { type: 'response'; text: string; interrupted?: boolean; truncated?: boolean }
 interface ErrorEvent { type: 'error'; message: string; code?: string }
 interface SkillInvocationEvent { type: 'skill_invocation'; skill: { id: string; name: string } }
 interface InterruptedEvent { type: 'interrupted' }
@@ -298,6 +306,7 @@ function relativeTime(dateStr: string): string {
 
 const SKILL_INVOCATION_RE = /^\[SKILL INVOCATION: (.+?)\]\n\n[\s\S]*\n\n---\n\nUser input: ([\s\S]*)$/
 const INTERRUPTED_SUFFIX_RE = /\s*\[interrupted\]\s*$/
+const TRUNCATED_SUFFIX_RE = /\s*\[truncated\]\s*$/
 
 function conversationToChatMessages(conv: Conversation): ChatMessage[] {
   const chatMessages: ChatMessage[] = []
@@ -410,7 +419,17 @@ function conversationToChatMessages(conv: Conversation): ChatMessage[] {
         content = content.replace(INTERRUPTED_SUFFIX_RE, '').trim()
       }
 
-      if (content || isInterrupted || attachments.length > 0) {
+      // Same pattern for the truncated marker — the agent loop appends
+      // `[truncated]` to the persisted assistant content when it hit
+      // max_tokens, and reload reads that back as the `truncated: true`
+      // flag on the rendered ChatMessage.
+      let isTruncated = false
+      if (msg.role === 'assistant' && TRUNCATED_SUFFIX_RE.test(content)) {
+        isTruncated = true
+        content = content.replace(TRUNCATED_SUFFIX_RE, '').trim()
+      }
+
+      if (content || isInterrupted || isTruncated || attachments.length > 0) {
         const attachTraces =
           msg.role === 'assistant' && pendingTraces.length > 0
         chatMessages.push({
@@ -418,6 +437,7 @@ function conversationToChatMessages(conv: Conversation): ChatMessage[] {
           role: msg.role,
           content,
           ...(isInterrupted && { interrupted: true }),
+          ...(isTruncated && { truncated: true }),
           ...(attachments.length > 0 && { attachments }),
           ...(attachTraces && { toolTraces: [...pendingTraces] }),
         })
@@ -444,6 +464,7 @@ export function ChatInterface({
 }: ChatInterfaceProps) {
   const { theme, toggleTheme } = useTheme()
   const cache = useConversationCache()
+  const { toast } = useToast()
   // Sidebar starts open. The initial state MUST match SSR output to avoid
   // a React hydration mismatch — so we always render `true` on first paint
   // and correct to the real media-query result in a one-shot effect on
@@ -500,6 +521,10 @@ export function ChatInterface({
   // only on that transition — not on every tool_call swap mid-stream,
   // which otherwise keeps macOS overlay scrollbars visible.
   const prevIndicatorVisibleRef = useRef(false)
+  // How many consecutive truncated responses we've seen this session. After
+  // 3, the toast copy escalates from "ask to continue" to "too complex".
+  // Resets on any non-truncated response event.
+  const consecutiveTruncationsRef = useRef(0)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const editInputRef = useRef<HTMLInputElement>(null)
   const confirmBtnRef = useRef<HTMLButtonElement>(null)
@@ -806,8 +831,32 @@ export function ChatInterface({
                   toolsUsed: toolsUsed.length > 0 ? [...toolsUsed] : undefined,
                   toolTraces: toolTraces.length > 0 ? [...toolTraces] : undefined,
                   interrupted: event.interrupted,
+                  truncated: event.truncated,
                 },
               ])
+              if (event.truncated) {
+                // Track consecutive truncations. After 3, escalate the toast
+                // copy — a runaway series implies the conversation's too
+                // complex to complete even at the higher skill budget.
+                consecutiveTruncationsRef.current += 1
+                if (consecutiveTruncationsRef.current >= 3) {
+                  toast({
+                    intent: 'warning',
+                    title: 'Response keeps getting truncated',
+                    description:
+                      'This conversation may be too complex to complete in one response. Consider starting a new session or narrowing the request.',
+                  })
+                } else {
+                  toast({
+                    intent: 'warning',
+                    title: 'Response was truncated',
+                    description:
+                      'Ask Neo to continue for the rest of the response.',
+                  })
+                }
+              } else {
+                consecutiveTruncationsRef.current = 0
+              }
               break
             case 'interrupted':
               setIsThinking(false)
@@ -1293,6 +1342,16 @@ export function ChatInterface({
                       : msg.content}
                     {msg.interrupted && (
                       <span className={styles.interruptedBadge}>Interrupted</span>
+                    )}
+                    {msg.truncated && (
+                      // role="status" turns this into an implicit polite
+                      // live region. Inert on the reload / hydration path
+                      // (live regions don't fire for initial paint), but
+                      // any future code that flips `msg.truncated` at
+                      // runtime would be announced correctly.
+                      <span role="status" className={styles.truncatedBadge}>
+                        Truncated
+                      </span>
                     )}
                     {msg.toolTraces && msg.toolTraces.length > 0 ? (
                       <div className={styles.toolSummary}>
