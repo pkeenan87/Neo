@@ -1012,7 +1012,7 @@
   @apply w-4 h-4 shrink-0;
   grid-column: 1;
   grid-row: 1;
-  align-self: center;
+  /* No align-self — inherits align-items: center from .conversationItem. */
 }
 
 .conversationItem:hover {
@@ -1064,7 +1064,6 @@
 .conversationActions {
   grid-column: 3;
   grid-row: 1 / span 2;
-  align-self: center;
   display: flex;
   gap: 0.25rem;
   opacity: 0;

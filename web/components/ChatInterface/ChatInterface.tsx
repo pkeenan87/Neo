@@ -1130,12 +1130,20 @@ export function ChatInterface({
                   </div>
                 ) : (
                   <>
+                    {/* Source order is icon → title → timestamp → actions so
+                        the screen-reader reading order matches the visible
+                        grouping (title + its timestamp, then the row's
+                        actions). Grid placement in CSS makes the visual
+                        order independent of DOM order. */}
                     <MessageSquare
                       className={styles.conversationIcon}
                       aria-hidden="true"
                     />
                     <span className={styles.conversationTitle}>
                       {conv.title || 'New conversation'}
+                    </span>
+                    <span className={styles.conversationTimestamp}>
+                      {relativeTime(conv.updatedAt)}
                     </span>
                     <div className={styles.conversationActions}>
                       <button
@@ -1155,9 +1163,6 @@ export function ChatInterface({
                         <Trash2 className="w-3 h-3" />
                       </button>
                     </div>
-                    <span className={styles.conversationTimestamp}>
-                      {relativeTime(conv.updatedAt)}
-                    </span>
                   </>
                 )}
               </button>
