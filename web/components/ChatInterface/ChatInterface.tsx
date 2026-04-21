@@ -1130,11 +1130,16 @@ export function ChatInterface({
                   </div>
                 ) : (
                   <>
-                    <MessageSquare className={styles.conversationIcon} aria-hidden="true" />
                     <div className={styles.conversationInfo}>
-                      <span className={styles.conversationTitle}>
-                        {conv.title || 'New conversation'}
-                      </span>
+                      <div className={styles.conversationTitleRow}>
+                        <MessageSquare
+                          className={styles.conversationIcon}
+                          aria-hidden="true"
+                        />
+                        <span className={styles.conversationTitle}>
+                          {conv.title || 'New conversation'}
+                        </span>
+                      </div>
                       <span className={styles.conversationTimestamp}>
                         {relativeTime(conv.updatedAt)}
                       </span>
