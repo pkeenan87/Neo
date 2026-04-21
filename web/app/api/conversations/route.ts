@@ -1,7 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { resolveAuth } from "@/lib/auth-helpers";
 import { listConversations } from "@/lib/conversation-store";
-import { env } from "@/lib/config";
 import { isChannel } from "@/lib/types";
 
 export async function GET(request: NextRequest) {
@@ -10,10 +9,8 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  if (!env.COSMOS_ENDPOINT || env.MOCK_MODE) {
-    return NextResponse.json({ conversations: [] });
-  }
-
+  // listConversations dispatches internally — returns mock-store results
+  // when MOCK_MODE (or Cosmos is unconfigured) and Cosmos results otherwise.
   const channelParam = request.nextUrl.searchParams.get("channel");
   const channel = isChannel(channelParam) ? channelParam : undefined;
 

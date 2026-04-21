@@ -18,6 +18,14 @@ import { CSV_MAX_REFERENCE_ATTACHMENTS, CsvAttachmentCapError } from "./types";
 import type { SessionStore } from "./session-store";
 import { truncateToolResults } from "./context-manager";
 import { PERSISTENCE_TOOL_RESULT_TOKEN_CAP } from "./config";
+import { mockStore } from "./mock-conversation-store";
+
+// Dev-mode dispatch guard. When true, all module-level CRUD functions
+// short-circuit to the file-backed MockConversationStore instead of
+// touching Cosmos. See lib/mock-conversation-store.ts.
+function useMock(): boolean {
+  return env.MOCK_MODE || !env.COSMOS_ENDPOINT;
+}
 
 // ─────────────────────────────────────────────────────────────
 //  Cosmos DB client (lazy init)
@@ -51,6 +59,7 @@ export async function createConversation(
   channel: Channel,
   model?: string,
 ): Promise<string> {
+  if (useMock()) return mockStore.createConversation(ownerId, role, channel, model);
   const container = getContainer();
   const id = `conv_${crypto.randomUUID()}`;
   const now = new Date().toISOString();
@@ -83,6 +92,7 @@ export async function getConversation(
   id: string,
   ownerId: string,
 ): Promise<Conversation | null> {
+  if (useMock()) return mockStore.getConversation(id, ownerId);
   const container = getContainer();
   try {
     const { resource } = await container.item(id, ownerId).read<Conversation>();
@@ -99,6 +109,7 @@ export async function listConversations(
   ownerId: string,
   channel?: Channel,
 ): Promise<ConversationMeta[]> {
+  if (useMock()) return mockStore.listConversations(ownerId, channel);
   const container = getContainer();
 
   const query = channel
@@ -134,6 +145,7 @@ export async function appendMessages(
   newMessages: Message[],
   title?: string,
 ): Promise<void> {
+  if (useMock()) return mockStore.appendMessages(id, ownerId, newMessages, title);
   const container = getContainer();
   const { resource, etag } = await container.item(id, ownerId).read<Conversation>();
   if (!resource) throw new Error(`Conversation ${id} not found`);
@@ -154,6 +166,7 @@ export async function updateTitle(
   ownerId: string,
   title: string,
 ): Promise<void> {
+  if (useMock()) return mockStore.updateConversationTitle(id, ownerId, title);
   const container = getContainer();
   const { resource, etag } = await container.item(id, ownerId).read<Conversation>();
   if (!resource) throw new Error(`Conversation ${id} not found`);
@@ -170,6 +183,7 @@ export async function deleteConversation(
   id: string,
   ownerId: string,
 ): Promise<void> {
+  if (useMock()) return mockStore.deleteConversation(id, ownerId);
   const container = getContainer();
   await container.item(id, ownerId).delete();
   logger.info("Conversation deleted", "conversation-store", {
@@ -183,6 +197,7 @@ export async function setConversationPendingConfirmation(
   ownerId: string,
   tool: PendingTool,
 ): Promise<void> {
+  if (useMock()) return mockStore.setConversationPendingConfirmation(id, ownerId, tool);
   const container = getContainer();
   const conv = await getConversation(id, ownerId);
   if (!conv) return;
@@ -196,6 +211,7 @@ export async function clearConversationPendingConfirmation(
   id: string,
   ownerId: string,
 ): Promise<PendingTool | null> {
+  if (useMock()) return mockStore.clearConversationPendingConfirmation(id, ownerId);
   const container = getContainer();
   const conv = await getConversation(id, ownerId);
   if (!conv) return null;
@@ -220,6 +236,7 @@ export async function appendCsvAttachment(
   ownerId: string,
   attachment: CSVReference,
 ): Promise<void> {
+  if (useMock()) return mockStore.appendCsvAttachment(id, ownerId, attachment);
   const container = getContainer();
 
   const attempt = async () => {
@@ -259,6 +276,7 @@ export async function getCsvAttachments(
   id: string,
   ownerId: string,
 ): Promise<CSVReference[]> {
+  // getConversation already dispatches to the mock store when needed.
   const conv = await getConversation(id, ownerId);
   return conv?.csvAttachments ?? [];
 }
@@ -267,6 +285,7 @@ export async function isConversationRateLimited(
   id: string,
   ownerId: string,
 ): Promise<boolean> {
+  // getConversation already dispatches to the mock store when needed.
   const conv = await getConversation(id, ownerId);
   if (!conv) return false;
   return conv.messageCount >= RATE_LIMITS[conv.role].messagesPerSession;

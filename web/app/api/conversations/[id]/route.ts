@@ -5,7 +5,6 @@ import {
   deleteConversation,
   updateTitle,
 } from "@/lib/conversation-store";
-import { env } from "@/lib/config";
 
 interface RouteParams {
   params: Promise<{ id: string }>;
@@ -17,11 +16,7 @@ export async function GET(request: NextRequest, { params }: RouteParams) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  if (!env.COSMOS_ENDPOINT || env.MOCK_MODE) {
-    return NextResponse.json({ error: "Not found" }, { status: 404 });
-  }
-
-  const { id } = await params;
+const { id } = await params;
   const conv = await getConversation(id, identity.ownerId);
 
   if (!conv) {
@@ -43,11 +38,7 @@ export async function DELETE(request: NextRequest, { params }: RouteParams) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  if (!env.COSMOS_ENDPOINT || env.MOCK_MODE) {
-    return NextResponse.json({ error: "Not found" }, { status: 404 });
-  }
-
-  const { id } = await params;
+const { id } = await params;
   const conv = await getConversation(id, identity.ownerId);
 
   if (!conv) {
@@ -68,11 +59,7 @@ export async function PATCH(request: NextRequest, { params }: RouteParams) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  if (!env.COSMOS_ENDPOINT || env.MOCK_MODE) {
-    return NextResponse.json({ error: "Not found" }, { status: 404 });
-  }
-
-  const { id } = await params;
+const { id } = await params;
 
   let body: { title?: string };
   try {
