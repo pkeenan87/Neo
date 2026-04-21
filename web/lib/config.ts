@@ -22,6 +22,82 @@ export const PRESERVED_RECENT_MESSAGES = parsePositiveInt("PRESERVED_RECENT_MESS
 // under Cosmos DB's 2 MB document limit.
 export const PERSISTENCE_TOOL_RESULT_TOKEN_CAP = parsePositiveInt("PERSISTENCE_TOOL_RESULT_TOKEN_CAP", 10_000);
 
+// ── Per-turn output budgets (max_tokens) ─────────────────────
+// Controls the Anthropic `max_tokens` parameter on each agent-loop
+// messages.create call. Skill invocations produce longer structured
+// output than plain chat, so they get a larger budget. Both values
+// are clamped to the active model's published ceiling at runtime via
+// resolveMaxTokens() below.
+export const MAX_TOKENS_DEFAULT = parsePositiveInt("MAX_TOKENS_DEFAULT", 4_096);
+export const MAX_TOKENS_SKILL = parsePositiveInt("MAX_TOKENS_SKILL", 24_576);
+// Optional hard cap regardless of per-model ceilings — useful for cost
+// control in production. Unset (0 / missing) means no override.
+const MAX_TOKENS_CEILING_OVERRIDE_RAW = parsePositiveInt("MAX_TOKENS_CEILING_OVERRIDE", 0);
+export const MAX_TOKENS_CEILING_OVERRIDE: number | undefined =
+  MAX_TOKENS_CEILING_OVERRIDE_RAW > 0 ? MAX_TOKENS_CEILING_OVERRIDE_RAW : undefined;
+
+// Published per-model output-token ceilings. Keep in sync with Anthropic
+// release notes. Any model not in this map falls back to the
+// MAX_TOKENS_DEFAULT value (conservative). When resolveMaxTokens picks
+// a budget above the model's ceiling, it clamps and logs a one-time
+// warning (per model × budget-type) so operators see the mismatch on boot.
+//
+// IMPORTANT: keys MUST match the exact model-id strings used elsewhere
+// in this file (DEFAULT_MODEL, HAIKU_MODEL, SUPPORTED_MODELS). A drift
+// makes the clamp silently no-op for the mismatched model — the lookup
+// returns undefined and we pass the configured value through unchanged.
+export const MODEL_OUTPUT_CEILINGS: Record<string, number> = {
+  "claude-opus-4-6": 32_000,
+  "claude-opus-4-7": 32_000,
+  "claude-sonnet-4-6": 64_000,
+  "claude-haiku-4-5-20251001": 8_192,
+};
+
+// Keyed by `${model}:${budgetType}` — without the budget-type suffix, a
+// warning fired for the skill budget would suppress a later warning for
+// the default budget on the same model (even if they exceed the ceiling
+// by different amounts). Keeping them separate surfaces both misconfigs.
+const RESOLVE_WARNINGS_EMITTED = new Set<string>();
+
+/**
+ * Compute the effective max_tokens value for a given model + turn type.
+ * Picks the skill budget when `opts.skillInvocation` is true, otherwise
+ * the default. Clamps to the model's published ceiling and to any
+ * configured global override. Emits a one-time warning per (model,
+ * budget-type) pair when the requested budget exceeded the model's
+ * ceiling so operators notice a misconfiguration on first use.
+ */
+export function resolveMaxTokens(
+  model: string,
+  opts: { skillInvocation: boolean },
+): number {
+  const requested = opts.skillInvocation ? MAX_TOKENS_SKILL : MAX_TOKENS_DEFAULT;
+  const modelCeiling = MODEL_OUTPUT_CEILINGS[model];
+  let effective = requested;
+  if (modelCeiling !== undefined && effective > modelCeiling) {
+    const warnKey = `${model}:${opts.skillInvocation ? "skill" : "default"}`;
+    if (!RESOLVE_WARNINGS_EMITTED.has(warnKey)) {
+      RESOLVE_WARNINGS_EMITTED.add(warnKey);
+      console.warn(
+        `Requested max_tokens ${requested} (${opts.skillInvocation ? "skill" : "default"} budget) ` +
+          `exceeds published ceiling ${modelCeiling} for model "${model}" — clamping.`,
+      );
+    }
+    effective = modelCeiling;
+  }
+  if (MAX_TOKENS_CEILING_OVERRIDE !== undefined && effective > MAX_TOKENS_CEILING_OVERRIDE) {
+    effective = MAX_TOKENS_CEILING_OVERRIDE;
+  }
+  return effective;
+}
+
+/** Test-only: reset the warning-emission memoization so repeated
+ *  resolveMaxTokens() calls inside unit tests can each assert the
+ *  warning fires. Not part of the runtime API. */
+export function __resetResolveMaxTokensWarnings(): void {
+  RESOLVE_WARNINGS_EMITTED.clear();
+}
+
 // ── Model Selection ──────────────────────────────────────────
 
 // Model IDs are configurable via env vars so they can be updated without redeploying.

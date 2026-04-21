@@ -939,6 +939,30 @@
   color: #fbbf24;
 }
 
+/* ─── Truncated badge ───
+   Shown under an assistant message that hit the model's max_tokens
+   ceiling. Reuses the interrupted-badge visual language (warning tone,
+   uppercase letter-spaced label) so both read as edge states of the
+   same family; they can co-exist if ever needed. */
+.truncatedBadge {
+  display: inline-block;
+  margin-top: 0.5rem;
+  margin-left: 0.25rem;
+  padding: 0.125rem 0.5rem;
+  border-radius: 0.375rem;
+  font-size: 0.6875rem;
+  font-weight: 600;
+  background: rgba(245, 158, 11, 0.12);
+  color: theme('colors.warning.500');
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+:global(html.dark) .truncatedBadge {
+  background: rgba(245, 158, 11, 0.15);
+  color: #fbbf24;
+}
+
 /* ─── Input footer ─── */
 .inputFooter {
   width: 100%;

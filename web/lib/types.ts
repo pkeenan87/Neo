@@ -155,7 +155,8 @@ export type LogEventType =
   | "budget_alert"
   | "session_started"
   | "session_ended"
-  | "session_interrupted";
+  | "session_interrupted"
+  | "max_tokens_reached";
 
 export interface LogIdentityContext {
   userName: string;
@@ -226,7 +227,7 @@ export type AgentEvent =
   | { type: "tool_call"; tool: string; input: Record<string, unknown> }
   | { type: "tool_result"; tool: string; input: Record<string, unknown>; output: unknown; durationMs: number; isError?: boolean }
   | { type: "confirmation_required"; tool: PendingTool }
-  | { type: "response"; text: string; interrupted?: boolean }
+  | { type: "response"; text: string; interrupted?: boolean; truncated?: boolean }
   | { type: "error"; message: string; code?: string }
   | { type: "warning"; message: string; code: string }
   | { type: "context_trimmed"; originalTokens: number; newTokens: number; method: "truncation" | "summary" }
@@ -338,8 +339,26 @@ export interface ConfirmRequest {
 }
 
 export type AgentLoopResult =
-  | { type: "response"; text: string; messages: Message[]; interrupted?: boolean }
+  | { type: "response"; text: string; messages: Message[]; interrupted?: boolean; truncated?: boolean }
   | { type: "confirmation_required"; tool: PendingTool; messages: Message[] };
+
+/**
+ * Thrown from the agent loop when stop_reason === "max_tokens" arrives
+ * on a turn whose last content block was `tool_use` — the model ran out
+ * of budget mid-tool-call, so there's nothing useful to show the user
+ * and no way to continue safely (persisting would leave an orphaned
+ * tool_use with no paired tool_result). Routes catch this and surface
+ * a friendly error event; the partial assistant turn is NOT persisted.
+ */
+export class IncompleteToolUseError extends Error {
+  constructor(public readonly toolName: string) {
+    super(
+      `Agent ran out of output budget while planning a tool call (${toolName}). ` +
+        `Try a more focused follow-up question.`,
+    );
+    this.name = "IncompleteToolUseError";
+  }
+}
 
 // ─────────────────────────────────────────────────────────────
 //  Agent Callbacks

@@ -158,6 +158,25 @@ export async function POST(request: NextRequest) {
 
         await writeAgentResult(result, session, body.sessionId, writer);
       } catch (err) {
+        // See app/api/agent/route.ts for the same handling — mid-tool-use
+        // truncation is distinct from other agent errors because we must
+        // NOT persist the partial assistant turn.
+        if ((err as Error).name === "IncompleteToolUseError") {
+          logger.warn("Agent loop truncated mid-tool-use (resume path)", "api/confirm", {
+            sessionId: body.sessionId,
+            errorMessage: (err as Error).message,
+          });
+          await writer.write(
+            encodeNDJSON({
+              type: "error",
+              message:
+                "The agent couldn't finish planning the next step within the token budget. Try a more focused follow-up.",
+              code: "INCOMPLETE_TOOL_USE",
+            }),
+          );
+          return;
+        }
+
         void sessionStore.saveMessages(body.sessionId, session.messages).catch((saveErr) => {
           logger.warn("Failed to persist messages after confirm handler error", "api/confirm", {
             sessionId: body.sessionId,

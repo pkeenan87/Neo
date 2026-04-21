@@ -430,11 +430,47 @@ export async function POST(request: NextRequest) {
           systemPromptOverride: systemPrompt,
           nonExecutableTools: new Set([TRIAGE_VERDICT_TOOL_NAME]),
           csvAttachments: [],
+          // Triage responses are structured verdict JSON that must complete
+          // fully to be valid. Explicitly opt out of the skill-sized budget
+          // and stay on MAX_TOKENS_DEFAULT; any truncation fails the run.
+          skillInvocation: false,
         },
       );
 
       // 11. Parse verdict
       const durationMs = Date.now() - startMs;
+
+      // A truncated agent response means the verdict JSON is incomplete —
+      // don't attempt to parse. Return a fail-safe inconclusive verdict so
+      // the caller gets a valid response instead of a parse error.
+      if (agentResult.type === "response" && agentResult.truncated) {
+        logger.emitEvent("max_tokens_reached", "Triage truncated", "api/triage", {
+          sessionId: neoRunId,
+          skillInvocation: false,
+          phase: "triage",
+          alertId: source.alertId,
+        });
+        const failSafe: TriageResponse = {
+          verdict: "inconclusive",
+          confidence: 0,
+          reasoning:
+            "Triage response was truncated before the verdict could be fully emitted. Retry with a more focused query or raise MAX_TOKENS_DEFAULT.",
+          evidence: [],
+          recommendedActions: [],
+          neoRunId,
+          skillUsed: skillId,
+          durationMs,
+          dryRun,
+          reason: "response_truncated",
+        };
+        recordTriageOutcome(false);
+        run.response = failSafe;
+        run.durationMs = durationMs;
+        run.rawClaudeResponse = agentResult.text;
+        void updateTriageRun(run);
+        return NextResponse.json(failSafe);
+      }
+
       let triageResponse = parseTriageResult(agentResult, neoRunId, skillId, durationMs, dryRun);
 
       // 12. Apply guardrails
