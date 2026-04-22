@@ -449,8 +449,15 @@ export interface BlobRefDescriptor {
  *  typed shape to target and can't accidentally omit `conversationId`. */
 export interface DualWriteDivergencePayload {
   conversationId: string;
-  operation: "saveMessages" | "updateTitle" | "appendCsvAttachment"
-    | "setPendingConfirmation" | "clearPendingConfirmation" | "deleteConversation";
+  operation:
+    | "saveMessages"
+    | "appendMessages"
+    | "updateTitle"
+    | "appendCsvAttachment"
+    | "setPendingConfirmation"
+    | "clearPendingConfirmation"
+    | "deleteConversation"
+    | "createConversation";
   errorMessage: string;
   ownerId?: string;
 }

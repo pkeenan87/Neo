@@ -304,8 +304,25 @@ export async function createConversationV2(
   channel: Channel,
   model?: string,
 ): Promise<string> {
-  const container = getContainerV2();
   const id = `conv_${crypto.randomUUID()}`;
+  return createConversationV2WithId(id, ownerId, role, channel, model);
+}
+
+/**
+ * Create a v2 conversation root with an externally-minted id. Used by
+ * the dual-write dispatch in conversation-store.ts so the v1 and v2
+ * documents share the same conversationId (v1 mints it first, v2
+ * mirrors it). Separate from createConversationV2 so normal production
+ * callers don't accidentally supply an unchecked id from request input.
+ */
+export async function createConversationV2WithId(
+  id: string,
+  ownerId: string,
+  role: Role,
+  channel: Channel,
+  model?: string,
+): Promise<string> {
+  const container = getContainerV2();
   const now = nowIso();
   const retentionClass = NEO_RETENTION_CLASS_DEFAULT;
   const ttl = resolveRetentionTtlSeconds(retentionClass);

@@ -1,11 +1,221 @@
+import type { Role } from "./permissions";
 import { env } from "./config";
+import { logger } from "./logger";
 import { InMemorySessionStore, type SessionStore } from "./session-store";
 import { CosmosSessionStore } from "./conversation-store";
+import { CosmosV2SessionStore } from "./conversation-store-v2";
 import { mockStore } from "./mock-conversation-store";
+import { getActiveStoreMode } from "./conversation-store-mode";
+import type {
+  Channel,
+  DualWriteDivergencePayload,
+  Message,
+  PendingTool,
+  Session,
+  SessionMeta,
+} from "./types";
+
+// ─────────────────────────────────────────────────────────────
+//  Dispatching SessionStore
+//
+//  Picks v1 CosmosSessionStore vs. v2 CosmosV2SessionStore per-call
+//  based on NEO_CONVERSATION_STORE_MODE (possibly overridden per-
+//  request via the admin X-Neo-Store-Mode header). Mirrors the
+//  module-level CRUD dispatch in conversation-store.ts but at the
+//  SessionStore interface level so callers (stream.ts,
+//  app/api/**/*.ts) don't need to know which schema is active.
+//
+//  Semantics (matching conversation-store.ts):
+//    v1         — v1 store exclusively.
+//    v2         — v2 store exclusively.
+//    dual-read  — writes to v2; reads try v2, fall back to v1 on null.
+//    dual-write — writes to BOTH (v1 authoritative); reads from v1.
+//                 v2 write failures log conversation_dual_write_
+//                 divergence but do NOT throw.
+// ─────────────────────────────────────────────────────────────
+
+async function dualWriteV2Best(
+  opName: DualWriteDivergencePayload["operation"],
+  conversationId: string,
+  fn: () => Promise<void>,
+): Promise<void> {
+  try {
+    await fn();
+  } catch (err) {
+    const payload: DualWriteDivergencePayload = {
+      conversationId,
+      operation: opName,
+      errorMessage: (err as Error).message,
+    };
+    logger.warn(
+      "Dual-write v2 diverged from v1 (session-store, best-effort)",
+      "session-factory",
+      payload as unknown as Record<string, unknown>,
+    );
+    logger.emitEvent(
+      "conversation_dual_write_divergence",
+      "v2 session-store write failed under dual-write mode",
+      "session-factory",
+      payload as unknown as Record<string, unknown>,
+    );
+  }
+}
+
+export class DispatchingSessionStore implements SessionStore {
+  private readonly v1 = new CosmosSessionStore();
+  private readonly v2 = new CosmosV2SessionStore();
+
+  async create(role: Role, ownerId: string, channel: Channel = "web"): Promise<string> {
+    const mode = getActiveStoreMode();
+    if (mode === "v2") return this.v2.create(role, ownerId, channel);
+    if (mode === "dual-read") return this.v2.create(role, ownerId, channel);
+    if (mode === "dual-write") {
+      // v1 mints the id (authoritative); v2 mirrors it via the shared-id
+      // helper used by the module-level createConversation dispatch.
+      const id = await this.v1.create(role, ownerId, channel);
+      await dualWriteV2Best("createConversation", id, async () => {
+        const mod = await import("./conversation-store-v2");
+        await mod.createConversationV2WithId(id, ownerId, role, channel);
+      });
+      return id;
+    }
+    return this.v1.create(role, ownerId, channel);
+  }
+
+  async get(id: string): Promise<Session | undefined> {
+    const mode = getActiveStoreMode();
+    if (mode === "v2") return this.v2.get(id);
+    if (mode === "dual-read") {
+      const v2Result = await this.v2.get(id);
+      if (v2Result) return v2Result;
+      return this.v1.get(id);
+    }
+    return this.v1.get(id);
+  }
+
+  async getExpired(id: string): Promise<Session | undefined> {
+    const mode = getActiveStoreMode();
+    if (mode === "v2") return this.v2.getExpired(id);
+    if (mode === "dual-read") {
+      const v2Result = await this.v2.getExpired(id);
+      if (v2Result) return v2Result;
+      return this.v1.getExpired(id);
+    }
+    return this.v1.getExpired(id);
+  }
+
+  async delete(id: string): Promise<boolean> {
+    const mode = getActiveStoreMode();
+    if (mode === "v2") return this.v2.delete(id);
+    if (mode === "dual-read") return this.v2.delete(id);
+    if (mode === "dual-write") {
+      const result = await this.v1.delete(id);
+      await dualWriteV2Best("deleteConversation", id, () => this.v2.delete(id).then(() => undefined));
+      return result;
+    }
+    return this.v1.delete(id);
+  }
+
+  async list(): Promise<SessionMeta[]> {
+    const mode = getActiveStoreMode();
+    if (mode === "v2") return this.v2.list();
+    if (mode === "dual-read") {
+      // Admin-only cross-partition list — merge both stores, dedupe by id.
+      const [a, b] = await Promise.all([this.v2.list(), this.v1.list()]);
+      const seen = new Set(a.map((s) => s.id));
+      return [...a, ...b.filter((s) => !seen.has(s.id))];
+    }
+    return this.v1.list();
+  }
+
+  async listForOwner(ownerId: string): Promise<SessionMeta[]> {
+    const mode = getActiveStoreMode();
+    if (mode === "v2") return this.v2.listForOwner(ownerId);
+    if (mode === "dual-read") {
+      const [a, b] = await Promise.all([
+        this.v2.listForOwner(ownerId),
+        this.v1.listForOwner(ownerId),
+      ]);
+      const seen = new Set(a.map((s) => s.id));
+      return [...a, ...b.filter((s) => !seen.has(s.id))];
+    }
+    return this.v1.listForOwner(ownerId);
+  }
+
+  async setPendingConfirmation(id: string, tool: PendingTool): Promise<void> {
+    const mode = getActiveStoreMode();
+    if (mode === "v2") return this.v2.setPendingConfirmation(id, tool);
+    if (mode === "dual-read") return this.v2.setPendingConfirmation(id, tool);
+    if (mode === "dual-write") {
+      await this.v1.setPendingConfirmation(id, tool);
+      await dualWriteV2Best("setPendingConfirmation", id, () =>
+        this.v2.setPendingConfirmation(id, tool),
+      );
+      return;
+    }
+    return this.v1.setPendingConfirmation(id, tool);
+  }
+
+  async clearPendingConfirmation(id: string): Promise<PendingTool | null> {
+    const mode = getActiveStoreMode();
+    if (mode === "v2") return this.v2.clearPendingConfirmation(id);
+    if (mode === "dual-read") return this.v2.clearPendingConfirmation(id);
+    if (mode === "dual-write") {
+      const result = await this.v1.clearPendingConfirmation(id);
+      await dualWriteV2Best("clearPendingConfirmation", id, () =>
+        this.v2.clearPendingConfirmation(id).then(() => undefined),
+      );
+      return result;
+    }
+    return this.v1.clearPendingConfirmation(id);
+  }
+
+  async isRateLimited(id: string): Promise<boolean> {
+    const mode = getActiveStoreMode();
+    if (mode === "v2") return this.v2.isRateLimited(id);
+    if (mode === "dual-read") {
+      // Either schema hitting the cap counts as rate-limited.
+      const [a, b] = await Promise.all([
+        this.v2.isRateLimited(id),
+        this.v1.isRateLimited(id),
+      ]);
+      return a || b;
+    }
+    return this.v1.isRateLimited(id);
+  }
+
+  async saveMessages(id: string, messages: Message[], title?: string): Promise<void> {
+    const mode = getActiveStoreMode();
+    if (mode === "v2") return this.v2.saveMessages(id, messages, title);
+    if (mode === "dual-read") return this.v2.saveMessages(id, messages, title);
+    if (mode === "dual-write") {
+      await this.v1.saveMessages(id, messages, title);
+      await dualWriteV2Best("saveMessages", id, () =>
+        this.v2.saveMessages(id, messages, title),
+      );
+      return;
+    }
+    return this.v1.saveMessages(id, messages, title);
+  }
+
+  async updateTitle(id: string, title: string): Promise<void> {
+    const mode = getActiveStoreMode();
+    if (mode === "v2") return this.v2.updateTitle(id, title);
+    if (mode === "dual-read") return this.v2.updateTitle(id, title);
+    if (mode === "dual-write") {
+      await this.v1.updateTitle(id, title);
+      await dualWriteV2Best("updateTitle", id, () =>
+        this.v2.updateTitle(id, title),
+      );
+      return;
+    }
+    return this.v1.updateTitle(id, title);
+  }
+}
 
 function createStore(): SessionStore {
   if (env.COSMOS_ENDPOINT && !env.MOCK_MODE) {
-    return new CosmosSessionStore();
+    return new DispatchingSessionStore();
   }
 
   // MOCK_MODE or no Cosmos configured → file-backed mock store. Persists
