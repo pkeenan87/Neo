@@ -3,9 +3,14 @@ import { resolve, dirname } from "node:path";
 import crypto from "node:crypto";
 import { RATE_LIMITS, type Role } from "./permissions";
 import { logger, hashPii } from "./logger";
+import { NEO_CONVERSATION_STORE_MODE } from "./config";
 import type {
   Conversation,
   ConversationMeta,
+  ConversationV2Root,
+  TurnDoc,
+  BlobRefDoc,
+  CheckpointDoc,
   Message,
   PendingTool,
   Session,
@@ -15,6 +20,10 @@ import type {
 } from "./types";
 import { CSV_MAX_REFERENCE_ATTACHMENTS, CsvAttachmentCapError } from "./types";
 import type { SessionStore } from "./session-store";
+import {
+  splitConversationToDocs,
+  rebuildConversationFromDocs,
+} from "./conversation-store-v2";
 
 // ─────────────────────────────────────────────────────────────
 //  MockConversationStore
@@ -40,13 +49,38 @@ const DEFAULT_STORE_PATH = resolve(
   "conversations.json",
 );
 
-interface StoreShape {
+// ─── On-disk file layouts ───
+//
+// v1: one Conversation per entry. Matches the legacy Cosmos v1
+//     schema where everything is packed into a single doc.
+interface StoreShapeV1 {
   version: 1;
   conversations: Conversation[];
 }
 
-function emptyStore(): StoreShape {
-  return { version: 1, conversations: [] };
+// v2: matches the split Cosmos schema — root + turns + blob-refs +
+//     checkpoints as separate arrays. Devs running with
+//     NEO_CONVERSATION_STORE_MODE != "v1" see the same shape on disk
+//     they'd see in production Cosmos, giving them realistic parity
+//     for debugging hydration / reload behavior. Blob offload is
+//     STILL a no-op in mock (results stay inline inside each turn's
+//     content) — the real offload module falls through to inline
+//     when CLI_STORAGE_ACCOUNT isn't configured, which is the mock-
+//     mode default.
+interface StoreShapeV2 {
+  version: 2;
+  roots: ConversationV2Root[];
+  turns: TurnDoc[];
+  blobRefs: BlobRefDoc[];
+  checkpoints: CheckpointDoc[];
+}
+
+type StoreShape = StoreShapeV1 | StoreShapeV2;
+
+/** True when the active store mode implies devs should see the
+ *  split-document on-disk layout. Any non-"v1" mode qualifies. */
+function shouldUseSplitShape(): boolean {
+  return NEO_CONVERSATION_STORE_MODE !== "v1";
 }
 
 export class MockConversationStore implements SessionStore {
@@ -67,7 +101,7 @@ export class MockConversationStore implements SessionStore {
     try {
       const raw = readFileSync(this.storePath, "utf-8");
       const parsed = JSON.parse(raw) as Partial<StoreShape>;
-      if (!parsed || parsed.version !== 1 || !Array.isArray(parsed.conversations)) {
+      if (!parsed || typeof parsed.version !== "number") {
         logger.warn(
           "Mock conversation store file has unexpected shape; starting empty",
           "mock-conversation-store",
@@ -75,14 +109,55 @@ export class MockConversationStore implements SessionStore {
         );
         return;
       }
-      for (const conv of parsed.conversations) {
-        if (conv && typeof conv.id === "string") {
-          this.conversations.set(conv.id, conv);
+
+      if (parsed.version === 1 && Array.isArray((parsed as StoreShapeV1).conversations)) {
+        // Legacy v1 file — load as Conversations directly. If the
+        // dev is now in a split-shape mode, the next save() will
+        // auto-upgrade the file to v2.
+        const v1 = parsed as StoreShapeV1;
+        for (const conv of v1.conversations) {
+          if (conv && typeof conv.id === "string") {
+            this.conversations.set(conv.id, conv);
+          }
         }
+      } else if (
+        parsed.version === 2 &&
+        Array.isArray((parsed as StoreShapeV2).roots) &&
+        Array.isArray((parsed as StoreShapeV2).turns)
+      ) {
+        // v2 file — reassemble each Conversation from root + turns.
+        // blob-refs and checkpoints are loaded but not exercised by
+        // the mock's in-memory model (tool-result content stays
+        // inline inside the turn's content exactly as it was
+        // persisted — the mock never offloads).
+        const v2 = parsed as StoreShapeV2;
+        const turnsByConv = new Map<string, TurnDoc[]>();
+        for (const t of v2.turns) {
+          if (!turnsByConv.has(t.conversationId)) {
+            turnsByConv.set(t.conversationId, []);
+          }
+          turnsByConv.get(t.conversationId)!.push(t);
+        }
+        for (const root of v2.roots) {
+          const turns = turnsByConv.get(root.conversationId) ?? [];
+          this.conversations.set(
+            root.id,
+            rebuildConversationFromDocs({ root, turns }),
+          );
+        }
+      } else {
+        logger.warn(
+          "Mock conversation store file has unknown version; starting empty",
+          "mock-conversation-store",
+          { path: this.storePath, version: parsed.version },
+        );
+        return;
       }
+
       logger.info("Mock conversation store loaded", "mock-conversation-store", {
         path: this.storePath,
         count: this.conversations.size,
+        storedVersion: parsed.version,
       });
     } catch (err) {
       logger.warn(
@@ -96,10 +171,32 @@ export class MockConversationStore implements SessionStore {
   private save(): void {
     try {
       mkdirSync(dirname(this.storePath), { recursive: true });
-      const shape: StoreShape = {
-        version: 1,
-        conversations: Array.from(this.conversations.values()),
-      };
+      const useSplit = shouldUseSplitShape();
+      let shape: StoreShape;
+      if (useSplit) {
+        // Split each Conversation into root + turns. blob-refs and
+        // checkpoints are always empty in the mock — offload and
+        // compaction are Cosmos-only paths.
+        const roots: ConversationV2Root[] = [];
+        const turns: TurnDoc[] = [];
+        for (const conv of this.conversations.values()) {
+          const split = splitConversationToDocs(conv);
+          roots.push(split.root);
+          turns.push(...split.turns);
+        }
+        shape = {
+          version: 2,
+          roots,
+          turns,
+          blobRefs: [],
+          checkpoints: [],
+        };
+      } else {
+        shape = {
+          version: 1,
+          conversations: Array.from(this.conversations.values()),
+        };
+      }
       writeFileSync(this.storePath, JSON.stringify(shape, null, 2), "utf-8");
     } catch (err) {
       logger.warn(
