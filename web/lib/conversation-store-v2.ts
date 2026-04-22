@@ -236,34 +236,63 @@ export function rebuildConversationFromDocs(input: {
  * staging lifecycle policy backstops any orphan. We log warns.
  */
 async function promoteOffloadedBlobsIn(messages: Message[]): Promise<void> {
-  for (const msg of messages) {
-    if (!Array.isArray(msg.content)) continue;
-    for (const block of msg.content) {
-      if (!block || typeof block !== "object") continue;
-      const maybeToolResult = block as { type?: string; content?: unknown };
-      if (maybeToolResult.type !== "tool_result") continue;
-      const inner = maybeToolResult.content;
-      // The content is typically a stringified descriptor (the agent
-      // loop passes descriptor JSON through injection-guard wrapping).
-      // Try both shapes.
-      let parsed: unknown = inner;
-      if (typeof inner === "string") {
-        try {
-          parsed = JSON.parse(inner);
-        } catch {
-          continue;
+  // Outer guard upholds the "never throws" contract at this function's
+  // own boundary. Without it, the guarantee would depend on every
+  // awaited call inside the loop being safe.
+  try {
+    // Cap the JSON parse size per tool_result block. A real
+    // BlobRefDescriptor serializes to well under 1 KB; anything over
+    // 4 KB is either a huge genuine descriptor (not our shape) or a
+    // DoS probe — either way, skipping is fine.
+    const MAX_DESCRIPTOR_PARSE_BYTES = 4 * 1024;
+
+    for (const msg of messages) {
+      if (!Array.isArray(msg.content)) continue;
+      for (const block of msg.content) {
+        if (!block || typeof block !== "object") continue;
+        const maybeToolResult = block as { type?: string; content?: unknown };
+        if (maybeToolResult.type !== "tool_result") continue;
+        const inner = maybeToolResult.content;
+
+        let parsed: unknown = inner;
+        if (typeof inner === "string") {
+          if (inner.length > MAX_DESCRIPTOR_PARSE_BYTES) continue;
+          try {
+            parsed = JSON.parse(inner);
+          } catch {
+            continue;
+          }
+        }
+
+        // The descriptor may be wrapped in injection-guard's
+        // { _neo_trust_boundary: ..., data: <descriptor> } envelope.
+        // CRITICAL: only accept the unwrap when the envelope carries
+        // the `_neo_trust_boundary` marker. Without this check, a
+        // doctored Cosmos doc with content: { data: { _neo_blob_ref: ... } }
+        // would bypass the intended origin verification and trigger
+        // a promote on attacker-chosen sha values.
+        const outer = parsed as Record<string, unknown> | null;
+        let unwrapped: unknown = parsed;
+        if (outer && typeof outer === "object" && "data" in outer) {
+          if (outer._neo_trust_boundary !== undefined) {
+            unwrapped = outer.data;
+          } else {
+            // Envelope-shaped but not trust-marked — reject.
+            continue;
+          }
+        }
+
+        if (isBlobRefDescriptor(unwrapped)) {
+          await promoteStagingBlob(unwrapped.sha256);
         }
       }
-      // The descriptor may be wrapped in injection-guard's
-      // { _neo_trust_boundary: ..., data: <descriptor> } envelope.
-      const unwrapped =
-        parsed && typeof parsed === "object" && "data" in (parsed as Record<string, unknown>)
-          ? (parsed as { data: unknown }).data
-          : parsed;
-      if (isBlobRefDescriptor(unwrapped)) {
-        await promoteStagingBlob(unwrapped.sha256);
-      }
     }
+  } catch (err) {
+    logger.warn(
+      "promoteOffloadedBlobsIn failed (best-effort)",
+      "conversation-store-v2",
+      { errorMessage: (err as Error).message },
+    );
   }
 }
 
@@ -522,7 +551,23 @@ export async function appendMessagesV2(
     const code =
       err && typeof err === "object" && "code" in err ? (err as { code: number }).code : 0;
     if (code === 412) {
-      // One retry on precondition failure (narrow-scope etag conflict).
+      // The retry path re-runs attempt() from scratch, which re-creates
+      // the turn docs. When the append spans multiple batches (> 99
+      // turns), the earlier batches already committed their turn docs
+      // — the retry would then hit 409 CONFLICT on deterministic turn
+      // IDs. Agent turns in practice append 1–3 messages, but migration
+      // (phase 9) and bulk imports can exceed 99 and need a smarter
+      // retry that re-reads the post-partial-commit turnCount.
+      // Rather than hide the bug, assert the invariant and surface a
+      // descriptive error for the rare multi-chunk + 412 case.
+      if (newMessages.length > 99) {
+        throw new Error(
+          `appendMessagesV2: 412 etag conflict on a multi-chunk append ` +
+            `(${newMessages.length} messages). Retry logic is safe only for ` +
+            `single-batch appends. See phase-9 migration for the proper fix.`,
+        );
+      }
+      // Single-batch — safe to retry.
       await attempt();
     } else {
       throw err;
@@ -746,6 +791,19 @@ function rootToSession(root: ConversationV2Root, turns: TurnDoc[]): Session {
  *     so point-reads don't require the ownerId up front; the ownerId
  *     check happens after the read.
  *   - `list()` (admin-only cross-partition) filters by docType = "root".
+ *
+ * AUTHORIZATION CONTRACT — IMPORTANT:
+ *   SessionStore methods that take only `id` (delete, setPendingConfirmation,
+ *   clearPendingConfirmation, isRateLimited, updateTitle) perform a point-read
+ *   to resolve the persisted `ownerId` and then pass it to the owner-aware
+ *   module function. That owner check is tautological here (persisted === what
+ *   we just read). The REAL authorization happens at the route layer: callers
+ *   are responsible for authenticating the user AND verifying they own the
+ *   session BEFORE invoking these methods. This mirrors the v1 CosmosSessionStore
+ *   contract, which has shipped for months with the same semantics — not a
+ *   regression. Routes that need explicit ownerId enforcement should call the
+ *   module-level *V2 functions directly (they take ownerId) rather than going
+ *   through the SessionStore wrapper.
  */
 export class CosmosV2SessionStore implements SessionStore {
   async create(role: Role, ownerId: string, channel: Channel = "web"): Promise<string> {
@@ -894,13 +952,16 @@ export class CosmosV2SessionStore implements SessionStore {
     const currentTurnCount = root.turnCount;
     const delta = messages.slice(currentTurnCount);
     if (delta.length === 0) {
-      // Touch updatedAt so listConversations ordering stays fresh.
-      await container.item(id, id).patch({
-        operations: [{ op: "set", path: "/updatedAt", value: nowIso() }],
-      });
+      // Fold the updatedAt touch and the optional title-set into a
+      // single patch so we only pay one Cosmos round-trip in the
+      // common zero-delta case (stream.ts' save-on-turn-complete).
+      const ops: PatchOperation[] = [
+        { op: "set", path: "/updatedAt", value: nowIso() },
+      ];
       if (title && !root.title) {
-        await updateTitleV2(id, root.ownerId, title);
+        ops.push({ op: "set", path: "/title", value: title });
       }
+      await container.item(id, id).patch({ operations: ops });
       return;
     }
 

@@ -6,6 +6,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 vi.mock("../lib/config", () => ({
   env: { CLI_STORAGE_ACCOUNT: "mockacct" },
   NEO_BLOB_OFFLOAD_THRESHOLD_BYTES: 100,
+  NEO_BLOB_RESOLVE_MAX_BYTES: 10_000,
   NEO_TOOL_RESULT_BLOB_CONTAINER: "neo-tool-results",
 }));
 
@@ -178,13 +179,22 @@ describe("tool-result blob offload", () => {
       expect(mockBlobs.size).toBe(2);
     });
 
-    it("shortSummary is capped (not the full 500-byte payload)", async () => {
+    it("rawPrefix is capped (not the full 500-byte payload)", async () => {
       const big = "x".repeat(500);
       const out = (await maybeOffloadToolResult(big, {
         conversationId: "c",
         sourceTool: "t",
       })) as BlobRefDescriptor;
-      expect(out.shortSummary.length).toBeLessThanOrEqual(281); // 280 + "…"
+      expect(out.rawPrefix.length).toBeLessThanOrEqual(281); // 280 + "…"
+    });
+
+    it("descriptor carries conversationId so the resolve event can correlate back", async () => {
+      const big = "x".repeat(500);
+      const out = (await maybeOffloadToolResult(big, {
+        conversationId: "conv_xyz",
+        sourceTool: "t",
+      })) as BlobRefDescriptor;
+      expect(out.conversationId).toBe("conv_xyz");
     });
   });
 
@@ -249,28 +259,95 @@ describe("tool-result blob offload", () => {
     it("refuses to resolve a URI outside the configured container (SSRF guard)", async () => {
       const malicious: BlobRefDescriptor = {
         _neo_blob_ref: true,
-        sha256: "deadbeef",
+        // Valid hex so the sha256 format guard doesn't short-circuit
+        // the test before the SSRF guard runs.
+        sha256: "a".repeat(64),
         sizeBytes: 1,
         mediaType: "application/json",
-        shortSummary: "evil",
-        uri: "https://attacker.example.com/neo-tool-results/blobs/deadbeef",
+        rawPrefix: "evil",
+        uri: "https://attacker.example.com/neo-tool-results/blobs/aaa",
         sourceTool: "run_sentinel_kql",
+        conversationId: "c",
       };
       await expect(resolveBlobRef(malicious)).rejects.toThrow(/URI does not belong/);
+    });
+
+    it("refuses container-name-prefix-collision URIs (e.g. neo-tool-results-evil)", async () => {
+      // Without the trailing-slash anchor, a container name that is a
+      // prefix of another container's name would slip through the SSRF
+      // guard. This test asserts the anchored variant rejects.
+      const collision: BlobRefDescriptor = {
+        _neo_blob_ref: true,
+        sha256: "b".repeat(64),
+        sizeBytes: 1,
+        mediaType: "application/json",
+        rawPrefix: "evil",
+        uri: "https://mockacct.blob.core.windows.net/neo-tool-results-evil/blobs/bbb",
+        sourceTool: "t",
+        conversationId: "c",
+      };
+      await expect(resolveBlobRef(collision)).rejects.toThrow(/URI does not belong/);
+    });
+
+    it("refuses a descriptor whose sha256 is not a 64-char hex string", async () => {
+      const bad: BlobRefDescriptor = {
+        _neo_blob_ref: true,
+        sha256: "../../adminkey",
+        sizeBytes: 1,
+        mediaType: "application/json",
+        rawPrefix: "",
+        uri: `${CONTAINER_URL}/blobs/whatever`,
+        sourceTool: "t",
+        conversationId: "c",
+      };
+      await expect(resolveBlobRef(bad)).rejects.toThrow(/sha256 is not a valid hex-64/);
+    });
+
+    it("refuses a descriptor that claims a size above NEO_BLOB_RESOLVE_MAX_BYTES", async () => {
+      const oversized: BlobRefDescriptor = {
+        _neo_blob_ref: true,
+        sha256: "c".repeat(64),
+        sizeBytes: 50_000, // mock cap is 10_000
+        mediaType: "application/json",
+        rawPrefix: "",
+        uri: `${CONTAINER_URL}/blobs/ccc`,
+        sourceTool: "t",
+        conversationId: "c",
+      };
+      await expect(resolveBlobRef(oversized)).rejects.toThrow(/above NEO_BLOB_RESOLVE_MAX_BYTES/);
+    });
+
+    it("conversation_blob_resolve event carries conversationId for correlation", async () => {
+      const big = "x".repeat(500);
+      const out = (await maybeOffloadToolResult(big, {
+        conversationId: "conv_trace",
+        sourceTool: "t",
+      })) as BlobRefDescriptor;
+      await promoteStagingBlob(out.sha256);
+
+      mockEmitEvent.mockReset();
+      await resolveBlobRef(out);
+      expect(mockEmitEvent).toHaveBeenCalledWith(
+        "conversation_blob_resolve",
+        expect.any(String),
+        expect.any(String),
+        expect.objectContaining({ conversationId: "conv_trace" }),
+      );
     });
   });
 
   describe("isBlobRefDescriptor", () => {
-    it("identifies a valid descriptor", () => {
+    it("identifies a valid descriptor (hex-64 sha + conversationId)", () => {
       expect(
         isBlobRefDescriptor({
           _neo_blob_ref: true,
-          sha256: "x",
+          sha256: "a".repeat(64),
           uri: "https://...",
           sizeBytes: 1,
           mediaType: "application/json",
-          shortSummary: "",
+          rawPrefix: "",
           sourceTool: "t",
+          conversationId: "conv_1",
         }),
       ).toBe(true);
     });
@@ -287,12 +364,45 @@ describe("tool-result blob offload", () => {
 
     it("rejects an object missing the sentinel", () => {
       expect(
-        isBlobRefDescriptor({ sha256: "x", uri: "y" }),
+        isBlobRefDescriptor({
+          sha256: "a".repeat(64),
+          uri: "y",
+          conversationId: "c",
+        }),
       ).toBe(false);
     });
 
     it("rejects an object with sentinel but missing required fields", () => {
       expect(isBlobRefDescriptor({ _neo_blob_ref: true })).toBe(false);
+    });
+
+    it("rejects a sha256 that is not 64 hex characters (defense-in-depth)", () => {
+      expect(
+        isBlobRefDescriptor({
+          _neo_blob_ref: true,
+          sha256: "../../adminkey",
+          uri: "y",
+          conversationId: "c",
+        }),
+      ).toBe(false);
+      expect(
+        isBlobRefDescriptor({
+          _neo_blob_ref: true,
+          sha256: "A".repeat(64), // uppercase not allowed in our regex
+          uri: "y",
+          conversationId: "c",
+        }),
+      ).toBe(false);
+    });
+
+    it("rejects a descriptor missing conversationId (required for audit correlation)", () => {
+      expect(
+        isBlobRefDescriptor({
+          _neo_blob_ref: true,
+          sha256: "a".repeat(64),
+          uri: "y",
+        }),
+      ).toBe(false);
     });
   });
 });

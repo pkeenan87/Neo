@@ -393,7 +393,9 @@ export interface BlobRefDoc {
   sizeBytes: number;
   mediaType: string;
   sourceTool: string;
-  shortSummary: string;
+  /** First-280-char prefix of the raw payload. Same caveat as
+   *  BlobRefDescriptor.rawPrefix — untrusted text, may contain PII. */
+  rawPrefix: string;
   expiresAt: string | null;
   ttl?: number;
 }
@@ -429,9 +431,16 @@ export interface BlobRefDescriptor {
   sha256: string;
   sizeBytes: number;
   mediaType: string;
-  shortSummary: string;
+  /** The first 280 chars of the raw persisted payload. NOT a human
+   *  summary — it's a literal prefix for debugging / dashboarding. May
+   *  contain PII if the tool output did. Renderers should treat it as
+   *  untrusted text and strip / scrub before surfacing to users. */
+  rawPrefix: string;
   uri: string;
   sourceTool: string;
+  /** Conversation this blob was captured against. Persisted so the
+   *  resolve audit event can correlate without joining on sha256. */
+  conversationId: string;
 }
 
 /** Payload for the `conversation_dual_write_divergence` log event.

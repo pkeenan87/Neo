@@ -59,7 +59,37 @@ function makeFakeContainer() {
     return store.get(pk)!;
   }
 
-  const container: Record<string, unknown> = {
+  // Typed loosely so tests can spy on individual methods. The SUT
+  // imports via the `Container` type from @azure/cosmos but we cast
+  // at the __resetV2ContainerForTest boundary.
+  interface FakeBatchOp {
+    operationType: "Create" | "Patch" | "Delete";
+    id?: string;
+    resourceBody?: unknown;
+    ifMatch?: string;
+  }
+  interface FakeContainer {
+    items: {
+      create<T extends FakeDoc>(doc: T): Promise<{ resource: T }>;
+      query<T>(
+        q: { query: string; parameters?: Array<{ name: string; value: string }> },
+      ): { fetchAll(): Promise<{ resources: T[] }> };
+      batch(
+        operations: FakeBatchOp[],
+        partitionKey: string,
+      ): Promise<{ code: number }>;
+    };
+    item(id: string, partitionKey: string): {
+      read<T>(): Promise<{ resource: T | undefined; etag: string | undefined }>;
+      patch(
+        body: { operations: Array<{ op: string; path: string; value: unknown }> },
+        options?: unknown,
+      ): Promise<{ resource: FakeDoc }>;
+      replace(doc: FakeDoc, opts?: unknown): Promise<{ resource: FakeDoc }>;
+      delete(): Promise<{ code: number }>;
+    };
+  }
+  const container: FakeContainer = {
     items: {
       async create<T extends FakeDoc>(doc: T): Promise<{ resource: T }> {
         const pk = doc.conversationId ?? doc.id;
@@ -218,6 +248,7 @@ import {
   CosmosV2SessionStore,
 } from "../lib/conversation-store-v2";
 import type { Conversation, ConversationV2Root, TurnDoc } from "../lib/types";
+import { CsvAttachmentCapError } from "../lib/types";
 
 describe("v2 schema transforms", () => {
   describe("splitConversationToDocs", () => {
@@ -403,16 +434,24 @@ describe("v2 CRUD", () => {
     expect(partition.get(`turn_${id}_2`)!.content).toBe("a1");
   });
 
-  it("appendMessagesV2 promotes staging blobs for any offloaded tool_result descriptors", async () => {
+  it("appendMessagesV2 promotes staging blobs for any trust-marked offloaded tool_result descriptors", async () => {
     const id = await createConversationV2("owner_1", "reader", "web");
+    const sha = "a".repeat(64);
     const descriptor = {
       _neo_blob_ref: true,
-      sha256: "abc123",
+      sha256: sha,
       uri: "https://mock/...",
       sizeBytes: 1,
       mediaType: "application/json",
-      shortSummary: "",
+      rawPrefix: "",
       sourceTool: "t",
+      conversationId: id,
+    };
+    // Injection-guard-style envelope — includes _neo_trust_boundary to
+    // signal this was produced by our own offload path.
+    const envelope = {
+      _neo_trust_boundary: { source: "tool_offload", tool: "t" },
+      data: descriptor,
     };
     await appendMessagesV2(id, "owner_1", [
       {
@@ -421,12 +460,43 @@ describe("v2 CRUD", () => {
           {
             type: "tool_result",
             tool_use_id: "tu_1",
+            content: JSON.stringify(envelope),
+          },
+        ],
+      },
+    ]);
+    expect(mockPromoteStagingBlob).toHaveBeenCalledWith(sha);
+  });
+
+  it("appendMessagesV2 does NOT promote a descriptor from an envelope without _neo_trust_boundary", async () => {
+    // A doctored Cosmos write that wraps `{ data: <descriptor> }`
+    // without the trust marker must NOT trigger promotion.
+    const id = await createConversationV2("owner_1", "reader", "web");
+    const sha = "b".repeat(64);
+    const descriptor = {
+      _neo_blob_ref: true,
+      sha256: sha,
+      uri: "https://mock/...",
+      sizeBytes: 1,
+      mediaType: "application/json",
+      rawPrefix: "",
+      sourceTool: "t",
+      conversationId: id,
+    };
+    await appendMessagesV2(id, "owner_1", [
+      {
+        role: "user",
+        content: [
+          {
+            type: "tool_result",
+            tool_use_id: "tu_1",
+            // Envelope-shaped but missing _neo_trust_boundary → reject.
             content: JSON.stringify({ data: descriptor }),
           },
         ],
       },
     ]);
-    expect(mockPromoteStagingBlob).toHaveBeenCalledWith("abc123");
+    expect(mockPromoteStagingBlob).not.toHaveBeenCalled();
   });
 
   it("updateTitleV2 patches the root (not replace)", async () => {
@@ -482,23 +552,34 @@ describe("v2 CRUD", () => {
     expect(fake.store.get(id)?.size ?? 0).toBe(0);
   });
 
-  it("listConversationsV2 returns only root docs owned by the caller, newest first", async () => {
+  it("listConversationsV2 returns root docs owned by the caller ordered newest-first", async () => {
+    // Use fake timers so timestamps differ deterministically without
+    // relying on real wall-clock resolution.
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-04-21T10:00:00.000Z"));
     const a = await createConversationV2("owner_1", "reader", "web");
-    await new Promise((r) => setTimeout(r, 10));
+    vi.setSystemTime(new Date("2026-04-21T10:00:05.000Z"));
     const b = await createConversationV2("owner_1", "reader", "web");
+    vi.setSystemTime(new Date("2026-04-21T10:00:10.000Z"));
     await createConversationV2("owner_2", "reader", "web"); // should not appear
+    vi.useRealTimers();
 
     // Seed some turns to make sure they're excluded from listing.
     await appendMessagesV2(a, "owner_1", [{ role: "user", content: "q" }]);
 
     const out = await listConversationsV2("owner_1");
     const ids = out.map((c) => c.id);
-    expect(ids).toContain(a);
-    expect(ids).toContain(b);
+    // Ownership filter: owner_2's doc should NOT appear.
     expect(out.every((c) => c.ownerId === "owner_1")).toBe(true);
+    // Ordering: b was created AFTER a (newer), so despite the later
+    // appendMessages on a updating its updatedAt, the final list is
+    // ordered by root.updatedAt — the appendMessages bumped a to
+    // "now" (real time) which is after b's fake-time createdAt, so
+    // a should be first.
+    expect(ids.indexOf(a)).toBeLessThan(ids.indexOf(b));
   });
 
-  it("appendCsvAttachmentV2 adds to root.csvAttachments; rejects at cap", async () => {
+  it("appendCsvAttachmentV2 adds to root.csvAttachments on the happy path", async () => {
     const id = await createConversationV2("owner_1", "reader", "web");
     const attach = {
       csvId: "csv_1",
@@ -515,10 +596,75 @@ describe("v2 CRUD", () => {
     expect(csvs[0].csvId).toBe("csv_1");
   });
 
-  it("isConversationRateLimitedV2 consults turnCount against role limits", async () => {
+  it("appendCsvAttachmentV2 throws CsvAttachmentCapError when at the cap (10)", async () => {
+    const id = await createConversationV2("owner_1", "reader", "web");
+    const baseAttach = {
+      filename: "x.csv",
+      blobUrl: "https://mock/x.csv",
+      rowCount: 10,
+      columns: ["a", "b"],
+      sampleRows: [["1", "2"]],
+      createdAt: "2026-04-21T10:00:00.000Z",
+    };
+    for (let i = 0; i < 10; i++) {
+      await appendCsvAttachmentV2(id, "owner_1", { ...baseAttach, csvId: `csv_${i}` });
+    }
+    await expect(
+      appendCsvAttachmentV2(id, "owner_1", { ...baseAttach, csvId: "csv_10" }),
+    ).rejects.toThrow(CsvAttachmentCapError);
+    // The cap prevents any addition beyond 10.
+    const csvs = await getCsvAttachmentsV2(id, "owner_1");
+    expect(csvs).toHaveLength(10);
+  });
+
+  it("isConversationRateLimitedV2 returns false for a brand-new conversation", async () => {
     const id = await createConversationV2("owner_1", "reader", "web");
     const before = await isConversationRateLimitedV2(id, "owner_1");
     expect(before).toBe(false);
+  });
+
+  it("isConversationRateLimitedV2 returns true when turnCount reaches the role cap", async () => {
+    const id = await createConversationV2("owner_1", "reader", "web");
+    // Patch the root directly to simulate hitting the cap without
+    // actually creating N turn docs. Reader cap is 100 messages.
+    await fake.container.item(id, id).patch({
+      operations: [{ op: "set", path: "/turnCount", value: 100 }],
+    });
+    expect(await isConversationRateLimitedV2(id, "owner_1")).toBe(true);
+  });
+
+  it("appendMessagesV2 retries once on 412 etag conflict (single-batch path)", async () => {
+    const id = await createConversationV2("owner_1", "reader", "web");
+    let callCount = 0;
+    const origBatch = fake.container.items.batch.bind(fake.container.items);
+    const spy = vi
+      .spyOn(fake.container.items, "batch")
+      .mockImplementation(async (...args) => {
+        if (callCount++ === 0) return { code: 412 };
+        return origBatch(...args);
+      });
+    await expect(
+      appendMessagesV2(id, "owner_1", [{ role: "user", content: "q" }]),
+    ).resolves.not.toThrow();
+    expect(callCount).toBe(2);
+    expect(fake.store.get(id)!.get(id)!.turnCount).toBe(1);
+    spy.mockRestore();
+  });
+
+  it("appendMessagesV2 throws a descriptive error on multi-chunk 412 (>99 messages)", async () => {
+    const id = await createConversationV2("owner_1", "reader", "web");
+    // Force a 412 on the first batch call.
+    const spy = vi
+      .spyOn(fake.container.items, "batch")
+      .mockImplementation(async () => ({ code: 412 }));
+    const bulk = Array.from({ length: 150 }, (_, i) => ({
+      role: "user" as const,
+      content: `q${i}`,
+    }));
+    await expect(
+      appendMessagesV2(id, "owner_1", bulk),
+    ).rejects.toThrow(/multi-chunk append/);
+    spy.mockRestore();
   });
 });
 

@@ -1,9 +1,21 @@
 import { BlobServiceClient, ContainerClient } from "@azure/storage-blob";
 import { ManagedIdentityCredential } from "@azure/identity";
 import { createHash } from "crypto";
-import { env, NEO_BLOB_OFFLOAD_THRESHOLD_BYTES, NEO_TOOL_RESULT_BLOB_CONTAINER } from "./config";
+import {
+  env,
+  NEO_BLOB_OFFLOAD_THRESHOLD_BYTES,
+  NEO_BLOB_RESOLVE_MAX_BYTES,
+  NEO_TOOL_RESULT_BLOB_CONTAINER,
+} from "./config";
 import { logger } from "./logger";
 import type { BlobRefDescriptor } from "./types";
+
+// Strict hex-64 pattern for sha256. Used to reject doctored descriptor
+// values before they reach Azure SDK URL construction. Defense in depth
+// — Azure's own URL encoding makes cross-container traversal infeasible
+// today, but validating format keeps that assumption load-bearing
+// rather than accidental.
+const SHA256_RE = /^[0-9a-f]{64}$/;
 
 // ─────────────────────────────────────────────────────────────
 //  Tool-result blob offload
@@ -22,6 +34,17 @@ import type { BlobRefDescriptor } from "./types";
 //  garbage-collected by a lifecycle policy on the staging/ prefix.
 //  Content-addressed (SHA-256) keying makes re-offload idempotent —
 //  the same result twice produces the same path.
+//
+//  OPS NOTE: the staging/ lifecycle policy is set to 7 DAYS (not 24h
+//  as the spec originally proposed). A shorter window risks data loss
+//  if a pod restarts after the Cosmos turn-doc commit but before
+//  promoteStagingBlob fires — the staging blob is the only surviving
+//  copy of the content in that window. 7 days gives ample headroom
+//  for standard pod cycling and rolling deploys.
+//  TODO(reconciliation): add a startup job that scans Cosmos turn docs
+//  for blob-ref descriptors whose sha doesn't exist at blobs/<sha>
+//  and re-promotes from staging/<sha> when present. Belt + suspenders
+//  against the pod-restart-between-commit-and-promote race.
 //
 //  SSRF GUARD: resolveBlobRef validates the descriptor's `uri` belongs
 //  to the configured container before fetching. A maliciously crafted
@@ -73,14 +96,26 @@ function sha256Hex(data: string | Buffer): string {
   return hash.digest("hex");
 }
 
-function truncateSummary(raw: string, maxChars = 280): string {
-  // Short, plain summary of the offloaded payload for dashboards / SR
-  // output. Truncates at maxChars at a word boundary when possible.
+function truncateRawPrefix(raw: string, maxChars = 280): string {
+  // Literal prefix of the offloaded payload — NOT a human summary.
+  // Used for quick dashboard inspection. Truncates at maxChars at a
+  // word boundary when convenient, else a hard slice.
   if (raw.length <= maxChars) return raw;
   const clipped = raw.slice(0, maxChars);
   const lastSpace = clipped.lastIndexOf(" ");
   const body = lastSpace > maxChars * 0.6 ? clipped.slice(0, lastSpace) : clipped;
   return `${body}…`;
+}
+
+/**
+ * Normalize a container URL so `startsWith` prefix-matches only
+ * descriptors pointing strictly inside this container. Without the
+ * trailing-slash anchor, a URI pointing at `{container}-evil/...`
+ * would prefix-match the legitimate container's URL and bypass the
+ * SSRF guard.
+ */
+function containerUrlPrefix(url: string): string {
+  return url.endsWith("/") ? url : `${url}/`;
 }
 
 /**
@@ -162,9 +197,10 @@ export async function maybeOffloadToolResult(
     sha256,
     sizeBytes,
     mediaType: ctx.mediaType ?? "application/json",
-    shortSummary: truncateSummary(wrappedJson),
+    rawPrefix: truncateRawPrefix(wrappedJson),
     uri: blockBlob.url,
     sourceTool: ctx.sourceTool,
+    conversationId: ctx.conversationId,
   };
   return descriptor;
 }
@@ -184,6 +220,17 @@ export async function maybeOffloadToolResult(
 export async function promoteStagingBlob(sha256: string): Promise<void> {
   const container = getToolResultContainer();
   if (!container) return;
+
+  // Defense-in-depth: reject a sha that isn't a 64-char hex string
+  // before we construct a blob path from it.
+  if (!SHA256_RE.test(sha256)) {
+    logger.warn(
+      "Refusing to promote blob — sha256 is not a valid hex-64 string",
+      "tool-result-blob-store",
+      { sha256Prefix: sha256.slice(0, 16) },
+    );
+    return;
+  }
 
   const source = container.getBlobClient(`staging/${sha256}`);
   const target = container.getBlockBlobClient(`blobs/${sha256}`);
@@ -218,12 +265,31 @@ export async function resolveBlobRef(descriptor: BlobRefDescriptor): Promise<str
     throw new Error("Tool-result blob storage is not configured.");
   }
 
-  // SSRF guard — never follow a URI that isn't inside our configured
-  // container, even if a doctored Cosmos descriptor asks us to.
-  const containerUrl = container.url;
-  if (!descriptor.uri.startsWith(containerUrl)) {
+  // Defense-in-depth: the sha256 came from Cosmos (trusted surface but
+  // not cryptographically signed). Reject non-hex values before we
+  // construct a blob path from the string.
+  if (!SHA256_RE.test(descriptor.sha256)) {
+    throw new Error("Refusing to resolve blob-ref: sha256 is not a valid hex-64 string.");
+  }
+
+  // SSRF guard — the descriptor URI must be strictly inside our
+  // configured container's URL space. Anchor the prefix match with a
+  // trailing slash so a container named `foo` can't be fooled into
+  // resolving a URI inside `foo-evil`.
+  const allowedPrefix = containerUrlPrefix(container.url);
+  if (!descriptor.uri.startsWith(allowedPrefix)) {
     throw new Error(
       `Refusing to resolve blob-ref: URI does not belong to configured container.`,
+    );
+  }
+
+  // Size cap — protect against unbounded heap allocation. A doctored
+  // descriptor with an inflated sizeBytes is the main risk; real
+  // offloads never exceed a few MB.
+  if (descriptor.sizeBytes > NEO_BLOB_RESOLVE_MAX_BYTES) {
+    throw new Error(
+      `Refusing to resolve blob-ref: descriptor claims ${descriptor.sizeBytes} bytes, ` +
+        `above NEO_BLOB_RESOLVE_MAX_BYTES (${NEO_BLOB_RESOLVE_MAX_BYTES}).`,
     );
   }
 
@@ -233,15 +299,21 @@ export async function resolveBlobRef(descriptor: BlobRefDescriptor): Promise<str
   const blobName = `blobs/${descriptor.sha256}`;
   const stagingName = `staging/${descriptor.sha256}`;
 
+  // Extra belt on the size cap: pass `count` to downloadToBuffer so the
+  // SDK never streams more bytes than the descriptor claims, even if
+  // the real blob happens to be larger (descriptor-blob drift). +1 so
+  // descriptor.sizeBytes = N still reads all N bytes.
+  const maxBytes = descriptor.sizeBytes + 1;
+
   let buffer: Buffer;
   try {
-    buffer = await container.getBlobClient(blobName).downloadToBuffer();
+    buffer = await container.getBlobClient(blobName).downloadToBuffer(0, maxBytes);
   } catch (err) {
     // If the blob doesn't exist at blobs/, fall back to staging.
     // RestError from a missing blob has `statusCode: 404`.
     const status = (err as { statusCode?: number }).statusCode;
     if (status !== 404) throw err;
-    buffer = await container.getBlobClient(stagingName).downloadToBuffer();
+    buffer = await container.getBlobClient(stagingName).downloadToBuffer(0, maxBytes);
   }
   const durationMs = Date.now() - startedAt;
 
@@ -250,6 +322,7 @@ export async function resolveBlobRef(descriptor: BlobRefDescriptor): Promise<str
     `Tool result resolved (${descriptor.sizeBytes} bytes)`,
     "tool-result-blob-store",
     {
+      conversationId: descriptor.conversationId,
       sha256: descriptor.sha256,
       sizeBytes: descriptor.sizeBytes,
       sourceTool: descriptor.sourceTool,
@@ -266,11 +339,16 @@ export async function resolveBlobRef(descriptor: BlobRefDescriptor): Promise<str
  * path (phase 10) so they know to call resolveBlobRef.
  */
 export function isBlobRefDescriptor(value: unknown): value is BlobRefDescriptor {
-  return (
-    typeof value === "object" &&
-    value !== null &&
-    (value as { _neo_blob_ref?: unknown })._neo_blob_ref === true &&
-    typeof (value as { sha256?: unknown }).sha256 === "string" &&
-    typeof (value as { uri?: unknown }).uri === "string"
-  );
+  if (typeof value !== "object" || value === null) return false;
+  const v = value as {
+    _neo_blob_ref?: unknown;
+    sha256?: unknown;
+    uri?: unknown;
+    conversationId?: unknown;
+  };
+  if (v._neo_blob_ref !== true) return false;
+  if (typeof v.sha256 !== "string" || !SHA256_RE.test(v.sha256)) return false;
+  if (typeof v.uri !== "string") return false;
+  if (typeof v.conversationId !== "string") return false;
+  return true;
 }

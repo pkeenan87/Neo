@@ -54,6 +54,17 @@ export const NEO_BLOB_OFFLOAD_THRESHOLD_BYTES = parsePositiveInt(
   256_000,
 );
 
+// Hard upper bound on how much we'll read back from blob storage in a
+// single resolveBlobRef call. Protects against unbounded heap allocation
+// when a descriptor (possibly doctored in Cosmos) claims a huge payload.
+// Default 20 MB — comfortably larger than typical offloaded results
+// (KQL tables, PDF content, EDR process trees) while staying an order
+// of magnitude below default Node.js heap.
+export const NEO_BLOB_RESOLVE_MAX_BYTES = parsePositiveInt(
+  "NEO_BLOB_RESOLVE_MAX_BYTES",
+  20 * 1024 * 1024,
+);
+
 // Default retention class stamped on new conversation root documents.
 // Drives Cosmos TTL and Azure Blob Storage lifecycle tagging via the
 // lib/retention.ts helper.
