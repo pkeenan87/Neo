@@ -103,6 +103,13 @@ vi.mock("@azure/cosmos", () => {
         getV1Partition(pk).set(doc.id, doc);
         return { resource: doc };
       },
+      // NOTE: This fake ignores all query predicates and partition keys
+      // — it returns every document in the store regardless of WHERE /
+      // ORDER BY. Sufficient for the current dispatch tests, which
+      // don't seed multiple owners or exercise listConversations.
+      // Any new test that relies on filtered query results must
+      // extend this fake first, otherwise it'll produce false
+      // positives.
       query<T>(_q: unknown) {
         return {
           async fetchAll(): Promise<{ resources: T[] }> {
@@ -158,7 +165,11 @@ import {
   appendCsvAttachment,
 } from "../lib/conversation-store";
 import { __forceStoreModeForTest } from "../lib/conversation-store-mode";
-import type { Message, PendingTool, CSVReference } from "../lib/types";
+import {
+  CsvAttachmentCapError,
+  CSV_MAX_REFERENCE_ATTACHMENTS,
+} from "../lib/types";
+import type { Message } from "../lib/types";
 
 // Every test runs `fn` inside a specific mode context. Keeps the
 // setup terse and matches the real request-scoped dispatch path.
@@ -282,29 +293,37 @@ describe("conversation-store dispatch", () => {
       expect(v1Store.get("owner_1")?.has(id)).toBe(true);
     });
 
-    it("writes to v1 AND v2 — v1 authoritative, v2 best-effort", async () => {
+    it("writes to v1 AND v2 with matching args — v1 authoritative, v2 best-effort", async () => {
       const id = await inMode("dual-write", () =>
         createConversation("owner_1", "reader", "web"),
       );
       await inMode("dual-write", () =>
         updateTitle(id, "owner_1", "New Title"),
       );
+      // Assert v2 received the SAME args as v1 — the whole point of
+      // dual-write is keeping the two stores in lockstep.
       expect(v2Spies.updateTitleV2).toHaveBeenCalledTimes(1);
-      // v1 doc has the new title.
+      expect(v2Spies.updateTitleV2).toHaveBeenCalledWith(
+        id,
+        "owner_1",
+        "New Title",
+      );
+      // And v1 was actually mutated.
       const doc = v1Store.get("owner_1")?.get(id) as { title?: string };
       expect(doc?.title).toBe("New Title");
     });
 
-    it("v2 write failure does NOT throw; logs conversation_dual_write_divergence", async () => {
+    it("v2 write failure does NOT throw; v1 still persists; divergence event fires", async () => {
       v2Spies.updateTitleV2.mockRejectedValueOnce(new Error("v2 cosmos down"));
-      // Seed a v1 doc first.
       const id = await inMode("v1", () =>
         createConversation("owner_1", "reader", "web"),
       );
-      // Now under dual-write, the v2 side fails but v1 succeeds.
       await expect(
         inMode("dual-write", () => updateTitle(id, "owner_1", "X")),
       ).resolves.not.toThrow();
+      // CRUCIAL assertion: the v1 authoritative write actually happened.
+      const doc = v1Store.get("owner_1")?.get(id) as { title?: string };
+      expect(doc?.title).toBe("X");
       expect(mockEmitEvent).toHaveBeenCalledWith(
         "conversation_dual_write_divergence",
         expect.any(String),
@@ -316,12 +335,66 @@ describe("conversation-store dispatch", () => {
       );
     });
 
+    it("CsvAttachmentCapError from v2 propagates (NOT swallowed as divergence)", async () => {
+      // Seed a v1 doc so the v1 cap write can succeed.
+      const id = await inMode("v1", () =>
+        createConversation("owner_1", "reader", "web"),
+      );
+      // v2 rejects with the typed cap error — must propagate.
+      const capErr = new CsvAttachmentCapError(
+        CSV_MAX_REFERENCE_ATTACHMENTS,
+      );
+      v2Spies.appendCsvAttachmentV2.mockRejectedValueOnce(capErr);
+      const attach = {
+        csvId: "csv_1",
+        filename: "x.csv",
+        blobUrl: "https://mock/x.csv",
+        rowCount: 1,
+        columns: ["a"],
+        sampleRows: [["1"]],
+        createdAt: "2026-04-21T00:00:00Z",
+      };
+      await expect(
+        inMode("dual-write", () => appendCsvAttachment(id, "owner_1", attach)),
+      ).rejects.toThrow(CsvAttachmentCapError);
+      // Divergence event should NOT fire for contract-signal errors.
+      expect(mockEmitEvent).not.toHaveBeenCalled();
+    });
+
     it("reads come from v1 only (v2 NOT consulted)", async () => {
       const id = await inMode("v1", () =>
         createConversation("owner_1", "reader", "web"),
       );
       await inMode("dual-write", () => getConversation(id, "owner_1"));
       expect(v2Spies.getConversationV2).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("mock-mode short-circuit", () => {
+    // useMock() in conversation-store.ts checks env.MOCK_MODE (or the
+    // absence of COSMOS_ENDPOINT) BEFORE the mode dispatch. Even in
+    // v2 / dual-* modes, mock mode must still route to the file-
+    // backed mock store — the split schema isn't available in dev.
+    it("v2 mode with MOCK_MODE=true still routes to mockStore (not v2)", async () => {
+      // Import the mock stub so we can spy on it.
+      const mod = await import("../lib/mock-conversation-store");
+      const createSpy = vi.spyOn(mod.mockStore, "createConversation");
+      createSpy.mockReset();
+
+      // Flip env.MOCK_MODE for this test only. Resetting to false
+      // afterward prevents leakage into the rest of the suite.
+      const cfgMod = await import("../lib/config");
+      const originalMock = cfgMod.env.MOCK_MODE;
+      (cfgMod.env as { MOCK_MODE: boolean }).MOCK_MODE = true;
+      try {
+        await inMode("v2", () =>
+          createConversation("owner_1", "reader", "web"),
+        );
+        expect(createSpy).toHaveBeenCalledTimes(1);
+        expect(v2Spies.createConversationV2).not.toHaveBeenCalled();
+      } finally {
+        (cfgMod.env as { MOCK_MODE: boolean }).MOCK_MODE = originalMock;
+      }
     });
   });
 });

@@ -314,7 +314,16 @@ export async function createConversationV2(
  * documents share the same conversationId (v1 mints it first, v2
  * mirrors it). Separate from createConversationV2 so normal production
  * callers don't accidentally supply an unchecked id from request input.
+ *
+ * SECURITY: the id parameter must match the exact server-minted UUID
+ * format — `conv_<uuid-v4>`. Strict regex guard here enforces the
+ * contract at runtime even if a future caller accidentally threads a
+ * user-controlled string into this function.
  */
+// conv_ + 8-4-4-4-12 lowercase hex groups joined with `-` (RFC 4122).
+const CONV_V2_ID_RE =
+  /^conv_[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+
 export async function createConversationV2WithId(
   id: string,
   ownerId: string,
@@ -322,6 +331,11 @@ export async function createConversationV2WithId(
   channel: Channel,
   model?: string,
 ): Promise<string> {
+  if (!CONV_V2_ID_RE.test(id)) {
+    throw new Error(
+      `createConversationV2WithId: id must match conv_<uuid-v4>, got "${id}"`,
+    );
+  }
   const container = getContainerV2();
   const now = nowIso();
   const retentionClass = NEO_RETENTION_CLASS_DEFAULT;

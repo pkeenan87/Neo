@@ -54,6 +54,15 @@ function useMock(): boolean {
  * mode. Logs `conversation_dual_write_divergence` on failure but does
  * NOT throw — the v1 write is the authoritative path and succeeding
  * v1 writes must not be reversed by v2 hiccups.
+ *
+ * EXCEPTION: certain error types are caller-visible contract signals,
+ * not infra faults, and MUST propagate so the caller can react:
+ *   - CsvAttachmentCapError: user hit the per-conversation cap. If v2
+ *     throws it under dual-write (e.g. v2 has more attachments than
+ *     v1 due to drift), we should NOT silently let v1 exceed the cap.
+ *   - (future) ownership-rejection errors, once typed.
+ * Anything not in this allowlist is treated as an infra fault and
+ * swallowed with a divergence log.
  */
 async function dualWriteV2BestEffort(
   opName: DualWriteDivergencePayload["operation"],
@@ -64,11 +73,17 @@ async function dualWriteV2BestEffort(
   try {
     await fn();
   } catch (err) {
+    // Contract-signal errors propagate rather than being swallowed as
+    // a routine divergence. CsvAttachmentCapError is the one concrete
+    // case today; add more as they're identified.
+    if (err instanceof CsvAttachmentCapError) {
+      throw err;
+    }
     const payload: DualWriteDivergencePayload = {
       conversationId,
       operation: opName,
-      errorMessage: (err as Error).message,
-      ownerId,
+      errorMessage: err instanceof Error ? err.message : String(err),
+      ownerId: ownerId !== undefined ? hashPii(ownerId) : undefined,
     };
     logger.warn(
       "Dual-write v2 diverged from v1 (best-effort, continuing)",
@@ -230,11 +245,29 @@ export async function listConversations(
     // Merge v2 (preferred) + v1 (legacy), dedupe by id. Keeps the
     // sidebar functional during a rolling migration where some
     // conversations have been split and others haven't yet.
+    //
+    // NOTE: both inner queries cap at 50. Users with more than 50
+    // conversations in either store can have trailing v1-only entries
+    // invisible to this merge. Acceptable during migration; post-
+    // cutover, v2-only eliminates the issue.
     const [v2List, v1List] = await Promise.all([
       v2.listConversationsV2(ownerId, channel),
       listConversationsV1Internal(ownerId, channel),
     ]);
     const seen = new Set(v2List.map((c) => c.id));
+    const v1Duplicates = v1List.filter((c) => seen.has(c.id));
+    if (v1Duplicates.length > 0) {
+      // Conversation appearing in BOTH containers is a migration-state
+      // signal. v2 wins silently, but we log so ops can detect drift.
+      logger.warn(
+        "dual-read list: v1 ids also present in v2 (v2 wins)",
+        "conversation-store",
+        {
+          duplicateIds: v1Duplicates.map((c) => c.id),
+          ownerIdHash: hashPii(ownerId),
+        },
+      );
+    }
     const merged = [...v2List, ...v1List.filter((c) => !seen.has(c.id))];
     merged.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
     return merged.slice(0, 50);

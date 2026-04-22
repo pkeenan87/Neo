@@ -1,11 +1,15 @@
 import type { Role } from "./permissions";
 import { env } from "./config";
-import { logger } from "./logger";
+import { logger, hashPii } from "./logger";
 import { InMemorySessionStore, type SessionStore } from "./session-store";
 import { CosmosSessionStore } from "./conversation-store";
-import { CosmosV2SessionStore } from "./conversation-store-v2";
+import {
+  CosmosV2SessionStore,
+  createConversationV2WithId,
+} from "./conversation-store-v2";
 import { mockStore } from "./mock-conversation-store";
 import { getActiveStoreMode } from "./conversation-store-mode";
+import { CsvAttachmentCapError } from "./types";
 import type {
   Channel,
   DualWriteDivergencePayload,
@@ -42,10 +46,17 @@ async function dualWriteV2Best(
   try {
     await fn();
   } catch (err) {
+    // See conversation-store.ts dualWriteV2BestEffort — cap errors are
+    // contract-visible signals, not infra faults. Propagate so the
+    // caller doesn't accidentally bypass the cap by virtue of v1
+    // succeeding.
+    if (err instanceof CsvAttachmentCapError) {
+      throw err;
+    }
     const payload: DualWriteDivergencePayload = {
       conversationId,
       operation: opName,
-      errorMessage: (err as Error).message,
+      errorMessage: err instanceof Error ? err.message : String(err),
     };
     logger.warn(
       "Dual-write v2 diverged from v1 (session-store, best-effort)",
@@ -74,8 +85,7 @@ export class DispatchingSessionStore implements SessionStore {
       // helper used by the module-level createConversation dispatch.
       const id = await this.v1.create(role, ownerId, channel);
       await dualWriteV2Best("createConversation", id, async () => {
-        const mod = await import("./conversation-store-v2");
-        await mod.createConversationV2WithId(id, ownerId, role, channel);
+        await createConversationV2WithId(id, ownerId, role, channel);
       });
       return id;
     }
@@ -123,6 +133,14 @@ export class DispatchingSessionStore implements SessionStore {
       // Admin-only cross-partition list — merge both stores, dedupe by id.
       const [a, b] = await Promise.all([this.v2.list(), this.v1.list()]);
       const seen = new Set(a.map((s) => s.id));
+      const v1Duplicates = b.filter((s) => seen.has(s.id));
+      if (v1Duplicates.length > 0) {
+        logger.warn(
+          "dual-read admin list: v1 ids also present in v2 (v2 wins)",
+          "session-factory",
+          { duplicateIds: v1Duplicates.map((s) => s.id) },
+        );
+      }
       return [...a, ...b.filter((s) => !seen.has(s.id))];
     }
     return this.v1.list();
@@ -137,6 +155,17 @@ export class DispatchingSessionStore implements SessionStore {
         this.v1.listForOwner(ownerId),
       ]);
       const seen = new Set(a.map((s) => s.id));
+      const v1Duplicates = b.filter((s) => seen.has(s.id));
+      if (v1Duplicates.length > 0) {
+        logger.warn(
+          "dual-read listForOwner: v1 ids also present in v2 (v2 wins)",
+          "session-factory",
+          {
+            duplicateIds: v1Duplicates.map((s) => s.id),
+            ownerIdHash: hashPii(ownerId),
+          },
+        );
+      }
       return [...a, ...b.filter((s) => !seen.has(s.id))];
     }
     return this.v1.listForOwner(ownerId);
@@ -173,8 +202,13 @@ export class DispatchingSessionStore implements SessionStore {
   async isRateLimited(id: string): Promise<boolean> {
     const mode = getActiveStoreMode();
     if (mode === "v2") return this.v2.isRateLimited(id);
-    if (mode === "dual-read") {
-      // Either schema hitting the cap counts as rate-limited.
+    if (mode === "dual-read" || mode === "dual-write") {
+      // Rate limiting is a security control — a session born under
+      // dual-read lives only in v2, but under dual-write we'd normally
+      // read v1 only and return false for that session. Union both
+      // stores in either dual-* mode to prevent false-negative cap
+      // bypasses during the migration window. The extra RU is cheap
+      // and rate-limiting shouldn't fail open.
       const [a, b] = await Promise.all([
         this.v2.isRateLimited(id),
         this.v1.isRateLimited(id),
