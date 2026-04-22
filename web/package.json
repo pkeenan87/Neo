@@ -6,7 +6,8 @@
   "scripts": {
     "dev": "next dev",
     "build": "next build",
-    "start": "next start"
+    "start": "next start",
+    "migrate:conversations": "tsx scripts/migrate-cosmos-v1-to-v2.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "0.30.1",
@@ -47,6 +48,7 @@
     "@types/react-dom": "19.2.3",
     "@types/sql.js": "1.4.11",
     "jsdom": "28.1.0",
+    "tsx": "4.21.0",
     "vitest": "4.0.18"
   },
   "overrides": {
