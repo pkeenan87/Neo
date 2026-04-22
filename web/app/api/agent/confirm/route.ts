@@ -3,9 +3,10 @@ import { sessionStore } from "@/lib/session-factory";
 import { resumeAfterConfirmation } from "@/lib/agent";
 import { getCsvAttachments } from "@/lib/conversation-store";
 import { createNDJSONStream, encodeNDJSON, writeAgentResult } from "@/lib/stream";
-import { resolveAuth } from "@/lib/auth-helpers";
+import { resolveAuth, type ResolvedAuth } from "@/lib/auth-helpers";
 import { canUseTool } from "@/lib/permissions";
 import { logger, hashPii, setLogContext } from "@/lib/logger";
+import { withStoreModeFromRequest } from "@/lib/conversation-store-mode";
 import type { ConfirmRequest, LogIdentityContext } from "@/lib/types";
 
 export async function POST(request: NextRequest) {
@@ -16,6 +17,14 @@ export async function POST(request: NextRequest) {
       headers: { "Content-Type": "application/json" },
     });
   }
+  // Admin-gated X-Neo-Store-Mode header scopes a per-request override.
+  // See lib/conversation-store-mode.ts.
+  return withStoreModeFromRequest(request, identity, () =>
+    handleConfirmPost(request, identity),
+  );
+}
+
+async function handleConfirmPost(request: NextRequest, identity: ResolvedAuth): Promise<Response> {
 
   let body: ConfirmRequest;
   try {

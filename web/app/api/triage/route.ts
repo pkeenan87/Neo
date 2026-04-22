@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { randomUUID } from "crypto";
-import { resolveAuth } from "@/lib/auth-helpers";
+import { resolveAuth, type ResolvedAuth } from "@/lib/auth-helpers";
+import { withStoreModeFromRequest } from "@/lib/conversation-store-mode";
 import { runAgentLoop } from "@/lib/agent";
 import { getSystemPrompt } from "@/lib/config";
 import { DEFAULT_MODEL } from "@/lib/config";
@@ -268,14 +269,21 @@ function buildFailSafeResponse(
 }
 
 export async function POST(request: NextRequest) {
-  const startMs = Date.now();
-  const neoRunId = `triage_${randomUUID()}`;
-
-  // 1. Auth
+  // 1. Auth (pre-wrap so the 401 path doesn't need the ALS context).
   const identity = await resolveAuth(request);
   if (!identity) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
+  // Admin-gated X-Neo-Store-Mode header scopes a per-request override.
+  // See lib/conversation-store-mode.ts.
+  return withStoreModeFromRequest(request, identity, () =>
+    handleTriagePost(request, identity),
+  );
+}
+
+async function handleTriagePost(request: NextRequest, identity: ResolvedAuth): Promise<Response> {
+  const startMs = Date.now();
+  const neoRunId = `triage_${randomUUID()}`;
 
   // 2. Parse + validate
   let body: unknown;

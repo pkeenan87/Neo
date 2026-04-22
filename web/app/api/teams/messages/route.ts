@@ -624,6 +624,12 @@ async function handleTurn(context: TurnContext): Promise<void> {
 //  Bot Framework CloudAdapter expects.
 // ─────────────────────────────────────────────────────────────
 
+// NOTE: Teams bot messages arrive with Bot Framework headers only —
+// no X-Neo-Store-Mode override is possible (there's no admin UI for
+// Teams to set custom headers per message). This handler therefore
+// inherits the process-level NEO_CONVERSATION_STORE_MODE env var
+// unchanged. See lib/conversation-store-mode.ts for the admin-header
+// flow used by the web API routes.
 export async function POST(request: Request): Promise<Response> {
   const bodyText = await request.text();
   const bodyParsed = JSON.parse(bodyText);

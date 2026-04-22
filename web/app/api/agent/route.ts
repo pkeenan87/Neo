@@ -19,6 +19,8 @@ import { isCsvType, isTxtType } from "@/lib/file-validation";
 import { buildTxtBlock } from "@/lib/txt-content-blocks";
 import { classifyCsv } from "@/lib/csv-classifier";
 import { appendCsvAttachment, getCsvAttachments } from "@/lib/conversation-store";
+import { withStoreModeFromRequest } from "@/lib/conversation-store-mode";
+import type { ResolvedAuth } from "@/lib/auth-helpers";
 import { randomUUID } from "crypto";
 
 const SUPPORTED_MODEL_IDS = new Set(Object.values(SUPPORTED_MODELS));
@@ -31,6 +33,15 @@ export async function POST(request: NextRequest) {
       headers: { "Content-Type": "application/json" },
     });
   }
+  // Admin-gated X-Neo-Store-Mode header scopes a per-request store-
+  // mode override. Non-admin callers passing the header are silently
+  // ignored. See lib/conversation-store-mode.ts.
+  return withStoreModeFromRequest(request, identity, () =>
+    handleAgentPost(request, identity),
+  );
+}
+
+async function handleAgentPost(request: NextRequest, identity: ResolvedAuth): Promise<Response> {
 
   // Parse request — JSON or multipart/form-data (when files are attached)
   let body: AgentRequest;
