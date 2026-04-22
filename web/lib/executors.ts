@@ -3238,10 +3238,10 @@ function mockGetAppOmniAuditLogs(): unknown {
 // Anthropic tool_use_id format: "toolu_" followed by alphanumerics
 const TOOL_USE_ID_RE = /^toolu_[A-Za-z0-9]{10,64}$/;
 
-function get_full_tool_result(
+async function get_full_tool_result(
   { tool_use_id }: GetFullToolResultInput,
   sessionMessages?: Message[],
-): unknown {
+): Promise<unknown> {
   if (!TOOL_USE_ID_RE.test(tool_use_id)) {
     return { error: "Invalid tool_use_id format." };
   }
@@ -3261,12 +3261,66 @@ function get_full_tool_result(
         (block as { tool_use_id: string }).tool_use_id === tool_use_id
       ) {
         const content = (block as { content?: string | unknown[] }).content;
-        return { tool_use_id, content: content ?? null };
+        // Offloaded content path: if the tool_result was offloaded to
+        // blob storage, the persisted `content` is a stringified
+        // envelope carrying a BlobRefDescriptor. Detect the envelope,
+        // resolve the blob, and return the full payload inline — the
+        // model transparently gets the same bytes it would have had
+        // pre-offload. Non-offloaded content passes through unchanged.
+        const resolved = await maybeResolveBlobRefContent(content);
+        return { tool_use_id, content: resolved ?? null };
       }
     }
   }
 
   return { error: `No tool result found with tool_use_id: ${tool_use_id}` };
+}
+
+/**
+ * If `content` is a stringified `{ _neo_trust_boundary, data: BlobRefDescriptor }`
+ * envelope, fetch the offloaded payload from blob storage and return
+ * it. Otherwise return the original content unchanged. Lazy imports
+ * keep the module-load graph lean.
+ */
+async function maybeResolveBlobRefContent(
+  content: string | unknown[] | undefined,
+): Promise<string | unknown[] | undefined> {
+  if (typeof content !== "string") return content;
+  // Quick reject: only try to parse if the string is at least vaguely
+  // envelope-shaped. Saves a JSON.parse on every ordinary result.
+  if (!content.includes("_neo_trust_boundary")) return content;
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(content);
+  } catch {
+    return content;
+  }
+  if (
+    !parsed ||
+    typeof parsed !== "object" ||
+    !("data" in (parsed as Record<string, unknown>)) ||
+    (parsed as { _neo_trust_boundary?: unknown })._neo_trust_boundary === undefined
+  ) {
+    return content;
+  }
+
+  const inner = (parsed as { data: unknown }).data;
+  const { isBlobRefDescriptor, resolveBlobRef } = await import(
+    "./tool-result-blob-store"
+  );
+  if (!isBlobRefDescriptor(inner)) return content;
+
+  try {
+    return await resolveBlobRef(inner);
+  } catch (err) {
+    logger.warn(
+      "Failed to resolve offloaded tool result; returning envelope to the model",
+      "executors",
+      { errorMessage: err instanceof Error ? err.message : String(err) },
+    );
+    return content;
+  }
 }
 
 // ── Router ────────────────────────────────────────────────────
@@ -3343,7 +3397,10 @@ export async function executeTool(
   logger.debug(`Executing tool: ${toolName}`, "executors", { toolName });
 
   if (toolName === "get_full_tool_result") {
-    return get_full_tool_result(toolInput as unknown as GetFullToolResultInput, context?.sessionMessages);
+    return await get_full_tool_result(
+      toolInput as unknown as GetFullToolResultInput,
+      context?.sessionMessages,
+    );
   }
 
   if (toolName === "query_csv") {

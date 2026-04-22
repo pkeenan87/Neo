@@ -5,7 +5,7 @@ import { executeTool } from "./executors";
 import { getToolsForRole, type Role } from "./permissions";
 import { logger } from "./logger";
 import { getToolIntegration } from "./integration-registry";
-import { wrapToolResult } from "./injection-guard";
+import { wrapAndMaybeOffloadToolResult } from "./injection-guard";
 import { prepareMessages, sanitizeEmptyUserMessages, CHARS_PER_TOKEN } from "./context-manager";
 import { IncompleteToolUseError } from "./types";
 import type { Message, AgentLoopResult, AgentCallbacks, PendingTool, ModelPreference, TokenUsage, CSVReference } from "./types";
@@ -443,7 +443,10 @@ export async function runAgentLoop(
           toolResults.push({
             type: "tool_result",
             tool_use_id: id,
-            content: wrapToolResult(name, result, { sessionId }),
+            content: await wrapAndMaybeOffloadToolResult(name, result, {
+              sessionId,
+              conversationId: sessionId,
+            }),
           });
         } catch (err) {
           const durationMs = Date.now() - toolStart;
@@ -468,7 +471,10 @@ export async function runAgentLoop(
           toolResults.push({
             type: "tool_result",
             tool_use_id: id,
-            content: wrapToolResult(name, errorOutput, { sessionId }),
+            content: await wrapAndMaybeOffloadToolResult(name, errorOutput, {
+              sessionId,
+              conversationId: sessionId,
+            }),
             is_error: true,
           });
         }
@@ -645,7 +651,10 @@ export async function resumeAfterConfirmation(
       toolResult = {
         type: "tool_result",
         tool_use_id: id,
-        content: wrapToolResult(name, result, { sessionId }),
+        content: await wrapAndMaybeOffloadToolResult(name, result, {
+          sessionId,
+          conversationId: sessionId,
+        }),
       };
     } catch (err) {
       const durationMs = Date.now() - toolStart;
@@ -664,7 +673,10 @@ export async function resumeAfterConfirmation(
       toolResult = {
         type: "tool_result",
         tool_use_id: id,
-        content: wrapToolResult(name, errorOutput, { sessionId }),
+        content: await wrapAndMaybeOffloadToolResult(name, errorOutput, {
+          sessionId,
+          conversationId: sessionId,
+        }),
         is_error: true,
       };
     }

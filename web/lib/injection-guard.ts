@@ -213,6 +213,65 @@ export function wrapToolResult(
   );
 }
 
+/**
+ * Async wrapper around {@link wrapToolResult} that, after injection
+ * scanning + envelope wrapping, offloads oversized payloads to Azure
+ * Blob Storage via the tool-result blob store (phase 3). Returns the
+ * inline envelope string below the offload threshold or a stringified
+ * envelope containing a BlobRefDescriptor when the payload was moved
+ * to blob storage.
+ *
+ * The agent loop (phase 6) calls this at each tool_result persistence
+ * site; non-offload callers (e.g. triage, which writes results into
+ * its own short-lived response path) can keep using the sync
+ * {@link wrapToolResult} directly without going async.
+ *
+ * NOTE: when offload happens, the returned string IS the full
+ * persisted content of the tool_result block. The envelope still
+ * carries _neo_trust_boundary so promoteOffloadedBlobsIn's trust
+ * check recognizes this as a server-generated descriptor rather than
+ * a doctored Cosmos document.
+ */
+export async function wrapAndMaybeOffloadToolResult(
+  toolName: string,
+  result: unknown,
+  context: { sessionId: string; conversationId: string; mediaType?: string },
+): Promise<string> {
+  const wrapped = wrapToolResult(toolName, result, { sessionId: context.sessionId });
+
+  // Lazy import so this module doesn't create a cycle through
+  // conversation-store-v2 / tool-result-blob-store at module-load
+  // time. The import is resolved once, then cached by the Node loader.
+  const { maybeOffloadToolResult } = await import("./tool-result-blob-store");
+  const outcome = await maybeOffloadToolResult(wrapped, {
+    conversationId: context.conversationId,
+    sourceTool: toolName,
+    mediaType: context.mediaType,
+  });
+
+  if (typeof outcome === "string") {
+    // Below threshold or storage not configured — pass-through.
+    return outcome;
+  }
+
+  // Above threshold — outcome is a BlobRefDescriptor. Re-wrap it in
+  // the injection-guard envelope so the v2 store's
+  // promoteOffloadedBlobsIn (which checks for _neo_trust_boundary
+  // before trusting the descriptor) will promote the staging blob.
+  return JSON.stringify(
+    {
+      _neo_trust_boundary: {
+        source: "tool_offload",
+        tool: toolName,
+        injection_detected: false,
+      },
+      data: outcome,
+    },
+    null,
+    2,
+  );
+}
+
 export function shouldBlock(result: ScanResult): boolean {
   if (GUARD_MODE !== "block") return false;
   return result.matchCount >= BLOCK_THRESHOLD;
