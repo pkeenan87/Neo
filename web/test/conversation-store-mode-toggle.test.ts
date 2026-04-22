@@ -148,8 +148,9 @@ describe("withStoreModeFromRequest", () => {
     );
   });
 
-  it("ignores the header when identity is null (unauthenticated path)", async () => {
+  it("ignores the header when identity is null (unauthenticated path) — logs warn for audit consistency", async () => {
     mockEmitEvent.mockReset();
+    mockWarn.mockReset();
     let observed: string = "";
     await withStoreModeFromRequest(
       makeRequest({ "x-neo-store-mode": "v2" }),
@@ -160,5 +161,27 @@ describe("withStoreModeFromRequest", () => {
     );
     expect(observed).toBe("v1");
     expect(mockEmitEvent).not.toHaveBeenCalled();
+    expect(mockWarn).toHaveBeenCalledWith(
+      expect.stringContaining("unauthenticated"),
+      expect.any(String),
+      expect.objectContaining({ requestedMode: "v2" }),
+    );
+  });
+
+  it("empty-string identity.name falls back to 'unknown' in the audit event", async () => {
+    mockEmitEvent.mockReset();
+    await withStoreModeFromRequest(
+      makeRequest({ "x-neo-store-mode": "v2" }),
+      { role: "admin", name: "   " },
+      () => {
+        getActiveStoreMode();
+      },
+    );
+    expect(mockEmitEvent).toHaveBeenCalledWith(
+      "conversation_store_mode_override",
+      expect.any(String),
+      expect.any(String),
+      expect.objectContaining({ mode: "v2", callerName: "unknown" }),
+    );
   });
 });

@@ -2,6 +2,7 @@ import dotenv from "dotenv";
 import { fileURLToPath } from "url";
 import { dirname, resolve } from "path";
 import type { EnvConfig, ModelPreference, ConversationStoreMode, RetentionClass } from "./types";
+import { VALID_STORE_MODES } from "./types";
 import type { Role } from "./permissions";
 import { getSkillsForRole } from "./skill-store";
 import { parsePositiveInt } from "./parse-env";
@@ -31,12 +32,6 @@ export const PERSISTENCE_TOOL_RESULT_TOKEN_CAP = parsePositiveInt("PERSISTENCE_T
 //   dual-read  — writes go to v2; reads try v2 first, fall back to v1
 //   dual-write — writes go to BOTH containers; reads come from v1 only
 // Switching modes is an env-var change; no redeploy required.
-const VALID_STORE_MODES: readonly ConversationStoreMode[] = [
-  "v1",
-  "v2",
-  "dual-read",
-  "dual-write",
-];
 function parseStoreMode(raw: string | undefined): ConversationStoreMode {
   if (!raw) return "v1";
   if ((VALID_STORE_MODES as readonly string[]).includes(raw)) {

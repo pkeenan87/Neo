@@ -1,7 +1,12 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { NEO_CONVERSATION_STORE_MODE } from "./config";
 import { logger } from "./logger";
-import type { ConversationStoreMode } from "./types";
+import { VALID_STORE_MODES, type ConversationStoreMode } from "./types";
+
+// SECURITY — phase 8 wire-up:
+//   withStoreModeFromRequest must only receive an `identity` that came
+//   out of resolveAuth() / getAuthContext(). Never pass a body-derived
+//   object; the admin gate trusts the `role` field as-is.
 
 // ─────────────────────────────────────────────────────────────
 //  Conversation-store mode resolver
@@ -21,12 +26,6 @@ import type { ConversationStoreMode } from "./types";
 // ─────────────────────────────────────────────────────────────
 
 const MODE_HEADER_NAME = "x-neo-store-mode";
-const VALID_MODES: readonly ConversationStoreMode[] = [
-  "v1",
-  "v2",
-  "dual-read",
-  "dual-write",
-];
 
 const modeContext = new AsyncLocalStorage<ConversationStoreMode>();
 
@@ -55,7 +54,7 @@ export function withStoreMode<T>(mode: ConversationStoreMode, fn: () => Promise<
 export function parseModeHeader(raw: string | null | undefined): ConversationStoreMode | null {
   if (!raw) return null;
   const trimmed = raw.trim().toLowerCase();
-  if ((VALID_MODES as readonly string[]).includes(trimmed)) {
+  if ((VALID_STORE_MODES as readonly string[]).includes(trimmed)) {
     return trimmed as ConversationStoreMode;
   }
   return null;
@@ -97,12 +96,25 @@ export function withStoreModeFromRequest<T>(
     return fn();
   }
 
-  const isAdmin = identity?.role === "admin";
+  // Unauthenticated caller supplying the header — log for audit
+  // consistency with the other WARN paths and fall through to env
+  // default. Without this, a null-identity override attempt is
+  // invisible in logs.
+  if (!identity) {
+    logger.warn(
+      "X-Neo-Store-Mode header from unauthenticated caller — ignoring",
+      "conversation-store-mode",
+      { requestedMode: mode },
+    );
+    return fn();
+  }
+
+  const isAdmin = identity.role === "admin";
   if (!isAdmin) {
     logger.warn(
       "X-Neo-Store-Mode header from non-admin caller — ignoring",
       "conversation-store-mode",
-      { requestedMode: mode, callerName: identity?.name },
+      { requestedMode: mode, callerName: identity.name?.trim() || "unknown" },
     );
     return fn();
   }
@@ -111,7 +123,7 @@ export function withStoreModeFromRequest<T>(
     "conversation_store_mode_override",
     `Admin override active for this request: ${mode}`,
     "conversation-store-mode",
-    { mode, callerName: identity?.name ?? "unknown" },
+    { mode, callerName: identity.name?.trim() || "unknown" },
   );
 
   return modeContext.run(mode, fn);

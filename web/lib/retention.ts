@@ -8,46 +8,44 @@ import type { RetentionClass } from "./types";
 //  AND the Azure Blob Storage lifecycle tagging for any offloaded
 //  tool-result blobs referenced by that conversation. Aligns Neo's
 //  storage lifetime with Goodwin's records-policy categories.
-//
-//  NOTE: Cosmos TTL of `null` = never expire (used for legal-hold).
-//  Cosmos TTL of `undefined` = inherit container default (NOT what we
-//  want here — we set an explicit per-doc TTL so legal-hold is honoured
-//  regardless of container default).
 // ─────────────────────────────────────────────────────────────
 
 const SECONDS_PER_DAY = 86_400;
 const SECONDS_PER_YEAR = 365 * SECONDS_PER_DAY;
 
 /**
- * Seconds-of-TTL for a given retention class. `null` means "never expire"
- * — required for legal-hold where lifecycle tiering and TTL deletion are
- * both suppressed. Cosmos treats a `ttl` of `-1` on the document as "no
- * expiry even when the container has a default TTL set", so callers
- * should pass `-1` to Cosmos when they see `null` from this helper.
+ * Sentinel value Cosmos uses on a document's `ttl` field to mean "never
+ * expire, even if the container has a default TTL set". Exported as a
+ * named constant for readability at call sites, but `resolveRetentionTtlSeconds`
+ * already returns this value directly for legal-hold — callers don't
+ * need to translate.
  */
-export function resolveRetentionTtlSeconds(retentionClass: RetentionClass): number | null {
+export const COSMOS_TTL_NEVER = -1;
+
+/**
+ * Cosmos TTL in seconds for a given retention class. Callers can pass
+ * the return value straight through to the Cosmos SDK's `ttl` field:
+ *   - standard-7y / client-matter → 7 years
+ *   - transient → 30 days
+ *   - legal-hold → -1 (Cosmos "never expire" sentinel)
+ */
+export function resolveRetentionTtlSeconds(retentionClass: RetentionClass): number {
   switch (retentionClass) {
     case "standard-7y":
       return 7 * SECONDS_PER_YEAR;
     case "client-matter":
-      // Client-matter retention is governed per-matter by the records
-      // team; the Cosmos TTL is a conservative 7-year outer bound. The
-      // real retention decision is driven by blob-storage lifecycle
-      // tagging (see isLegalHold / tagForLifecycle in the blob store).
+      // Per-matter retention is governed by the records team via
+      // blob-storage lifecycle tags on the matter's blob container
+      // (see the blob-store module in phase 3). The Cosmos TTL here
+      // is a conservative 7-year outer bound that will be truncated
+      // by the per-matter tag when the lifecycle fires.
       return 7 * SECONDS_PER_YEAR;
     case "transient":
       return 30 * SECONDS_PER_DAY;
     case "legal-hold":
-      return null;
+      return COSMOS_TTL_NEVER;
   }
 }
-
-/**
- * Convenience: the Cosmos `ttl` field's "never expire" sentinel. Use
- * when the retention class resolves to null and the caller needs a
- * concrete number to pass to the SDK.
- */
-export const COSMOS_TTL_NEVER = -1;
 
 /**
  * True when the retention class suppresses lifecycle tiering and TTL.

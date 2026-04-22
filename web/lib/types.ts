@@ -324,6 +324,16 @@ export type ConversationMeta = Omit<Conversation, "messages" | "pendingConfirmat
 /** Runtime dispatch mode for the conversation store. */
 export type ConversationStoreMode = "v1" | "v2" | "dual-read" | "dual-write";
 
+/** Single source of truth for the valid mode strings — used by the
+ *  env-var validator in config.ts AND the header parser in
+ *  conversation-store-mode.ts so they can't drift. */
+export const VALID_STORE_MODES: readonly ConversationStoreMode[] = [
+  "v1",
+  "v2",
+  "dual-read",
+  "dual-write",
+];
+
 /** Retention class on the conversation root — drives Cosmos TTL and blob
  *  lifecycle tagging. Strings matching Goodwin records-policy categories. */
 export type RetentionClass = "standard-7y" | "legal-hold" | "client-matter" | "transient";
@@ -407,7 +417,13 @@ export interface CheckpointDoc {
 /** Payload returned by maybeOffloadToolResult when a tool result is
  *  written to blob storage. Persisted as the `content` of a TurnDoc's
  *  tool_result block, wrapped in the `_neo_blob_ref` sentinel envelope
- *  so the resolver / get_full_tool_result can detect it. */
+ *  so the resolver / get_full_tool_result can detect it.
+ *
+ *  SSRF GUARD (phase 3): the resolver MUST validate that `uri` resolves
+ *  inside the configured NEO_TOOL_RESULT_BLOB_CONTAINER before fetching.
+ *  A maliciously crafted Cosmos document could otherwise trick the
+ *  server into fetching an arbitrary URL under its managed-identity
+ *  credentials. */
 export interface BlobRefDescriptor {
   _neo_blob_ref: true;
   sha256: string;
@@ -416,6 +432,18 @@ export interface BlobRefDescriptor {
   shortSummary: string;
   uri: string;
   sourceTool: string;
+}
+
+/** Payload for the `conversation_dual_write_divergence` log event.
+ *  Emitted in phase 5 when the dual-write branch lands a v1 write but
+ *  the parallel v2 write fails. Captured here now so the emitter has a
+ *  typed shape to target and can't accidentally omit `conversationId`. */
+export interface DualWriteDivergencePayload {
+  conversationId: string;
+  operation: "saveMessages" | "updateTitle" | "appendCsvAttachment"
+    | "setPendingConfirmation" | "clearPendingConfirmation" | "deleteConversation";
+  errorMessage: string;
+  ownerId?: string;
 }
 
 // ─────────────────────────────────────────────────────────────
