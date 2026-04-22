@@ -1,7 +1,7 @@
 import dotenv from "dotenv";
 import { fileURLToPath } from "url";
 import { dirname, resolve } from "path";
-import type { EnvConfig, ModelPreference } from "./types";
+import type { EnvConfig, ModelPreference, ConversationStoreMode, RetentionClass } from "./types";
 import type { Role } from "./permissions";
 import { getSkillsForRole } from "./skill-store";
 import { parsePositiveInt } from "./parse-env";
@@ -21,6 +21,77 @@ export const PRESERVED_RECENT_MESSAGES = parsePositiveInt("PRESERVED_RECENT_MESS
 // current session, but persisted messages use truncated copies to stay
 // under Cosmos DB's 2 MB document limit.
 export const PERSISTENCE_TOOL_RESULT_TOKEN_CAP = parsePositiveInt("PERSISTENCE_TOOL_RESULT_TOKEN_CAP", 10_000);
+
+// ── Conversation storage v2 (split-document + blob offload) ──
+// See _plans/conversation-storage-split-blob-offload.md.
+//
+// NEO_CONVERSATION_STORE_MODE controls which storage schema is active:
+//   v1         — current single-doc-per-conversation (pre-migration default)
+//   v2         — new root + per-turn + blob-ref docs in neo-conversations-v2
+//   dual-read  — writes go to v2; reads try v2 first, fall back to v1
+//   dual-write — writes go to BOTH containers; reads come from v1 only
+// Switching modes is an env-var change; no redeploy required.
+const VALID_STORE_MODES: readonly ConversationStoreMode[] = [
+  "v1",
+  "v2",
+  "dual-read",
+  "dual-write",
+];
+function parseStoreMode(raw: string | undefined): ConversationStoreMode {
+  if (!raw) return "v1";
+  if ((VALID_STORE_MODES as readonly string[]).includes(raw)) {
+    return raw as ConversationStoreMode;
+  }
+  console.warn(
+    `NEO_CONVERSATION_STORE_MODE has unrecognized value "${raw}" — defaulting to "v1".`,
+  );
+  return "v1";
+}
+export const NEO_CONVERSATION_STORE_MODE: ConversationStoreMode = parseStoreMode(
+  process.env.NEO_CONVERSATION_STORE_MODE,
+);
+
+// Byte threshold above which tool results get offloaded to blob storage
+// instead of persisted inline in the turn document. Default 256 KB —
+// below typical Cosmos doc-size sweet spot, above the median KQL result.
+export const NEO_BLOB_OFFLOAD_THRESHOLD_BYTES = parsePositiveInt(
+  "NEO_BLOB_OFFLOAD_THRESHOLD_BYTES",
+  256_000,
+);
+
+// Default retention class stamped on new conversation root documents.
+// Drives Cosmos TTL and Azure Blob Storage lifecycle tagging via the
+// lib/retention.ts helper.
+const VALID_RETENTION_CLASSES: readonly RetentionClass[] = [
+  "standard-7y",
+  "legal-hold",
+  "client-matter",
+  "transient",
+];
+function parseRetentionClass(raw: string | undefined): RetentionClass {
+  if (!raw) return "standard-7y";
+  if ((VALID_RETENTION_CLASSES as readonly string[]).includes(raw)) {
+    return raw as RetentionClass;
+  }
+  console.warn(
+    `NEO_RETENTION_CLASS_DEFAULT has unrecognized value "${raw}" — defaulting to "standard-7y".`,
+  );
+  return "standard-7y";
+}
+export const NEO_RETENTION_CLASS_DEFAULT: RetentionClass = parseRetentionClass(
+  process.env.NEO_RETENTION_CLASS_DEFAULT,
+);
+
+// Azure Blob Storage container for offloaded tool results. Paths inside
+// the container: staging/<sha256> (pre-commit) and blobs/<sha256>
+// (post-commit, immutable). See lib/tool-result-blob-store.ts.
+export const NEO_TOOL_RESULT_BLOB_CONTAINER =
+  process.env.NEO_TOOL_RESULT_BLOB_CONTAINER || "neo-tool-results";
+
+// Cosmos container name for the v2 schema. Lives in the same database
+// as the v1 container; partition key is /conversationId.
+export const NEO_CONVERSATIONS_V2_CONTAINER =
+  process.env.NEO_CONVERSATIONS_V2_CONTAINER || "neo-conversations-v2";
 
 // ── Per-turn output budgets (max_tokens) ─────────────────────
 // Controls the Anthropic `max_tokens` parameter on each agent-loop

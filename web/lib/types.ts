@@ -156,7 +156,12 @@ export type LogEventType =
   | "session_started"
   | "session_ended"
   | "session_interrupted"
-  | "max_tokens_reached";
+  | "max_tokens_reached"
+  | "conversation_blob_offload"
+  | "conversation_blob_resolve"
+  | "conversation_checkpoint_written"
+  | "conversation_store_mode_override"
+  | "conversation_dual_write_divergence";
 
 export interface LogIdentityContext {
   userName: string;
@@ -304,6 +309,114 @@ export interface Conversation {
 }
 
 export type ConversationMeta = Omit<Conversation, "messages" | "pendingConfirmation">;
+
+// ─────────────────────────────────────────────────────────────
+//  Conversation v2 — split-document schema
+//  (see _plans/conversation-storage-split-blob-offload.md)
+//
+//  Four document types co-located under partition key /conversationId:
+//   - ConversationV2Root: metadata, rolling summary, pointers
+//   - TurnDoc: append-only per-turn record
+//   - BlobRefDoc: reference to an oversized tool result in blob storage
+//   - CheckpointDoc: immutable compacted summary of a turn range
+// ─────────────────────────────────────────────────────────────
+
+/** Runtime dispatch mode for the conversation store. */
+export type ConversationStoreMode = "v1" | "v2" | "dual-read" | "dual-write";
+
+/** Retention class on the conversation root — drives Cosmos TTL and blob
+ *  lifecycle tagging. Strings matching Goodwin records-policy categories. */
+export type RetentionClass = "standard-7y" | "legal-hold" | "client-matter" | "transient";
+
+/** Conversation root document. `id` = `conversationId`. */
+export interface ConversationV2Root {
+  id: string;
+  docType: "root";
+  conversationId: string;
+  ownerId: string;
+  title: string | null;
+  createdAt: string;
+  updatedAt: string;
+  role: Role;
+  channel: Channel;
+  schemaVersion: 2;
+  retentionClass: RetentionClass;
+  turnCount: number;
+  latestCheckpointId: string | null;
+  rollingSummary: string | null;
+  pendingConfirmation: PendingTool | null;
+  model?: string;
+  ttl?: number;
+  csvAttachments?: CSVReference[];
+}
+
+/** Append-only per-turn document. `id` = `turn_<conversationId>_<turnNumber>`. */
+export interface TurnDoc {
+  id: string;
+  docType: "turn";
+  conversationId: string;
+  turnNumber: number;
+  role: "user" | "assistant";
+  /** Anthropic content-block array (text / tool_use / tool_result). For
+   *  tool_result blocks that were offloaded, `content` is a BlobRefDescriptor
+   *  JSON string carrying the `_neo_blob_ref` sentinel. */
+  content: unknown;
+  parentTurnId: string | null;
+  inputTokens: number;
+  outputTokens: number;
+  toolsUsed?: string[];
+  interrupted?: boolean;
+  truncated?: boolean;
+  createdAt: string;
+  ttl?: number;
+}
+
+/** Metadata record for a tool result offloaded to blob storage.
+ *  `id` = `blobref_<sha256>`. */
+export interface BlobRefDoc {
+  id: string;
+  docType: "blobref";
+  conversationId: string;
+  turnNumber: number;
+  uri: string;
+  sha256: string;
+  sizeBytes: number;
+  mediaType: string;
+  sourceTool: string;
+  shortSummary: string;
+  expiresAt: string | null;
+  ttl?: number;
+}
+
+/** Immutable compacted summary of a turn range. Produced by compaction.
+ *  `id` = `ckpt_<conversationId>_<rangeEndTurn>`. NOTE: compaction logic
+ *  is deferred — see _plans/checkpoint-compaction.md. */
+export interface CheckpointDoc {
+  id: string;
+  docType: "checkpoint";
+  conversationId: string;
+  rangeStartTurn: number;
+  rangeEndTurn: number;
+  summary: string;
+  inputTokenSavings: number;
+  createdAt: string;
+  supersededBy: string | null;
+  ttl?: number;
+}
+
+/** Payload returned by maybeOffloadToolResult when a tool result is
+ *  written to blob storage. Persisted as the `content` of a TurnDoc's
+ *  tool_result block, wrapped in the `_neo_blob_ref` sentinel envelope
+ *  so the resolver / get_full_tool_result can detect it. */
+export interface BlobRefDescriptor {
+  _neo_blob_ref: true;
+  sha256: string;
+  sizeBytes: number;
+  mediaType: string;
+  shortSummary: string;
+  uri: string;
+  sourceTool: string;
+}
 
 // ─────────────────────────────────────────────────────────────
 //  Teams Mapping (Cosmos DB persistence)
