@@ -7,7 +7,9 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "migrate:conversations": "tsx scripts/migrate-cosmos-v1-to-v2.ts"
+    "build:migrate": "esbuild scripts/migrate-cosmos-v1-to-v2.ts --bundle --platform=node --format=esm --target=node20 --outfile=dist/migrate.mjs --external:@azure/cosmos --external:@azure/identity --external:@azure/storage-blob --banner:js=\"import { createRequire } from 'module'; const require = createRequire(import.meta.url);\"",
+    "migrate:conversations": "tsx scripts/migrate-cosmos-v1-to-v2.ts",
+    "migrate:conversations:prod": "node dist/migrate.mjs"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "0.30.1",
@@ -47,6 +49,7 @@
     "@testing-library/react": "16.3.2",
     "@types/react-dom": "19.2.3",
     "@types/sql.js": "1.4.11",
+    "esbuild": "0.27.3",
     "jsdom": "28.1.0",
     "tsx": "4.21.0",
     "vitest": "4.0.18"

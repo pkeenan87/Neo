@@ -126,6 +126,19 @@ if ($SkipBuild) {
             throw "npm run build failed with exit code $LASTEXITCODE"
         }
         Write-Host "  Build complete." -ForegroundColor Green
+
+        # Bundle the conversation-storage migration script into a single
+        # self-contained dist/migrate.mjs. Next's standalone dep tracing
+        # doesn't pull in web/scripts/, so without this step the App
+        # Service filesystem won't have the migration runtime. Azure
+        # SDKs stay external — they're already in the standalone
+        # node_modules via the runtime import graph.
+        Write-Host "`n  Bundling migration script..." -ForegroundColor Cyan
+        npm run build:migrate
+        if ($LASTEXITCODE -ne 0) {
+            throw "npm run build:migrate failed with exit code $LASTEXITCODE"
+        }
+        Write-Host "  Migration script bundled." -ForegroundColor Green
     } finally {
         Pop-Location
     }
@@ -188,6 +201,20 @@ try {
         Copy-Item -Path $SkillsDir -Destination (Join-Path $StagingDir "skills") -Recurse
         $SkillCount = (Get-ChildItem -Path $SkillsDir -Filter "*.md" -File).Count
         Write-Host "  Copied $SkillCount skill file(s)." -ForegroundColor Green
+    }
+
+    # Copy dist/migrate.mjs (the bundled conversation-storage migration
+    # script). Operators run this from SSH on the App Service via
+    # `node dist/migrate.mjs --dry-run` to execute the v1→v2 migration
+    # under the App Service's managed identity.
+    $MigrateBundle = Join-Path $WebDir "dist" "migrate.mjs"
+    if (Test-Path $MigrateBundle) {
+        $DestDist = Join-Path $StagingDir "dist"
+        New-Item -ItemType Directory -Path $DestDist -Force | Out-Null
+        Copy-Item -Path $MigrateBundle -Destination $DestDist
+        Write-Host "  Copied migration bundle." -ForegroundColor Green
+    } else {
+        Write-Host "  WARN: dist/migrate.mjs not found — migration bundle missing from deploy." -ForegroundColor Yellow
     }
 
     # Also copy node_modules from the standalone root if server root is nested,

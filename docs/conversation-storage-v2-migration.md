@@ -200,13 +200,51 @@ CustomEvents_CL
 
 The script is idempotent — re-running is safe. Each v1 doc is marked `migrated: true` once written to v2; a second run skips it. Oversized tool results (>256 KB) are offloaded to blob storage during migration, mirroring the runtime path exactly.
 
+### Running on App Service (recommended for prod)
+
+The App Service's managed identity already has the Cosmos + Blob role assignments, the env vars are set, and `deploy-azure.ps1` bundles the migration script into `dist/migrate.mjs` as part of every deploy. SSH in and run the bundled script:
+
+```bash
+# From your workstation
+az webapp ssh --resource-group neo-rg --name neo-app
+# (Or: Azure Portal → your App Service → Development Tools → SSH)
+
+# Inside the SSH session
+cd /home/site/wwwroot
+tmux new -s migration       # protect the long-running job from SSH idle disconnect
+node dist/migrate.mjs --dry-run
+```
+
+`dist/migrate.mjs` is a self-contained ESM bundle produced by esbuild during the deploy — no `npm install` or `tsx` needed on the App Service. Azure SDKs (`@azure/cosmos`, `@azure/identity`, `@azure/storage-blob`) stay as externals and resolve against the standalone `node_modules/`, so the migration runs against the exact same SDK versions your live app uses.
+
+If the dry-run output looks clean, re-run without `--dry-run`:
+
+```bash
+node dist/migrate.mjs
+# Detach from tmux with Ctrl-b d; reattach with `tmux attach -t migration`.
+```
+
+### Running locally (dev / one-off)
+
+From a developer workstation with `az login` and appropriate Cosmos + Blob RBAC on the target subscription:
+
+```bash
+cd web
+npm run migrate:conversations -- --dry-run
+```
+
+This uses `tsx` to execute the TypeScript source directly. Functionally identical to the bundled production path — just skips the bundle step.
+
 ### 2a. Dry run
 
 Always do this first. The dry run reads every v1 conversation, computes the v2 docs it would write, and reports a summary — but writes nothing.
 
 ```bash
-cd web
-npm run migrate:conversations -- --dry-run
+# On App Service:
+node dist/migrate.mjs --dry-run
+
+# Locally:
+cd web && npm run migrate:conversations -- --dry-run
 ```
 
 Example output:
@@ -232,10 +270,14 @@ If `failed > 0` or `rejectedOversized` is non-empty, investigate the listed conv
 Drop `--dry-run`:
 
 ```bash
+# App Service:
+node dist/migrate.mjs
+
+# Locally:
 npm run migrate:conversations
 ```
 
-The script writes a checkpoint file at `scripts/.migration-checkpoint.json` after each conversation. On successful completion with zero failures, it auto-clears the checkpoint so a follow-up run starts from scratch. If the script crashes or is interrupted, the checkpoint preserves progress — **but see the note about UUID ordering below**.
+The script writes a checkpoint file next to the bundle — `dist/.migration-checkpoint.json` when run on App Service, `scripts/.migration-checkpoint.json` when run locally via `tsx`. On successful completion with zero failures, it auto-clears the checkpoint so a follow-up run starts from scratch. If the script crashes or is interrupted, the checkpoint preserves progress — **but see the note about UUID ordering below**.
 
 ### 2c. Useful flags
 
@@ -254,8 +296,8 @@ The script writes a checkpoint file at `scripts/.migration-checkpoint.json` afte
 Conversation IDs are random UUIDs (`conv_<uuid-v4>`), so the lex-based resume watermark can skip stragglers whose IDs sort below the checkpoint. After any **interrupted** run:
 
 1. Complete the resumed run.
-2. Delete `scripts/.migration-checkpoint.json`.
-3. Run `npm run migrate:conversations` again from scratch — idempotent skips make this cheap, and it catches any conversation with a lex-low ID that was created during the gap.
+2. Delete the checkpoint file (`dist/.migration-checkpoint.json` on App Service, `scripts/.migration-checkpoint.json` locally).
+3. Re-run the script from scratch — idempotent skips make this cheap, and it catches any conversation with a lex-low ID that was created during the gap.
 
 On a clean completion (`failed === 0`), the script auto-clears the checkpoint so this second pass is still advisable but not strictly required.
 

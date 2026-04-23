@@ -928,7 +928,7 @@ See [`docs/conversation-storage-v2-migration.md`](./conversation-storage-v2-migr
 1. Provision the v2 Cosmos container and the blob-offload container (with the `staging/` lifecycle rule).
 2. Deploy a build that contains the v2 code. Leave `NEO_CONVERSATION_STORE_MODE=v1` — v2 code paths stay idle.
 3. Flip to `dual-write` and monitor `conversation_dual_write_divergence` for 24 hours.
-4. Run `cd web && npm run migrate:conversations -- --dry-run`, review the summary, then re-run without `--dry-run`. The script is idempotent — `migrated: true` markers on v1 docs + v2 pre-existence checks make re-runs safe.
+4. Run the migration. In prod: SSH into the App Service (`az webapp ssh -g neo-rg -n neo-web`) and execute `node dist/migrate.mjs --dry-run` (the bundle ships with every deploy; no install needed). Locally: `cd web && npm run migrate:conversations -- --dry-run`. Review the summary, then re-run without `--dry-run`. The script is idempotent — `migrated: true` markers on v1 docs + v2 pre-existence checks make re-runs safe.
 5. Flip to `dual-read`. v1 fallback catches any conversations the migration missed.
 6. Flip to `v2` once the fallback-to-v1 log signal is at zero.
 

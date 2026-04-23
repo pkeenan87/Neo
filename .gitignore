@@ -2,6 +2,7 @@ node_modules/
 staging/
 .env
 .next/
+web/dist/
 *.log
 *.tsbuildinfo
 web/node_modules/
