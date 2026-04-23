@@ -30,6 +30,7 @@ This guide covers all configuration options for the Neo web server and CLI clien
   - [Skills Directory](#skills-directory)
   - [Skill File Format](#skill-file-format)
 - [Chat Persistence (Cosmos DB)](#chat-persistence-cosmos-db)
+  - [Conversation Schema (v1 vs v2)](#conversation-schema-v1-vs-v2)
 - [Prompt Injection Guard](#prompt-injection-guard)
 - [Structured Logging](#structured-logging)
 - [Azure Deployment](#azure-deployment)
@@ -878,6 +879,60 @@ The `usage-logs` container stores per-API-call token usage records for budget en
 Each document contains the model used, input/output token counts, cache metrics, session ID, and timestamp. The `GET /api/usage` endpoint queries this container to return usage summaries for the authenticated user.
 
 Without Cosmos DB configured, usage tracking and budget enforcement are disabled (all requests are allowed).
+
+### Conversation Schema (v1 vs v2)
+
+Neo ships with two conversation schemas in parallel. The newer **v2** schema was introduced to remove the 2 MB per-conversation Cosmos ceiling that v1 bumped into for long-running incident-response sessions with large KQL results. A runtime env var (`NEO_CONVERSATION_STORE_MODE`) selects which schema is active, and a dedicated migration script moves data between them.
+
+| | v1 (default) | v2 |
+|---|---|---|
+| Cosmos container | `conversations` | `neo-conversations-v2` |
+| Partition key | `/ownerId` | `/conversationId` |
+| Document shape | One doc per conversation (root + full message array inline) | Root doc + append-only per-turn docs + blob-ref docs (+ future checkpoint docs) |
+| Size ceiling | 2 MB per conversation (hard Cosmos limit) | No practical ceiling — oversized tool results (>256 KB by default) offload to Azure Blob Storage and are resolved lazily via `get_full_tool_result` |
+| Per-turn RU cost | Full-doc replace on every append | Single turn-doc create + narrow root patch via `TransactionalBatch` |
+| TTL granularity | Whole conversation (90-day default) | Per-doc, inherited from root's `retentionClass` (`standard-7y` default; also `legal-hold`, `client-matter`, `transient`) |
+
+The external `SessionStore` and `Conversation` shapes are identical in both modes — all schema knowledge is contained inside `lib/conversation-store.ts` and `lib/conversation-store-v2.ts`. Route handlers, the agent loop, and the Teams bot don't know which schema is active.
+
+#### Mode selector
+
+`NEO_CONVERSATION_STORE_MODE` takes one of four values:
+
+| Mode | Reads | Writes |
+|------|-------|--------|
+| `v1` (default) | v1 container | v1 container |
+| `dual-write` | v1 container | v1 AND v2 containers |
+| `dual-read` | v2 first; v1 fallback on miss | v2 container; v1 fallback on missing root |
+| `v2` | v2 container | v2 container |
+
+The transition modes (`dual-write` and `dual-read`) let you migrate without a user-visible outage. Under `dual-write`, v1 is authoritative for reads while v2 catches up in parallel; any v2 write failure emits a `conversation_dual_write_divergence` log event for operator monitoring. Under `dual-read`, v2 is authoritative with automatic fallback to v1 for conversations that haven't been migrated yet.
+
+#### v2-specific env vars
+
+```bash
+NEO_CONVERSATION_STORE_MODE=v1                         # v1 | dual-write | dual-read | v2
+NEO_CONVERSATIONS_V2_CONTAINER=neo-conversations-v2    # Cosmos container name
+NEO_TOOL_RESULT_BLOB_CONTAINER=neo-tool-results        # Azure Blob container for offloaded tool results
+NEO_BLOB_OFFLOAD_THRESHOLD_BYTES=262144                # Size threshold for blob offload (256 KB default)
+NEO_BLOB_RESOLVE_MAX_BYTES=20971520                    # Upper cap for lazy-resolve (20 MB default)
+NEO_RETENTION_CLASS_DEFAULT=standard-7y                # standard-7y | legal-hold | client-matter | transient
+```
+
+The blob container requires a lifecycle policy on the `staging/` prefix (reap after 7 days) so orphaned staging blobs from a partial Cosmos-write failure are cleaned up automatically.
+
+#### Migration
+
+See [`docs/conversation-storage-v2-migration.md`](./conversation-storage-v2-migration.md) for the full step-by-step operator guide. The short version:
+
+1. Provision the v2 Cosmos container and the blob-offload container (with the `staging/` lifecycle rule).
+2. Deploy a build that contains the v2 code. Leave `NEO_CONVERSATION_STORE_MODE=v1` — v2 code paths stay idle.
+3. Flip to `dual-write` and monitor `conversation_dual_write_divergence` for 24 hours.
+4. Run `cd web && npm run migrate:conversations -- --dry-run`, review the summary, then re-run without `--dry-run`. The script is idempotent — `migrated: true` markers on v1 docs + v2 pre-existence checks make re-runs safe.
+5. Flip to `dual-read`. v1 fallback catches any conversations the migration missed.
+6. Flip to `v2` once the fallback-to-v1 log signal is at zero.
+
+Rollback is symmetric: flip the mode backward one step at a time. For conversations created while pure `v2` was active, `npm run migrate:conversations -- --direction v2-to-v1` rebuilds them for v1 with a 2 MB pre-flight rejection for oversized rebuilds.
 
 ### Without Cosmos DB
 
