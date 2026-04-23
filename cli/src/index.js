@@ -3,7 +3,7 @@ import chalk from "chalk";
 import os from "os";
 import { Marked } from "marked";
 import { markedTerminal } from "marked-terminal";
-import { resolveServerConfig, parseFlag, validateServerUrl } from "./config.js";
+import { resolveServerConfig, parseFlag, hasFlag, validateServerUrl } from "./config.js";
 import { runAgentLoop, confirmTool } from "./agent.js";
 import { fetchConversations, fetchSkills } from "./server-client.js";
 import { checkForUpdate, runUpdate } from "./updater.js";
@@ -233,6 +233,267 @@ async function promptForConfirmation(rl, tool) {
 }
 
 // ─────────────────────────────────────────────────────────────
+//  One-shot `neo prompt` — designed for agent-to-agent composition
+//  (Claude Code, CI pipelines, other non-interactive callers).
+//
+//  Output discipline:
+//    stdout — final assistant text (plain) OR NDJSON stream (--json).
+//    stderr — progress + errors (tool calls, status, diagnostics).
+//    exit   — 0 ok, 1 agent error, 2 auth error, 3 server/network error.
+//
+//  Stateless by default: each call starts a fresh session unless the
+//  caller passes --session <id>. --session-out prints the minted id to
+//  stderr after completion so callers can chain follow-ups.
+//
+//  Deliberately skips banner, update-check, token-refresh interval,
+//  and readline — nothing that would leak into a piped pipeline.
+// ─────────────────────────────────────────────────────────────
+
+// Cap stdin at 1 MB — the agent has its own context-size limits, and
+// anything over this is almost certainly a mistake (or a compromised
+// upstream). Also prevents an OOM on the CLI host under `neo prompt
+// - < /dev/urandom`-style abuse. Beyond the cap we destroy the stream
+// and reject rather than letting the process grow unbounded.
+const PROMPT_STDIN_MAX_BYTES = 1024 * 1024;
+
+async function readStdin() {
+  return new Promise((resolve, reject) => {
+    let buf = "";
+    let rejected = false;
+    process.stdin.setEncoding("utf8");
+    process.stdin.on("data", (chunk) => {
+      if (rejected) return;
+      buf += chunk;
+      if (Buffer.byteLength(buf, "utf8") > PROMPT_STDIN_MAX_BYTES) {
+        rejected = true;
+        process.stdin.destroy();
+        reject(new Error(`stdin exceeds ${PROMPT_STDIN_MAX_BYTES} byte limit`));
+      }
+    });
+    process.stdin.on("end", () => {
+      if (!rejected) resolve(buf.trim());
+    });
+    process.stdin.on("error", (err) => {
+      if (!rejected) reject(err);
+    });
+  });
+}
+
+// Flag vocabulary for the `prompt` subcommand. Used by the argv scan
+// below to identify which tokens are flags vs. the positional message.
+const PROMPT_KNOWN_FLAGS = new Set(["--json", "--session-out"]);
+const PROMPT_VALUE_FLAGS = new Set(["--session", "--server", "--api-key"]);
+
+/**
+ * Scan `process.argv` starting after `neo prompt` for the first token
+ * that isn't a known flag name or the value following a value-flag.
+ * Returns `{ message }` with the message string, `{ unknownFlag }`
+ * with the offending token when a `--`-prefixed token isn't in our
+ * flag vocabulary (so the caller can surface a clear error rather
+ * than silently sending "--debug" to the agent as a prompt), or
+ * `{}` when no message was found.
+ *
+ * Supports both `--flag value` and `--flag=value` forms — the `=` form
+ * is a single token and never consumes the next one. A bare `-` is the
+ * stdin marker and passes through as the message.
+ */
+function extractPromptMessage() {
+  let i = 3;
+  while (i < process.argv.length) {
+    const tok = process.argv[i];
+    if (PROMPT_KNOWN_FLAGS.has(tok)) {
+      i += 1;
+      continue;
+    }
+    // `--flag=value` is a single token — treat as known if the prefix
+    // matches any known flag.
+    const eqIdx = tok.indexOf("=");
+    if (eqIdx > 0 && tok.startsWith("--")) {
+      const name = tok.slice(0, eqIdx);
+      if (PROMPT_KNOWN_FLAGS.has(name) || PROMPT_VALUE_FLAGS.has(name)) {
+        i += 1;
+        continue;
+      }
+      return { unknownFlag: name };
+    }
+    if (PROMPT_VALUE_FLAGS.has(tok)) {
+      i += 2;           // skip flag + its value
+      continue;
+    }
+    // Any other `--`-prefixed token isn't in our vocabulary. Reject
+    // rather than silently forwarding it as the message — otherwise
+    // `neo prompt --debug "hi"` would send "--debug" to the agent as
+    // the prompt text, which is almost certainly not what the caller
+    // meant. The bare `-` stdin marker is NOT `--`-prefixed and
+    // passes through.
+    if (tok.startsWith("--")) {
+      return { unknownFlag: tok };
+    }
+    return { message: tok };
+  }
+  return {};
+}
+
+async function handlePromptCommand() {
+  const jsonMode = hasFlag("--json");
+  const sessionOut = hasFlag("--session-out");
+  const sessionId = parseFlag("--session");
+
+  // Warn when --api-key appears on the argv in prompt mode. The env
+  // var form is always preferred for non-interactive callers because
+  // argv is visible in `ps aux` and often captured by CI / container
+  // audit logs. Emitting a single stderr line keeps the warning
+  // non-fatal while making the exposure visible.
+  if (hasFlag("--api-key")) {
+    process.stderr.write(
+      "neo prompt: warning: --api-key is visible in the process table; " +
+        "prefer the NEO_API_KEY env var for non-interactive callers.\n",
+    );
+  }
+
+  // Scan argv for the message — position-independent so
+  // `neo prompt --json "msg"` and `neo prompt "msg" --json` both work.
+  const extracted = extractPromptMessage();
+
+  if (extracted.unknownFlag) {
+    process.stderr.write(
+      `neo prompt: unknown flag "${extracted.unknownFlag}"\n` +
+        `Known flags: --json, --session-out, --session <id>, --server <url>, --api-key <key>\n`,
+    );
+    process.exit(2);
+  }
+
+  let message;
+  const rawMessage = extracted.message;
+  if (!rawMessage) {
+    process.stderr.write("Usage: neo prompt <message> [--session <id>] [--json] [--session-out]\n");
+    process.stderr.write("       neo prompt - < file.txt      # read message from stdin\n");
+    process.exit(2);
+  }
+  if (rawMessage === "-") {
+    try {
+      message = await readStdin();
+    } catch (err) {
+      process.stderr.write(`neo prompt: ${err.message}\n`);
+      process.exit(2);
+    }
+    if (!message) {
+      process.stderr.write("neo prompt: no input on stdin\n");
+      process.exit(2);
+    }
+  } else {
+    message = rawMessage.trim();
+    if (!message) {
+      process.stderr.write("neo prompt: message cannot be empty\n");
+      process.exit(2);
+    }
+  }
+
+  // Defensive catch: resolveServerConfig calls process.exit(1) on its
+  // own failure paths (bad URL, Entra token failure, no auth
+  // configured), so this catch only handles *unexpected* throws.
+  // Initial auth failures therefore exit with code 1, not 2 — the
+  // exit(2) below is reserved for throws that reach this level.
+  let serverUrl, getAuthHeader;
+  try {
+    ({ serverUrl, getAuthHeader } = await resolveServerConfig());
+  } catch (err) {
+    process.stderr.write(`neo prompt: auth error: ${err.message}\n`);
+    process.exit(2);
+  }
+
+  // Build callbacks. In plain mode, tool calls + thinking are
+  // informational on stderr and the final text is returned by
+  // streamMessage's terminal event. In --json mode, onRawEvent passes
+  // every NDJSON event to stdout so agent-to-agent callers can parse
+  // tool calls and results. NOTE: --json stdout carries tool inputs
+  // (including PII like UPNs and KQL queries); see the security
+  // subsection in docs/user-guide.md before redirecting stdout to a
+  // log collector.
+  const callbacks = jsonMode
+    ? {
+        onRawEvent: (event) => {
+          process.stdout.write(JSON.stringify(event) + "\n");
+        },
+      }
+    : {
+        onToolCall: (name, input) => {
+          const keys = Object.keys(input || {}).slice(0, 3).join(", ");
+          process.stderr.write(`[tool] ${name}${keys ? ` (${keys})` : ""}\n`);
+        },
+        onSkillInvocation: (skill) => {
+          process.stderr.write(`[skill] ${skill.name}\n`);
+        },
+      };
+
+  let result;
+  try {
+    result = await runAgentLoop(message, sessionId, callbacks, getAuthHeader, serverUrl);
+  } catch (err) {
+    // Classify the error for exit-code selection. Auth errors here
+    // mean the token refresh failed mid-request (vs the initial
+    // resolve above); treat as exit 2 for consistency.
+    //
+    // Network errors come from Node's built-in fetch (undici) with
+    // the shape `TypeError: fetch failed` and a nested `err.cause`
+    // carrying the underlying errno code. Check both: the message
+    // pattern catches the undici case even if the cause code is
+    // absent, and the explicit code check is resilient if a future
+    // wrapper re-throws as a plain Error instead of TypeError.
+    const isAuth = err.code === "AUTH_ERROR" || /Unauthorized/i.test(err.message);
+    const NETWORK_CAUSE_CODES = new Set([
+      "ECONNREFUSED",
+      "ENOTFOUND",
+      "ECONNRESET",
+      "ETIMEDOUT",
+      "EAI_AGAIN",
+      "CERT_HAS_EXPIRED",
+      "UNABLE_TO_VERIFY_LEAF_SIGNATURE",
+      "UND_ERR_SOCKET",
+      "UND_ERR_HEADERS_TIMEOUT",
+      "UND_ERR_BODY_TIMEOUT",
+    ]);
+    const causeCode = err.cause && typeof err.cause === "object" ? err.cause.code : undefined;
+    const isServer =
+      (err.name === "TypeError" && /fetch failed/i.test(err.message)) ||
+      (causeCode && NETWORK_CAUSE_CODES.has(causeCode));
+    const exitCode = isAuth ? 2 : isServer ? 3 : 1;
+    process.stderr.write(`neo prompt: ${err.message}\n`);
+    process.exit(exitCode);
+  }
+
+  if (result.type === "confirmation_required") {
+    // A destructive tool needs human confirmation — one-shot mode
+    // can't resolve that, so fail loud. The session stays live so an
+    // interactive `neo --session <id>` invocation can resume it.
+    if (!jsonMode) {
+      const resumeHint = result.sessionId
+        ? `Resume interactively with:  neo --session ${result.sessionId}\n`
+        : `Session id unavailable — cannot resume automatically.\n`;
+      process.stderr.write(
+        `neo prompt: agent paused for confirmation of destructive tool "${result.tool.name}".\n` +
+          resumeHint,
+      );
+    }
+    if (sessionOut && result.sessionId) {
+      process.stderr.write(`session: ${result.sessionId}\n`);
+    }
+    process.exit(1);
+  }
+
+  // result.type === "response"
+  if (!jsonMode) {
+    // Plain mode: write final assistant text, one trailing newline.
+    process.stdout.write(result.text);
+    if (!result.text.endsWith("\n")) process.stdout.write("\n");
+  }
+  if (sessionOut && result.sessionId) {
+    process.stderr.write(`session: ${result.sessionId}\n`);
+  }
+  process.exit(0);
+}
+
+// ─────────────────────────────────────────────────────────────
 //  Auth sub-commands
 // ─────────────────────────────────────────────────────────────
 
@@ -385,6 +646,11 @@ async function main() {
     return;
   }
 
+  if (process.argv[2] === "prompt") {
+    await handlePromptCommand();
+    return;
+  }
+
   // Resolve server config (exits on failure)
   const { serverUrl, getAuthHeader, authMethod } = await resolveServerConfig();
 
@@ -427,7 +693,15 @@ async function main() {
   const rlQuestion = (prompt) =>
     new Promise(resolve => rl.question(prompt, resolve));
 
-  let sessionId = null;
+  // Honor `--session <id>` at REPL startup so a caller coming from
+  // `neo prompt` (which exits with a resume hint when a destructive
+  // tool needs confirmation) lands in a REPL bound to the paused
+  // session and can approve or cancel. Falls through to a fresh
+  // session when absent.
+  let sessionId = parseFlag("--session") ?? null;
+  if (sessionId) {
+    console.log(chalk.gray(`    Resuming session ${sessionId}\n`));
+  }
   let lastHistory = [];
 
   const callbacks = {

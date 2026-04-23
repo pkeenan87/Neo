@@ -51,6 +51,12 @@ async function processStream(response, callbacks) {
         continue;
       }
 
+      // Raw-event hook — fires for every parsed event, before the
+      // switch that maps a subset into named callbacks. Used by the
+      // one-shot `neo prompt --json` path to pass the server's NDJSON
+      // stream through to stdout unchanged. Ignored in REPL mode.
+      if (callbacks.onRawEvent) callbacks.onRawEvent(event);
+
       switch (event.type) {
         case "session":
           sessionId = event.sessionId;
@@ -75,7 +81,13 @@ async function processStream(response, callbacks) {
           return { type: "response", text: event.text, sessionId };
 
         case "error": {
-          const err = new Error(event.message || "Server error");
+          // Cap the message length before surfacing it. A server in
+          // debug mode can emit stack traces or internal state via
+          // `event.message`, and the CLI's stderr is often captured
+          // by CI log aggregators. Mirrors the 120-char truncation
+          // on the HTTP-error path below (streamMessage:129).
+          const rawMsg = typeof event.message === "string" ? event.message : "Server error";
+          const err = new Error(rawMsg.slice(0, 200));
           err.code = event.code || null;
           throw err;
         }

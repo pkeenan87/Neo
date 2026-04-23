@@ -16,6 +16,8 @@ This guide covers day-to-day usage of Neo for both regular users (readers) and a
   - [Understanding Tool Calls](#understanding-tool-calls)
   - [Confirming Destructive Actions](#confirming-destructive-actions)
   - [Managing Sessions](#managing-sessions)
+  - [One-Shot Prompts (Agent-to-Agent Composition)](#one-shot-prompts-agent-to-agent-composition)
+    - [Security considerations for agent-to-agent use](#security-considerations-for-agent-to-agent-use)
   - [Settings](#settings)
   - [Debugging](#debugging)
 - [Common Tasks — Reader](#common-tasks--reader)
@@ -269,6 +271,85 @@ Each conversation creates a server-side session that maintains your message hist
 - **Quit**: Type `exit` to leave the REPL.
 
 Sessions persist on the server between CLI restarts. If you restart the CLI without typing `clear`, a new session is created.
+
+### One-Shot Prompts (Agent-to-Agent Composition)
+
+For piping Neo into another tool — Claude Code, a CI step, a shell script — use the non-interactive `neo prompt` subcommand. It sends one message, streams the response, and exits. No banner, no REPL, no ANSI noise in piped output.
+
+**Basic usage:**
+
+```bash
+# Message as an argument
+neo prompt "who signed in from outside the US in the last 24h?"
+
+# Message from stdin (good for long prompts)
+cat investigation-brief.txt | neo prompt -
+
+# Override the server for this invocation only
+neo prompt "..." --server https://neo-web.yourdomain.com
+```
+
+**Structured output for parsing:**
+
+```bash
+neo prompt "..." --json
+```
+
+In `--json` mode, stdout emits the server's raw NDJSON stream — one JSON event per line, matching the wire format (`{ "type": "thinking" }`, `{ "type": "tool_call", ... }`, `{ "type": "tool_result", ... }`, `{ "type": "response", "text": "..." }`). This is the format agents like Claude Code should prefer when they want to reason about Neo's tool calls, not just the final answer.
+
+**Session continuity:**
+
+Each `neo prompt` call is stateless by default — a fresh session per invocation. To chain calls across prompts:
+
+```bash
+# Start a conversation and save the minted session id
+neo prompt "look up alice@corp.com" --session-out 2>session.txt
+SESSION=$(grep -oP 'session: \K.*' session.txt)
+
+# Continue the same conversation
+neo prompt "now check her recent sign-ins" --session "$SESSION"
+```
+
+`--session-out` writes `session: conv_abc-uuid` to **stderr** after the response completes so it doesn't pollute the stdout channel a caller is parsing.
+
+**Output channels:**
+
+| Channel | Plain mode | `--json` mode |
+|---|---|---|
+| stdout | Final assistant text, one trailing newline. | Raw NDJSON stream, one event per line. |
+| stderr | Tool calls and skill invocations (informational prefix `[tool]` / `[skill]`), errors. | Errors only. |
+
+**Exit codes:**
+
+| Code | Meaning |
+|---|---|
+| `0` | Response delivered. |
+| `1` | Agent error (tool failure, bad request, confirmation paused mid-stream), or no auth configured. |
+| `2` | Bad CLI usage (missing message, mid-request auth failure). |
+| `3` | Server / network error — the HTTP round-trip itself failed. |
+
+**Destructive-tool pause:**
+
+If Neo needs to confirm a destructive action (password reset, machine isolation), `neo prompt` can't resolve that in one shot. It exits `1` with a message to stderr pointing at the sticky session id, and you can resume interactively:
+
+```
+neo prompt: agent paused for confirmation of destructive tool "reset_user_password".
+Resume interactively with:  neo --session conv_abc-uuid
+```
+
+The REPL honors `--session <id>` at startup, so the resume command drops you into an interactive conversation already bound to the paused session — you'll see Neo's pending prompt and can approve or cancel at the confirmation gate.
+
+#### Security considerations for agent-to-agent use
+
+The `neo prompt` subcommand is designed to be invoked by other agents and CI systems. Two channel behaviors are worth making explicit before you wire it into a pipeline:
+
+- **`--json` stdout contains tool inputs, not just the final answer.** The stream passes through the server's full event set — including `tool_call` events whose `input` field carries the raw arguments the agent supplied (UPNs, KQL queries, indicator values, destructive-action justifications, etc.). That is deliberate: agents like Claude Code need to reason about Neo's tool calls, not only its prose reply. It also means **`--json` stdout must not be redirected to untrusted log collectors or shared storage**. If a caller routes stdout to a SIEM, build-log service, or chat channel, it will ship operational detail and PII there. Route stdout to an in-memory buffer in the calling agent, or use plain mode (no `--json`) if only the final answer is needed.
+
+- **stderr may contain session ids.** With `--session-out`, and always when a destructive-tool pause fires, the minted session id is written to stderr. Session ids are not credentials — the server enforces auth independently on every `/api/agent` and `/api/agent/confirm` call — but they are opaque correlation identifiers. Treat stderr as internal to the calling agent.
+
+- **Prefer `NEO_API_KEY` over `--api-key` for non-interactive callers.** The `--api-key` flag is visible in `ps aux` and often captured by container / CI audit logs. The env-var path avoids process-table exposure entirely. `neo prompt` emits a one-line stderr warning when invoked with `--api-key` to flag this at runtime.
+
+- **stdin is capped at 1 MB.** `neo prompt -` reads from stdin until EOF or the 1 MB limit; above that the stream is destroyed and the process exits `2`. This prevents an accidental `neo prompt - < /dev/urandom` or a misbehaving upstream from OOMing the CLI host, and doubles as a coarse upper bound on prompt-injection payload size for untrusted callers.
 
 ### Model Selection
 

@@ -12,12 +12,30 @@ import { getAccessToken } from "./auth-entra.js";
 
 /**
  * Parse a named flag from process.argv.
- * e.g. parseFlag("--server") returns the value after --server, or undefined.
+ * Accepts both `--flag value` and `--flag=value`. Returns the value, or
+ * undefined when the flag is absent.
  */
 export function parseFlag(name) {
-  const idx = process.argv.indexOf(name);
-  if (idx === -1 || idx + 1 >= process.argv.length) return undefined;
-  return process.argv[idx + 1];
+  const eqPrefix = `${name}=`;
+  for (let i = 0; i < process.argv.length; i++) {
+    const tok = process.argv[i];
+    if (tok === name) {
+      return i + 1 < process.argv.length ? process.argv[i + 1] : undefined;
+    }
+    if (tok.startsWith(eqPrefix)) {
+      return tok.slice(eqPrefix.length);
+    }
+  }
+  return undefined;
+}
+
+/**
+ * Returns true if any form of the named flag (`--flag`, `--flag=...`) is
+ * present in argv. Used for boolean flags that don't carry a value.
+ */
+export function hasFlag(name) {
+  const eqPrefix = `${name}=`;
+  return process.argv.some((t) => t === name || t.startsWith(eqPrefix));
 }
 
 /**
