@@ -257,24 +257,55 @@ describe("DispatchingSessionStore", () => {
   });
 
   describe("dual-write mode", () => {
-    it("create: v1 mints id; v2 mirrors via createConversationV2WithId (NOT v2.create)", async () => {
+    // After ultrareview bug_007: DispatchingSessionStore methods whose
+    // v1 counterparts already dispatch through module-level functions
+    // (create, delete, setPending, clearPending, updateTitle) MUST NOT
+    // re-dispatch to v2. The duplicate call was the source of 100%
+    // false-positive conversation_dual_write_divergence events. Only
+    // saveMessages still fires dual-write from here — CosmosSessionStore
+    // .saveMessages talks directly to Cosmos without going through
+    // module-level dispatch.
+
+    it("create: delegates to v1 only; v2 is NOT called from the dispatcher (module-level owns the mirror)", async () => {
       v1Spies.create.mockResolvedValueOnce("conv_shared-id");
       const id = await inMode("dual-write", () =>
         store.create("reader", "owner_1", "web"),
       );
       expect(id).toBe("conv_shared-id");
       expect(v1Spies.create).toHaveBeenCalledTimes(1);
-      expect(mockCreateV2WithId).toHaveBeenCalledWith(
-        "conv_shared-id",
-        "owner_1",
-        "reader",
-        "web",
-      );
-      // v2.create MUST NOT be called (that would mint a second id).
+      // Dispatcher must NOT invoke v2 here — CosmosSessionStore.create
+      // goes through module createConversation, which itself dual-writes.
       expect(v2Spies.create).not.toHaveBeenCalled();
+      expect(mockCreateV2WithId).not.toHaveBeenCalled();
     });
 
-    it("saveMessages: writes to BOTH with matching args", async () => {
+    it("updateTitle / setPending / clearPending: delegate to v1 only (no dispatcher-level v2 call)", async () => {
+      await inMode("dual-write", () => store.updateTitle("id_1", "New"));
+      await inMode("dual-write", () =>
+        store.setPendingConfirmation("id_1", {
+          id: "tu",
+          name: "t",
+          input: {},
+        }),
+      );
+      await inMode("dual-write", () => store.clearPendingConfirmation("id_1"));
+      expect(v1Spies.updateTitle).toHaveBeenCalledTimes(1);
+      expect(v1Spies.setPendingConfirmation).toHaveBeenCalledTimes(1);
+      expect(v1Spies.clearPendingConfirmation).toHaveBeenCalledTimes(1);
+      expect(v2Spies.updateTitle).not.toHaveBeenCalled();
+      expect(v2Spies.setPendingConfirmation).not.toHaveBeenCalled();
+      expect(v2Spies.clearPendingConfirmation).not.toHaveBeenCalled();
+    });
+
+    it("delete: delegates to v1 only in dual-write", async () => {
+      v1Spies.delete.mockResolvedValueOnce(true);
+      const ok = await inMode("dual-write", () => store.delete("id_1"));
+      expect(ok).toBe(true);
+      expect(v1Spies.delete).toHaveBeenCalledTimes(1);
+      expect(v2Spies.delete).not.toHaveBeenCalled();
+    });
+
+    it("saveMessages: writes to BOTH — v1 direct Cosmos, v2 via dispatcher (no module-level)", async () => {
       const msgs: Message[] = [{ role: "user", content: "hi" }];
       await inMode("dual-write", () =>
         store.saveMessages("id_1", msgs, "Title"),
@@ -283,36 +314,19 @@ describe("DispatchingSessionStore", () => {
       expect(v2Spies.saveMessages).toHaveBeenCalledWith("id_1", msgs, "Title");
     });
 
-    it("updateTitle: writes to both; v1 authoritative (return value from v1)", async () => {
-      await inMode("dual-write", () => store.updateTitle("id_1", "New"));
-      expect(v1Spies.updateTitle).toHaveBeenCalledWith("id_1", "New");
-      expect(v2Spies.updateTitle).toHaveBeenCalledWith("id_1", "New");
-    });
-
-    it("clearPendingConfirmation: return value comes from v1, v2 best-effort", async () => {
-      const tool = { id: "tu", name: "t", input: {} };
-      v1Spies.clearPendingConfirmation.mockResolvedValueOnce(tool);
-      v2Spies.clearPendingConfirmation.mockResolvedValueOnce(null);
-      const out = await inMode("dual-write", () =>
-        store.clearPendingConfirmation("id_1"),
-      );
-      expect(out).toEqual(tool);
-      expect(v1Spies.clearPendingConfirmation).toHaveBeenCalledTimes(1);
-      expect(v2Spies.clearPendingConfirmation).toHaveBeenCalledTimes(1);
-    });
-
-    it("v2 write failure does NOT throw; v1 return value preserved; divergence event fires", async () => {
-      v2Spies.updateTitle.mockRejectedValueOnce(new Error("v2 down"));
+    it("saveMessages: v2 failure does NOT throw; v1 succeeds; divergence event fires from session-factory", async () => {
+      v2Spies.saveMessages.mockRejectedValueOnce(new Error("v2 down"));
+      const msgs: Message[] = [{ role: "user", content: "hi" }];
       await expect(
-        inMode("dual-write", () => store.updateTitle("id_1", "T")),
+        inMode("dual-write", () => store.saveMessages("id_1", msgs, "T")),
       ).resolves.not.toThrow();
-      expect(v1Spies.updateTitle).toHaveBeenCalledTimes(1);
+      expect(v1Spies.saveMessages).toHaveBeenCalledTimes(1);
       expect(mockEmitEvent).toHaveBeenCalledWith(
         "conversation_dual_write_divergence",
         expect.any(String),
         "session-factory",
         expect.objectContaining({
-          operation: "updateTitle",
+          operation: "saveMessages",
           conversationId: "id_1",
         }),
       );
@@ -329,12 +343,13 @@ describe("DispatchingSessionStore", () => {
       ).toBe(true);
     });
 
-    it("non-CsvAttachmentCapError failures from v2 are swallowed as divergence", async () => {
-      v2Spies.updateTitle.mockRejectedValueOnce(
+    it("saveMessages: non-CsvAttachmentCapError failures from v2 are swallowed as divergence", async () => {
+      v2Spies.saveMessages.mockRejectedValueOnce(
         Object.assign(new Error("cosmos 503"), { code: 503 }),
       );
+      const msgs: Message[] = [{ role: "user", content: "hi" }];
       await expect(
-        inMode("dual-write", () => store.updateTitle("id_1", "T")),
+        inMode("dual-write", () => store.saveMessages("id_1", msgs)),
       ).resolves.not.toThrow();
       expect(mockEmitEvent).toHaveBeenCalledWith(
         "conversation_dual_write_divergence",

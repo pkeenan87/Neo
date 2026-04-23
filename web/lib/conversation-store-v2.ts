@@ -27,6 +27,22 @@ import { CSV_MAX_REFERENCE_ATTACHMENTS, CsvAttachmentCapError } from "./types";
 import type { SessionStore } from "./session-store";
 import { promoteStagingBlob, isBlobRefDescriptor } from "./tool-result-blob-store";
 
+/**
+ * Thrown by v2 write paths when the v2 root doc doesn't exist for the
+ * given conversation id. Distinct typed error so the dispatch layer
+ * can detect v1-only conversations during `dual-read` and fall back
+ * to v1 instead of surfacing a generic 500. See merged_bug_001 in the
+ * ultrareview.
+ */
+export class ConversationNotFoundV2Error extends Error {
+  readonly conversationId: string;
+  constructor(conversationId: string) {
+    super(`Conversation ${conversationId} not found (v2)`);
+    this.name = "ConversationNotFoundV2Error";
+    this.conversationId = conversationId;
+  }
+}
+
 // ─────────────────────────────────────────────────────────────
 //  Conversation store v2 — split-document + blob-offload schema
 //
@@ -489,7 +505,7 @@ export async function appendMessagesV2(
       .item(id, id)
       .read<ConversationV2Root>();
     if (!root || root.docType !== "root") {
-      throw new Error(`Conversation ${id} not found (v2)`);
+      throw new ConversationNotFoundV2Error(id);
     }
     if (root.ownerId !== ownerId) {
       throw new Error(`Conversation ${id} owner mismatch (v2)`);
@@ -581,24 +597,26 @@ export async function appendMessagesV2(
   } catch (err: unknown) {
     const code =
       err && typeof err === "object" && "code" in err ? (err as { code: number }).code : 0;
-    if (code === 412) {
-      // The retry path re-runs attempt() from scratch, which re-creates
-      // the turn docs. When the append spans multiple batches (> 99
-      // turns), the earlier batches already committed their turn docs
-      // — the retry would then hit 409 CONFLICT on deterministic turn
-      // IDs. Agent turns in practice append 1–3 messages, but migration
-      // (phase 9) and bulk imports can exceed 99 and need a smarter
-      // retry that re-reads the post-partial-commit turnCount.
-      // Rather than hide the bug, assert the invariant and surface a
-      // descriptive error for the rare multi-chunk + 412 case.
+    if (code === 412 || code === 409) {
+      // Two races produce the same retry remedy:
+      //   - 412: our root patch's IfMatch lost to a concurrent root
+      //     update (another appender or metadata patch).
+      //   - 409: a concurrent appender beat us to the deterministic
+      //     turn id `turn_<conv>_<N+1>`. The batch is Create-first /
+      //     Patch-last, so the Create collides before our etag guard
+      //     fires.
+      // Either way: re-read the root → recompute starting turn →
+      // re-attempt. Safe only for single-batch appends; multi-chunk
+      // appends (>99 messages) can partial-commit, and a retry would
+      // double-create the earlier chunks. Rare in agent turns but
+      // reachable from migration / bulk imports.
       if (newMessages.length > 99) {
         throw new Error(
-          `appendMessagesV2: 412 etag conflict on a multi-chunk append ` +
+          `appendMessagesV2: ${code} conflict on a multi-chunk append ` +
             `(${newMessages.length} messages). Retry logic is safe only for ` +
             `single-batch appends. See phase-9 migration for the proper fix.`,
         );
       }
-      // Single-batch — safe to retry.
       await attempt();
     } else {
       throw err;
@@ -622,7 +640,7 @@ export async function updateTitleV2(
   // ~1 RU).
   const { resource } = await container.item(id, id).read<ConversationV2Root>();
   if (!resource || resource.docType !== "root") {
-    throw new Error(`Conversation ${id} not found (v2)`);
+    throw new ConversationNotFoundV2Error(id);
   }
   if (resource.ownerId !== ownerId) {
     throw new Error(`Conversation ${id} owner mismatch (v2)`);
@@ -644,7 +662,9 @@ export async function deleteConversationV2(
 
   // Owner check first.
   const { resource } = await container.item(id, id).read<ConversationV2Root>();
-  if (!resource || resource.docType !== "root") return;
+  if (!resource || resource.docType !== "root") {
+    throw new ConversationNotFoundV2Error(id);
+  }
   if (resource.ownerId !== ownerId) {
     throw new Error(`Conversation ${id} owner mismatch (v2)`);
   }
@@ -686,7 +706,9 @@ export async function setConversationPendingConfirmationV2(
 ): Promise<void> {
   const container = getContainerV2();
   const { resource } = await container.item(id, id).read<ConversationV2Root>();
-  if (!resource || resource.docType !== "root") return;
+  if (!resource || resource.docType !== "root") {
+    throw new ConversationNotFoundV2Error(id);
+  }
   if (resource.ownerId !== ownerId) return;
 
   await container.item(id, id).patch({
@@ -703,7 +725,9 @@ export async function clearConversationPendingConfirmationV2(
 ): Promise<PendingTool | null> {
   const container = getContainerV2();
   const { resource } = await container.item(id, id).read<ConversationV2Root>();
-  if (!resource || resource.docType !== "root") return null;
+  if (!resource || resource.docType !== "root") {
+    throw new ConversationNotFoundV2Error(id);
+  }
   if (resource.ownerId !== ownerId) return null;
 
   const pending = resource.pendingConfirmation;
@@ -730,7 +754,7 @@ export async function appendCsvAttachmentV2(
       .item(id, id)
       .read<ConversationV2Root>();
     if (!resource || resource.docType !== "root") {
-      throw new Error(`Conversation ${id} not found (v2)`);
+      throw new ConversationNotFoundV2Error(id);
     }
     if (resource.ownerId !== ownerId) {
       throw new Error(`Conversation ${id} owner mismatch (v2)`);
@@ -943,14 +967,14 @@ export class CosmosV2SessionStore implements SessionStore {
   async setPendingConfirmation(id: string, tool: PendingTool): Promise<void> {
     const container = getContainerV2();
     const { resource } = await container.item(id, id).read<ConversationV2Root>();
-    if (!resource) return;
+    if (!resource) throw new ConversationNotFoundV2Error(id);
     await setConversationPendingConfirmationV2(id, resource.ownerId, tool);
   }
 
   async clearPendingConfirmation(id: string): Promise<PendingTool | null> {
     const container = getContainerV2();
     const { resource } = await container.item(id, id).read<ConversationV2Root>();
-    if (!resource) return null;
+    if (!resource) throw new ConversationNotFoundV2Error(id);
     return clearConversationPendingConfirmationV2(id, resource.ownerId);
   }
 
@@ -974,18 +998,45 @@ export class CosmosV2SessionStore implements SessionStore {
     // incoming messages at that point, and append only the delta. Zero
     // delta ⇒ no-op (update the root's updatedAt so the sidebar
     // timestamp refreshes).
+    //
+    // Concurrency: a second writer can land a turn between our root
+    // read and our append. Without protection, `slice(currentTurnCount)`
+    // would return [] and our new turn would be silently dropped.
+    // Detect the condition (currentTurnCount >= messages.length implies
+    // someone else wrote) and surface it as a conflict that the caller
+    // can retry, matching the v1 adapter's IfMatch-412 behavior.
     const container = getContainerV2();
     const { resource: root } = await container
       .item(id, id)
       .read<ConversationV2Root>();
-    if (!root || root.docType !== "root") return;
+    if (!root || root.docType !== "root") {
+      // Missing root means the session the caller wanted to update
+      // doesn't exist on this store. Throw the typed error so the
+      // dispatch layer can fall back to v1 under dual-read (the
+      // v1-only migration-in-progress case). See merged_bug_001.
+      throw new ConversationNotFoundV2Error(id);
+    }
 
     const currentTurnCount = root.turnCount;
+    if (currentTurnCount > messages.length) {
+      // Someone else appended turns after the caller loaded this
+      // conversation. Dropping our delta would be silent data loss.
+      throw Object.assign(
+        new Error(
+          `saveMessages: concurrent write detected on conversation ${id} ` +
+            `(persisted turnCount=${currentTurnCount} > caller messages.length=${messages.length}). ` +
+            `Caller should re-load and re-apply.`,
+        ),
+        { code: 409 },
+      );
+    }
+
     const delta = messages.slice(currentTurnCount);
     if (delta.length === 0) {
-      // Fold the updatedAt touch and the optional title-set into a
-      // single patch so we only pay one Cosmos round-trip in the
-      // common zero-delta case (stream.ts' save-on-turn-complete).
+      // True zero-delta (currentTurnCount === messages.length). Fold
+      // the updatedAt touch and the optional title-set into a single
+      // patch so we only pay one Cosmos round-trip in the common
+      // zero-delta case (stream.ts' save-on-turn-complete).
       const ops: PatchOperation[] = [
         { op: "set", path: "/updatedAt", value: nowIso() },
       ];
@@ -1002,7 +1053,7 @@ export class CosmosV2SessionStore implements SessionStore {
   async updateTitle(id: string, title: string): Promise<void> {
     const container = getContainerV2();
     const { resource } = await container.item(id, id).read<ConversationV2Root>();
-    if (!resource) return;
+    if (!resource) throw new ConversationNotFoundV2Error(id);
     await updateTitleV2(id, resource.ownerId, title);
   }
 }

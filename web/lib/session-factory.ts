@@ -5,7 +5,7 @@ import { InMemorySessionStore, type SessionStore } from "./session-store";
 import { CosmosSessionStore } from "./conversation-store";
 import {
   CosmosV2SessionStore,
-  createConversationV2WithId,
+  ConversationNotFoundV2Error,
 } from "./conversation-store-v2";
 import { mockStore } from "./mock-conversation-store";
 import { getActiveStoreMode } from "./conversation-store-mode";
@@ -37,6 +37,34 @@ import type {
 //                 v2 write failures log conversation_dual_write_
 //                 divergence but do NOT throw.
 // ─────────────────────────────────────────────────────────────
+
+/**
+ * Dual-read fallback: run the v2 write, fall back to v1 if v2 reports
+ * the root is missing (v1-only conversations during rolling migration).
+ * Mirrors the module-level `dualReadWriteWithV1Fallback` in
+ * conversation-store.ts — necessary here because some SessionStore
+ * methods bypass module-level dispatch and talk directly to v2.
+ */
+async function v2WriteWithV1Fallback<T>(
+  conversationId: string,
+  operation: string,
+  v2Write: () => Promise<T>,
+  v1Write: () => Promise<T>,
+): Promise<T> {
+  try {
+    return await v2Write();
+  } catch (err) {
+    if (err instanceof ConversationNotFoundV2Error) {
+      logger.info(
+        `dual-read ${operation} fell back to v1 (v2 root missing)`,
+        "session-factory",
+        { conversationId },
+      );
+      return v1Write();
+    }
+    throw err;
+  }
+}
 
 async function dualWriteV2Best(
   opName: DualWriteDivergencePayload["operation"],
@@ -80,15 +108,12 @@ export class DispatchingSessionStore implements SessionStore {
     const mode = getActiveStoreMode();
     if (mode === "v2") return this.v2.create(role, ownerId, channel);
     if (mode === "dual-read") return this.v2.create(role, ownerId, channel);
-    if (mode === "dual-write") {
-      // v1 mints the id (authoritative); v2 mirrors it via the shared-id
-      // helper used by the module-level createConversation dispatch.
-      const id = await this.v1.create(role, ownerId, channel);
-      await dualWriteV2Best("createConversation", id, async () => {
-        await createConversationV2WithId(id, ownerId, role, channel);
-      });
-      return id;
-    }
+    // v1 and dual-write both go through CosmosSessionStore.create →
+    // module-level createConversation, which itself dispatches to v1
+    // and (under dual-write) mirrors to v2 via createConversationV2WithId.
+    // A second v2 call here would 409 on every conversation and
+    // poison the conversation_dual_write_divergence log signal that
+    // operators rely on for the rollout gate. See ultrareview bug_007.
     return this.v1.create(role, ownerId, channel);
   }
 
@@ -117,12 +142,21 @@ export class DispatchingSessionStore implements SessionStore {
   async delete(id: string): Promise<boolean> {
     const mode = getActiveStoreMode();
     if (mode === "v2") return this.v2.delete(id);
-    if (mode === "dual-read") return this.v2.delete(id);
-    if (mode === "dual-write") {
-      const result = await this.v1.delete(id);
-      await dualWriteV2Best("deleteConversation", id, () => this.v2.delete(id).then(() => undefined));
-      return result;
+    if (mode === "dual-read") {
+      // CosmosV2SessionStore.delete swallows errors and returns false
+      // on any failure, so we can't rely on the typed error class
+      // here. Try v2 first, and if it returns false (not found), also
+      // delete from v1 so the delete is effective for v1-only
+      // conversations. Double-deleting a conversation that exists in
+      // both stores is fine because both `delete` methods are
+      // idempotent on missing ids.
+      const v2Deleted = await this.v2.delete(id);
+      if (!v2Deleted) return this.v1.delete(id);
+      return true;
     }
+    // v1 and dual-write both go through CosmosSessionStore.delete →
+    // module-level deleteConversation, which itself dispatches dual-write.
+    // Avoid re-dispatching from here. See ultrareview bug_007.
     return this.v1.delete(id);
   }
 
@@ -174,28 +208,33 @@ export class DispatchingSessionStore implements SessionStore {
   async setPendingConfirmation(id: string, tool: PendingTool): Promise<void> {
     const mode = getActiveStoreMode();
     if (mode === "v2") return this.v2.setPendingConfirmation(id, tool);
-    if (mode === "dual-read") return this.v2.setPendingConfirmation(id, tool);
-    if (mode === "dual-write") {
-      await this.v1.setPendingConfirmation(id, tool);
-      await dualWriteV2Best("setPendingConfirmation", id, () =>
-        this.v2.setPendingConfirmation(id, tool),
+    if (mode === "dual-read") {
+      return v2WriteWithV1Fallback(
+        id,
+        "setPendingConfirmation",
+        () => this.v2.setPendingConfirmation(id, tool),
+        () => this.v1.setPendingConfirmation(id, tool),
       );
-      return;
     }
+    // v1 and dual-write: CosmosSessionStore.setPendingConfirmation
+    // dispatches through the module-level function, which handles the
+    // dual-write mirror. See ultrareview bug_007.
     return this.v1.setPendingConfirmation(id, tool);
   }
 
   async clearPendingConfirmation(id: string): Promise<PendingTool | null> {
     const mode = getActiveStoreMode();
     if (mode === "v2") return this.v2.clearPendingConfirmation(id);
-    if (mode === "dual-read") return this.v2.clearPendingConfirmation(id);
-    if (mode === "dual-write") {
-      const result = await this.v1.clearPendingConfirmation(id);
-      await dualWriteV2Best("clearPendingConfirmation", id, () =>
-        this.v2.clearPendingConfirmation(id).then(() => undefined),
+    if (mode === "dual-read") {
+      return v2WriteWithV1Fallback(
+        id,
+        "clearPendingConfirmation",
+        () => this.v2.clearPendingConfirmation(id),
+        () => this.v1.clearPendingConfirmation(id),
       );
-      return result;
     }
+    // v1 and dual-write: module-level dispatch in the v1 adapter
+    // handles the dual-write mirror.
     return this.v1.clearPendingConfirmation(id);
   }
 
@@ -221,7 +260,28 @@ export class DispatchingSessionStore implements SessionStore {
   async saveMessages(id: string, messages: Message[], title?: string): Promise<void> {
     const mode = getActiveStoreMode();
     if (mode === "v2") return this.v2.saveMessages(id, messages, title);
-    if (mode === "dual-read") return this.v2.saveMessages(id, messages, title);
+    if (mode === "dual-read") {
+      // v2.saveMessages throws ConversationNotFoundV2Error for v1-only
+      // conversations (divergence during dual-write, pre-migration
+      // sessions). Fall back to v1 so the rolling migration doesn't
+      // drop turns from the users whose conversations haven't migrated
+      // yet. See ultrareview merged_bug_001.
+      try {
+        await this.v2.saveMessages(id, messages, title);
+      } catch (err) {
+        if (err instanceof ConversationNotFoundV2Error) {
+          logger.info(
+            "dual-read saveMessages fell back to v1 (v2 root missing)",
+            "session-factory",
+            { conversationId: id },
+          );
+          await this.v1.saveMessages(id, messages, title);
+          return;
+        }
+        throw err;
+      }
+      return;
+    }
     if (mode === "dual-write") {
       await this.v1.saveMessages(id, messages, title);
       await dualWriteV2Best("saveMessages", id, () =>
@@ -235,14 +295,16 @@ export class DispatchingSessionStore implements SessionStore {
   async updateTitle(id: string, title: string): Promise<void> {
     const mode = getActiveStoreMode();
     if (mode === "v2") return this.v2.updateTitle(id, title);
-    if (mode === "dual-read") return this.v2.updateTitle(id, title);
-    if (mode === "dual-write") {
-      await this.v1.updateTitle(id, title);
-      await dualWriteV2Best("updateTitle", id, () =>
-        this.v2.updateTitle(id, title),
+    if (mode === "dual-read") {
+      return v2WriteWithV1Fallback(
+        id,
+        "updateTitle",
+        () => this.v2.updateTitle(id, title),
+        () => this.v1.updateTitle(id, title),
       );
-      return;
     }
+    // v1 and dual-write: module-level dispatch in the v1 adapter
+    // handles the dual-write mirror.
     return this.v1.updateTitle(id, title);
   }
 }

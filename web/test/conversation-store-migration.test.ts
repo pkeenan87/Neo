@@ -293,10 +293,16 @@ describe("splitV1ToV2WithOffload", () => {
       conversationId: conv.id,
     });
 
-    // Inner content of the tool_result block is now the descriptor.
+    // Inner content of the tool_result block is now the SAME trust-marked
+    // envelope string the runtime path produces — NOT a raw descriptor
+    // object. See ultrareview merged_bug_003.
     const turn = result.turns[0];
     const block = (turn.content as Array<Record<string, unknown>>)[0];
-    expect((block.content as { _neo_blob_ref?: boolean })._neo_blob_ref).toBe(true);
+    expect(typeof block.content).toBe("string");
+    const envelope = JSON.parse(block.content as string);
+    expect(envelope._neo_trust_boundary).toMatchObject({ source: "tool_offload" });
+    expect(envelope.data._neo_blob_ref).toBe(true);
+    expect(envelope.data.sha256).toBe("deadbeef");
   });
 
   it("leaves small tool results inline", async () => {
@@ -362,6 +368,50 @@ describe("splitV1ToV2WithOffload", () => {
     const result = await splitV1ToV2WithOffload(conv, { offloadToolResult });
     expect(offloadToolResult).not.toHaveBeenCalled();
     expect(result.blobRefs).toEqual([]);
+  });
+
+  it("skips tool_result blocks already carrying a trust-marked envelope string (idempotent re-migrate of a previously-migrated doc)", async () => {
+    // Reviewer merged_bug_003 follow-up: once splitV1ToV2WithOffload
+    // emits envelope strings, a re-migration of an already-migrated
+    // v1 doc (theoretically reverse-migrated then re-migrated) must
+    // not re-offload. The idempotency check unwraps envelopes.
+    const envelope = JSON.stringify({
+      _neo_trust_boundary: { source: "tool_offload", tool: "t", injection_detected: false },
+      data: {
+        _neo_blob_ref: true,
+        sha256: "already",
+        sizeBytes: 9999,
+        mediaType: "application/json",
+        rawPrefix: "",
+        uri: "https://blob/blobs/already",
+        sourceTool: "t",
+        conversationId: "conv_77777777-7777-4777-8777-777777777777",
+      },
+    });
+    const conv: Conversation = {
+      id: "conv_77777777-7777-4777-8777-777777777777",
+      ownerId: "user_1",
+      title: null,
+      createdAt: "2026-04-20T00:00:00.000Z",
+      updatedAt: "2026-04-20T00:00:00.000Z",
+      messageCount: 1,
+      role: "reader",
+      channel: "web",
+      pendingConfirmation: null,
+      messages: [
+        {
+          role: "user",
+          content: [
+            { type: "tool_result", tool_use_id: "tu_env", content: envelope },
+          ] as unknown as Conversation["messages"][number]["content"],
+        },
+      ],
+    };
+    const offloadToolResult = vi.fn();
+    const result = await splitV1ToV2WithOffload(conv, { offloadToolResult });
+    expect(offloadToolResult).not.toHaveBeenCalled();
+    expect(result.blobRefs).toEqual([]);
+    expect(result.shasToPromote).toEqual([]);
   });
 });
 
@@ -556,6 +606,57 @@ describe("rebuildV2ToV1WithInlining", () => {
     expect(block.content).toEqual({ resolved: true });
   });
 
+  it("resolves trust-marked envelope STRINGS (runtime persistence shape) — not just raw descriptor objects", async () => {
+    // Reviewer merged_bug_003: the real runtime persists
+    // `JSON.stringify({ _neo_trust_boundary, data: descriptor })`.
+    // Previous rebuildV2ToV1WithInlining only caught the raw-object
+    // shape and walked straight past envelope strings, producing
+    // content-lossy rebuilds.
+    const envelope = JSON.stringify({
+      _neo_trust_boundary: { source: "tool_offload", tool: "t", injection_detected: false },
+      data: {
+        _neo_blob_ref: true,
+        sha256: "envsha",
+        sizeBytes: 5000,
+        mediaType: "application/json",
+        rawPrefix: "",
+        uri: "https://blob/blobs/envsha",
+        sourceTool: "t",
+        conversationId: root.id,
+      },
+    });
+    const turn: TurnDoc = {
+      id: "turn_conv_1",
+      docType: "turn",
+      conversationId: root.id,
+      turnNumber: 1,
+      role: "user",
+      parentTurnId: null,
+      inputTokens: 0,
+      outputTokens: 0,
+      createdAt: root.createdAt,
+      content: [
+        {
+          type: "tool_result",
+          tool_use_id: "tu_env",
+          content: envelope,
+        },
+      ],
+    };
+
+    const resolveBlob = vi.fn(async () => JSON.stringify({ hydrated: true }));
+    const result = await rebuildV2ToV1WithInlining(
+      root.id,
+      root,
+      [turn],
+      { resolveBlob },
+    );
+    expect(resolveBlob).toHaveBeenCalledTimes(1);
+    if ("rejected" in result) throw new Error("unexpected rejection");
+    const block = (result.messages[0].content as unknown as Array<Record<string, unknown>>)[0];
+    expect(block.content).toEqual({ hydrated: true });
+  });
+
   it("rejects when rebuilt doc exceeds the 2 MB v1 ceiling", async () => {
     // Forge a turn whose content alone is ~2.5 MB of inline text.
     const huge = "z".repeat(V1_MAX_DOC_BYTES + 1);
@@ -734,6 +835,92 @@ describe("runMigration", () => {
     expect(observed).toBe("conv_earlier");
     expect(cps).toHaveLength(1);
     expect(cps[0].id).toBe(convs[0].id);
+  });
+
+  it("clears the checkpoint on successful completion (so a follow-up run doesn't skip v1-only stragglers with lex-low UUIDs)", async () => {
+    // Reviewer bug_004: UUID v4 ordering is random, so resume-from-
+    // checkpoint can permanently skip conversations created during a
+    // migration gap whose IDs sort below the watermark. Auto-clearing
+    // the checkpoint on success ensures the next run starts from
+    // scratch and picks those stragglers up.
+    const v1 = makeFakeContainer();
+    const v2 = makeFakeContainer();
+    const conv: Conversation = {
+      id: "conv_aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      ownerId: "u1",
+      title: null,
+      createdAt: "2026-04-20T00:00:00.000Z",
+      updatedAt: "2026-04-20T00:00:00.000Z",
+      messageCount: 1,
+      role: "reader",
+      channel: "web",
+      pendingConfirmation: null,
+      messages: [{ role: "user", content: "hi" }],
+    };
+    await v1.items.create({ ...(conv as unknown as FakeDoc) });
+    async function* gen() {
+      yield conv;
+    }
+    const cps: Array<{ id: string | null }> = [];
+    await runMigration(
+      { dryRun: false, direction: "v1-to-v2" },
+      {
+        v1Container: v1 as never,
+        v2Container: v2 as never,
+        listConversations: () => gen(),
+      },
+      {
+        read: async () => null,
+        write: async (cp) => {
+          cps.push({ id: cp.lastProcessedConversationId });
+        },
+      },
+    );
+    // Two writes: per-conversation watermark, then a final null-clear.
+    expect(cps.length).toBeGreaterThanOrEqual(2);
+    expect(cps[cps.length - 1].id).toBeNull();
+  });
+
+  it("does NOT clear the checkpoint when there are failures (so operators can target a retry)", async () => {
+    const v1 = makeFakeContainer();
+    const v2 = makeFakeContainer();
+    const conv: Conversation = {
+      id: "conv_cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+      ownerId: "u1",
+      title: null,
+      createdAt: "2026-04-20T00:00:00.000Z",
+      updatedAt: "2026-04-20T00:00:00.000Z",
+      messageCount: 1,
+      role: "reader",
+      channel: "web",
+      pendingConfirmation: null,
+      messages: [{ role: "user", content: "hi" }],
+    };
+    // Force v2 batch to always fail → conversation is recorded as failed.
+    v2.items.batch = vi.fn(async () => {
+      throw new Error("synthetic failure");
+    }) as typeof v2.items.batch;
+    await v1.items.create({ ...(conv as unknown as FakeDoc) });
+    async function* gen() {
+      yield conv;
+    }
+    const cps: Array<{ id: string | null }> = [];
+    await runMigration(
+      { dryRun: false, direction: "v1-to-v2" },
+      {
+        v1Container: v1 as never,
+        v2Container: v2 as never,
+        listConversations: () => gen(),
+      },
+      {
+        read: async () => null,
+        write: async (cp) => {
+          cps.push({ id: cp.lastProcessedConversationId });
+        },
+      },
+    );
+    // Only the per-conversation watermark write; no null-clear on failure.
+    expect(cps.map((c) => c.id).some((id) => id === null)).toBe(false);
   });
 
   it("reverse direction rejects oversized conversations with exit code 3 signal", async () => {

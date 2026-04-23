@@ -114,11 +114,11 @@ export async function splitV1ToV2WithOffload(
       if (!block || block.type !== "tool_result") continue;
 
       const inner = block.content;
-      // Inner may already be a BlobRefDescriptor (migrating a
-      // previously-offloaded v1 doc). Skip those — the descriptor
-      // already points at a stable blob and the v1 doc's inline
-      // payload is the full JSON anyway.
-      if (typeof inner === "object" && isBlobRefDescriptor(inner)) {
+      // Inner may already point at an offloaded blob (either a raw
+      // descriptor object from legacy migration, or an envelope string
+      // from the runtime path). Skip re-offload in either case —
+      // the descriptor already references a stable blob.
+      if (extractBlobRefDescriptor(inner)) {
         continue;
       }
 
@@ -142,8 +142,26 @@ export async function splitV1ToV2WithOffload(
         continue;
       }
 
-      // Replace the tool_result's inner content with the descriptor.
-      blocks[i] = { ...block, content: offloaded };
+      // Replace the tool_result's inner content with the SAME
+      // trust-marked envelope string the agent loop writes via
+      // wrapAndMaybeOffloadToolResult. If we stored a raw descriptor
+      // object here, the runtime's maybeResolveBlobRefContent would
+      // short-circuit on `typeof content !== "string"` after cutover
+      // and the model would see the descriptor JSON instead of the
+      // real payload. See ultrareview merged_bug_003.
+      const envelope = JSON.stringify(
+        {
+          _neo_trust_boundary: {
+            source: "tool_offload",
+            tool: sourceTool,
+            injection_detected: false,
+          },
+          data: offloaded,
+        },
+        null,
+        2,
+      );
+      blocks[i] = { ...block, content: envelope };
       shasToPromote.push(offloaded.sha256);
       synthesizedBlobRefs.push({
         id: `blobref_${offloaded.sha256}`,
@@ -266,6 +284,42 @@ export async function migrateOneConversationV1ToV2(
   return "migrated";
 }
 
+/**
+ * Unwrap a tool_result's `content` into a BlobRefDescriptor if one is
+ * present, returning null otherwise. Accepts three persistence shapes
+ * so migration stays robust to historical doc variants:
+ *
+ *   1. Plain object that IS a BlobRefDescriptor (legacy migration).
+ *   2. Stringified `{ _neo_trust_boundary: {...}, data: <descriptor> }`
+ *      envelope (runtime path via wrapAndMaybeOffloadToolResult).
+ *   3. Anything else → null.
+ *
+ * Mirrors the detection in `executors.ts#maybeResolveBlobRefContent`
+ * so reverse migration resolves the same content the live agent loop
+ * would. See ultrareview merged_bug_003.
+ */
+function extractBlobRefDescriptor(content: unknown): BlobRefDescriptor | null {
+  if (content && typeof content === "object" && isBlobRefDescriptor(content)) {
+    return content;
+  }
+  if (typeof content !== "string") return null;
+  if (!content.includes("_neo_trust_boundary")) return null;
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(content);
+  } catch {
+    return null;
+  }
+  if (!parsed || typeof parsed !== "object") return null;
+  const outer = parsed as Record<string, unknown>;
+  if (outer._neo_trust_boundary === undefined || outer.data === undefined) {
+    return null;
+  }
+  const inner = outer.data;
+  return isBlobRefDescriptor(inner) ? inner : null;
+}
+
 // ── v2 → v1 (reverse) ────────────────────────────────────────
 
 /**
@@ -283,23 +337,30 @@ export async function rebuildV2ToV1WithInlining(
   const resolve = io.resolveBlob ?? resolveBlobRef;
   const rebuilt = rebuildConversationFromDocs({ root, turns });
 
-  // Resolve each blob-ref descriptor back to inline content.
+  // Resolve each blob-ref descriptor back to inline content. v2 persists
+  // offloaded tool results in one of two shapes:
+  //   A. `{ _neo_trust_boundary: {...}, data: <BlobRefDescriptor> }`
+  //      stringified (runtime path via wrapAndMaybeOffloadToolResult).
+  //   B. raw BlobRefDescriptor object (legacy migration path before
+  //      merged_bug_003 fix; safe to keep supporting).
+  // Unwrap envelope strings first, then run the shared descriptor check.
   for (const msg of rebuilt.messages) {
     if (!Array.isArray(msg.content)) continue;
     const blocks = msg.content as unknown as Array<Record<string, unknown>>;
     for (let i = 0; i < blocks.length; i++) {
       const block = blocks[i];
       if (!block || block.type !== "tool_result") continue;
-      const inner = block.content;
-      if (isBlobRefDescriptor(inner)) {
-        const fullJson = await resolve(inner);
-        // The resolved JSON is the wrapped tool_result string; v1
-        // stores it as a parsed value when possible.
-        try {
-          blocks[i] = { ...block, content: JSON.parse(fullJson) };
-        } catch {
-          blocks[i] = { ...block, content: fullJson };
-        }
+
+      const descriptor = extractBlobRefDescriptor(block.content);
+      if (!descriptor) continue;
+
+      const fullJson = await resolve(descriptor);
+      // The resolved JSON is the wrapped tool_result string; v1
+      // stores it as a parsed value when possible.
+      try {
+        blocks[i] = { ...block, content: JSON.parse(fullJson) };
+      } catch {
+        blocks[i] = { ...block, content: fullJson };
       }
     }
   }
@@ -417,11 +478,27 @@ export async function runMigration(
     failures: [],
   };
 
+  // Resume-from-checkpoint support. WARNING: the source iterator
+  // filters by `c.id > afterId` (lexicographic) for pagination
+  // stability, but conversation IDs are random UUIDs so this ordering
+  // has no relationship to creation time. A resumed run can therefore
+  // skip conversations with IDs lexicographically *below* the
+  // checkpoint watermark that were created during the gap between
+  // runs. Operators should follow any resumed run with a full rescan
+  // (delete scripts/.migration-checkpoint.json and re-run from
+  // scratch) to catch those stragglers. See ultrareview bug_004.
   let afterId: string | null = null;
   if (checkpointIO) {
     const cp = await checkpointIO.read();
     if (cp && cp.direction === opts.direction) {
       afterId = cp.lastProcessedConversationId;
+      if (afterId) {
+        logger.warn(
+          "migrate: resuming from checkpoint — follow with a full rescan to catch UUIDs that sort below the watermark",
+          "migrate",
+          { afterId, direction: opts.direction },
+        );
+      }
     }
   }
 
@@ -481,6 +558,19 @@ export async function runMigration(
         await sleep(250);
       }
     }
+  }
+
+  // Successful end-of-run: clear the checkpoint so the next invocation
+  // starts fresh. Without this, a follow-up run would resume from the
+  // last-processed id and skip any v1-only stragglers whose UUIDs
+  // sort below the watermark (bug_004). Failures leave the checkpoint
+  // in place for targeted retry.
+  if (checkpointIO && summary.failed === 0 && !opts.dryRun) {
+    await checkpointIO.write({
+      lastProcessedConversationId: null,
+      direction: opts.direction,
+      updatedAt: (io.now ?? nowIso)(),
+    });
   }
 
   return summary;

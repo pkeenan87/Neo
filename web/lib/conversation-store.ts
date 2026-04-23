@@ -64,6 +64,40 @@ function useMock(): boolean {
  * Anything not in this allowlist is treated as an infra fault and
  * swallowed with a divergence log.
  */
+/**
+ * Dual-read write helper: runs the v2 write; if v2 reports the root
+ * is missing (v1-only conversation during a rolling migration),
+ * logs a fallback event and delegates to the v1 writer. Matches the
+ * read-side fallback in getConversation so dual-read is safe for
+ * v1-only conversations that pre-date the migration or were created
+ * during a dual-write v2 outage. See ultrareview merged_bug_001.
+ */
+async function dualReadWriteWithV1Fallback<T>(
+  conversationId: string,
+  operation: DualWriteDivergencePayload["operation"],
+  ownerId: string | undefined,
+  v2Write: () => Promise<T>,
+  v1Write: () => Promise<T>,
+): Promise<T> {
+  try {
+    return await v2Write();
+  } catch (err) {
+    if (err instanceof v2.ConversationNotFoundV2Error) {
+      logger.info(
+        "dual-read write fell back to v1 (v2 root missing)",
+        "conversation-store",
+        {
+          conversationId,
+          operation,
+          ownerIdHash: ownerId !== undefined ? hashPii(ownerId) : undefined,
+        },
+      );
+      return v1Write();
+    }
+    throw err;
+  }
+}
+
 async function dualWriteV2BestEffort(
   opName: DualWriteDivergencePayload["operation"],
   conversationId: string,
@@ -318,9 +352,20 @@ export async function appendMessages(
   if (useMock()) return mockStore.appendMessages(id, ownerId, newMessages, title);
 
   const mode = getActiveStoreMode();
-  if (mode === "v2" || mode === "dual-read") {
-    // dual-read writes to v2 only (v1 is read-only fallback in that mode).
+  if (mode === "v2") {
     return v2.appendMessagesV2(id, ownerId, newMessages, title);
+  }
+  if (mode === "dual-read") {
+    // dual-read writes to v2, falling back to v1 on v2-root-missing
+    // so v1-only conversations (divergence during dual-write, pre-
+    // migration sessions) don't 500 during the rolling migration.
+    return dualReadWriteWithV1Fallback(
+      id,
+      "appendMessages",
+      ownerId,
+      () => v2.appendMessagesV2(id, ownerId, newMessages, title),
+      () => appendMessagesV1Internal(id, ownerId, newMessages, title),
+    );
   }
   if (mode === "dual-write") {
     await appendMessagesV1Internal(id, ownerId, newMessages, title);
@@ -361,8 +406,17 @@ export async function updateTitle(
   if (useMock()) return mockStore.updateConversationTitle(id, ownerId, title);
 
   const mode = getActiveStoreMode();
-  if (mode === "v2" || mode === "dual-read") {
+  if (mode === "v2") {
     return v2.updateTitleV2(id, ownerId, title);
+  }
+  if (mode === "dual-read") {
+    return dualReadWriteWithV1Fallback(
+      id,
+      "updateTitle",
+      ownerId,
+      () => v2.updateTitleV2(id, ownerId, title),
+      () => updateTitleV1Internal(id, ownerId, title),
+    );
   }
   if (mode === "dual-write") {
     await updateTitleV1Internal(id, ownerId, title);
@@ -398,8 +452,17 @@ export async function deleteConversation(
   if (useMock()) return mockStore.deleteConversation(id, ownerId);
 
   const mode = getActiveStoreMode();
-  if (mode === "v2" || mode === "dual-read") {
+  if (mode === "v2") {
     return v2.deleteConversationV2(id, ownerId);
+  }
+  if (mode === "dual-read") {
+    return dualReadWriteWithV1Fallback(
+      id,
+      "deleteConversation",
+      ownerId,
+      () => v2.deleteConversationV2(id, ownerId),
+      () => deleteConversationV1Internal(id, ownerId),
+    );
   }
   if (mode === "dual-write") {
     await deleteConversationV1Internal(id, ownerId);
@@ -431,8 +494,17 @@ export async function setConversationPendingConfirmation(
   if (useMock()) return mockStore.setConversationPendingConfirmation(id, ownerId, tool);
 
   const mode = getActiveStoreMode();
-  if (mode === "v2" || mode === "dual-read") {
+  if (mode === "v2") {
     return v2.setConversationPendingConfirmationV2(id, ownerId, tool);
+  }
+  if (mode === "dual-read") {
+    return dualReadWriteWithV1Fallback(
+      id,
+      "setPendingConfirmation",
+      ownerId,
+      () => v2.setConversationPendingConfirmationV2(id, ownerId, tool),
+      () => setConversationPendingConfirmationV1Internal(id, ownerId, tool),
+    );
   }
   if (mode === "dual-write") {
     await setConversationPendingConfirmationV1Internal(id, ownerId, tool);
@@ -465,8 +537,17 @@ export async function clearConversationPendingConfirmation(
   if (useMock()) return mockStore.clearConversationPendingConfirmation(id, ownerId);
 
   const mode = getActiveStoreMode();
-  if (mode === "v2" || mode === "dual-read") {
+  if (mode === "v2") {
     return v2.clearConversationPendingConfirmationV2(id, ownerId);
+  }
+  if (mode === "dual-read") {
+    return dualReadWriteWithV1Fallback(
+      id,
+      "clearPendingConfirmation",
+      ownerId,
+      () => v2.clearConversationPendingConfirmationV2(id, ownerId),
+      () => clearConversationPendingConfirmationV1Internal(id, ownerId),
+    );
   }
   if (mode === "dual-write") {
     const result = await clearConversationPendingConfirmationV1Internal(id, ownerId);
@@ -509,8 +590,17 @@ export async function appendCsvAttachment(
   if (useMock()) return mockStore.appendCsvAttachment(id, ownerId, attachment);
 
   const mode = getActiveStoreMode();
-  if (mode === "v2" || mode === "dual-read") {
+  if (mode === "v2") {
     return v2.appendCsvAttachmentV2(id, ownerId, attachment);
+  }
+  if (mode === "dual-read") {
+    return dualReadWriteWithV1Fallback(
+      id,
+      "appendCsvAttachment",
+      ownerId,
+      () => v2.appendCsvAttachmentV2(id, ownerId, attachment),
+      () => appendCsvAttachmentV1Internal(id, ownerId, attachment),
+    );
   }
   if (mode === "dual-write") {
     await appendCsvAttachmentV1Internal(id, ownerId, attachment);

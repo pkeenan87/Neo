@@ -59,8 +59,16 @@ vi.mock("../lib/mock-conversation-store", () => ({
 // Stub the v2 module — we assert which v2 functions got called under
 // each mode. Using vi.hoisted so we can reference these spies inside
 // the module factory (avoids the "access before initialization" trap).
-const { v2Spies } = vi.hoisted(() => {
+const { v2Spies, FakeConversationNotFoundV2Error } = vi.hoisted(() => {
   const make = () => vi.fn(async () => undefined);
+  class FakeConversationNotFoundV2Error extends Error {
+    readonly conversationId: string;
+    constructor(conversationId: string) {
+      super(`Conversation ${conversationId} not found (v2)`);
+      this.name = "ConversationNotFoundV2Error";
+      this.conversationId = conversationId;
+    }
+  }
   return {
     v2Spies: {
       createConversationV2: vi.fn(async () => "conv_v2minted"),
@@ -74,9 +82,13 @@ const { v2Spies } = vi.hoisted(() => {
       clearConversationPendingConfirmationV2: vi.fn(async () => null),
       appendCsvAttachmentV2: make(),
     },
+    FakeConversationNotFoundV2Error,
   };
 });
-vi.mock("../lib/conversation-store-v2", () => v2Spies);
+vi.mock("../lib/conversation-store-v2", () => ({
+  ...v2Spies,
+  ConversationNotFoundV2Error: FakeConversationNotFoundV2Error,
+}));
 
 // Stub the Azure SDKs so no real Cosmos client is instantiated.
 // We provide just enough surface that the v1 inline code can read /
@@ -268,12 +280,45 @@ describe("conversation-store dispatch", () => {
       expect(v2Spies.getConversationV2).toHaveBeenCalled();
     });
 
-    it("writes go to v2 only (v1 untouched)", async () => {
+    it("writes go to v2 first; v1 untouched on v2 success", async () => {
       await inMode("dual-read", () =>
         appendMessages("conv_x", "owner_1", [{ role: "user", content: "hi" }]),
       );
       expect(v2Spies.appendMessagesV2).toHaveBeenCalledTimes(1);
       expect(v1Store.size).toBe(0);
+    });
+
+    it("writes fall back to v1 when v2 reports root missing (v1-only conversation during rolling migration)", async () => {
+      // Seed v1 with the conversation (matches the real
+      // divergence-during-dual-write scenario — v1 has the doc, v2
+      // doesn't). Then under dual-read, v2 throws not-found and we
+      // must land the write on v1 rather than surfacing a 500 to the
+      // user. See ultrareview merged_bug_001.
+      const id = await inMode("v1", () =>
+        createConversation("owner_1", "reader", "web"),
+      );
+      v2Spies.appendMessagesV2.mockRejectedValueOnce(
+        new FakeConversationNotFoundV2Error(id),
+      );
+      await expect(
+        inMode("dual-read", () =>
+          appendMessages(id, "owner_1", [{ role: "user", content: "hi" }]),
+        ),
+      ).resolves.not.toThrow();
+      expect(v2Spies.appendMessagesV2).toHaveBeenCalledTimes(1);
+      // The v1 partition should have the updated doc.
+      const v1Partition = v1Store.get("owner_1");
+      const v1Doc = v1Partition?.get(id) as { messages: unknown[] } | undefined;
+      expect(v1Doc?.messages).toHaveLength(1);
+    });
+
+    it("writes re-throw non-NotFound errors from v2 (don't fall back on infra faults)", async () => {
+      v2Spies.updateTitleV2.mockRejectedValueOnce(
+        Object.assign(new Error("cosmos 503"), { code: 503 }),
+      );
+      await expect(
+        inMode("dual-read", () => updateTitle("conv_x", "owner_1", "New")),
+      ).rejects.toThrow(/cosmos 503/);
     });
   });
 

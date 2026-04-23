@@ -666,6 +666,29 @@ describe("v2 CRUD", () => {
     ).rejects.toThrow(/multi-chunk append/);
     spy.mockRestore();
   });
+
+  it("appendMessagesV2 retries once on 409 turn-id conflict (concurrent same-session appender race)", async () => {
+    // Reviewer bug_015: two concurrent appenders compute the same
+    // deterministic turn id `turn_<conv>_<N+1>`. The batch is
+    // Create-first / Patch-last, so Cosmos surfaces the Create
+    // collision as a 409 *before* the Patch ifMatch fires. The retry
+    // path must handle 409 identically to 412.
+    const id = await createConversationV2("owner_1", "reader", "web");
+    let callCount = 0;
+    const origBatch = fake.container.items.batch.bind(fake.container.items);
+    const spy = vi
+      .spyOn(fake.container.items, "batch")
+      .mockImplementation(async (...args) => {
+        if (callCount++ === 0) return { code: 409 };
+        return origBatch(...args);
+      });
+    await expect(
+      appendMessagesV2(id, "owner_1", [{ role: "user", content: "q" }]),
+    ).resolves.not.toThrow();
+    expect(callCount).toBe(2);
+    expect(fake.store.get(id)!.get(id)!.turnCount).toBe(1);
+    spy.mockRestore();
+  });
 });
 
 describe("CosmosV2SessionStore.saveMessages — delta append semantics", () => {
@@ -709,5 +732,48 @@ describe("CosmosV2SessionStore.saveMessages — delta append semantics", () => {
     const after = fake.store.get(id)!.get(id)!;
     expect(after.turnCount).toBe(1);
     expect(after.updatedAt).not.toBe(beforeUpdatedAt);
+  });
+
+  it("throws a 409 conflict when the persisted turnCount is ahead of the caller's messages (concurrent-write detection)", async () => {
+    // Reviewer bug_010: prior behavior was slice(currentTurnCount) →
+    // [] for any case where persisted > caller, and the zero-delta
+    // branch silently dropped the caller's new turn. Double-clicked
+    // Send / two-tab / cross-pod races now surface as a retryable
+    // 409 instead of a silent data loss.
+    const id = await createConversationV2("owner_1", "reader", "web");
+    // Pod A wrote m1 + m2; persisted turnCount is now 2.
+    await appendMessagesV2(id, "owner_1", [
+      { role: "user", content: "q1" },
+      { role: "assistant", content: "a1" },
+    ]);
+    // Pod B loaded the session WHEN turnCount was still 1, produced
+    // its own m2_B, and calls saveMessages with cumulative [q1, m2_B].
+    // Detection: caller.length (2) is NOT greater than persisted (2),
+    // but the caller's turn 2 was intended to be "m2_B" not "a1" —
+    // the delta check (currentTurnCount > messages.length) correctly
+    // fires only when someone wrote MORE than the caller has. Here
+    // we force that by seeding a 3rd turn before Pod B's save.
+    await appendMessagesV2(id, "owner_1", [{ role: "user", content: "q2" }]);
+    expect(fake.store.get(id)!.get(id)!.turnCount).toBe(3);
+
+    // Pod B only has 2 in hand. Silent drop would be a bug; the store
+    // must surface a conflict.
+    await expect(
+      store.saveMessages(id, [
+        { role: "user", content: "q1" },
+        { role: "assistant", content: "m2_B" },
+      ]),
+    ).rejects.toMatchObject({ code: 409 });
+  });
+
+  it("throws ConversationNotFoundV2Error on missing root (distinct from zero-delta no-op)", async () => {
+    // Reviewer merged_bug_001: prior behavior was silent return when
+    // the root didn't exist — the session-factory dispatcher depends
+    // on this error now to fall back to v1 under dual-read.
+    await expect(
+      store.saveMessages("conv_nonexistent-1111-4111-8111-111111111111", [
+        { role: "user", content: "q1" },
+      ]),
+    ).rejects.toThrow(/not found \(v2\)/);
   });
 });
