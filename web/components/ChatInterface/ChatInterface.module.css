@@ -380,6 +380,11 @@
   z-index: 10;
 }
 
+/* Scrollbar theming (color, width, dark-mode, forced-colors) lives in
+   the global `.custom-scrollbar` utility — ChatInterface.tsx applies
+   that class alongside `messagesArea` so both engines are styled from
+   a single source of truth. See web/app/globals.css. */
+
 .messagesInner {
   max-width: 56rem;
   margin-left: auto;
