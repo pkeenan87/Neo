@@ -17,8 +17,9 @@ import type {
   SessionMeta,
   Channel,
   CSVReference,
+  InProgressPlan,
 } from "./types";
-import { CSV_MAX_REFERENCE_ATTACHMENTS, CsvAttachmentCapError } from "./types";
+import { CSV_MAX_REFERENCE_ATTACHMENTS, CsvAttachmentCapError, isInProgressPlan } from "./types";
 import type { SessionStore } from "./session-store";
 import {
   splitConversationToDocs,
@@ -348,6 +349,30 @@ export class MockConversationStore implements SessionStore {
     return pending;
   }
 
+  async setConversationInProgressPlan(
+    id: string,
+    ownerId: string,
+    plan: InProgressPlan | null,
+  ): Promise<void> {
+    this.load();
+    const conv = this.conversations.get(id);
+    if (!conv || conv.ownerId !== ownerId) return;
+    conv.inProgressPlan = plan;
+    conv.updatedAt = new Date().toISOString();
+    this.save();
+  }
+
+  async getConversationInProgressPlan(
+    id: string,
+    ownerId: string,
+  ): Promise<InProgressPlan | null> {
+    this.load();
+    const conv = this.conversations.get(id);
+    if (!conv || conv.ownerId !== ownerId) return null;
+    const raw = conv.inProgressPlan ?? null;
+    return raw && isInProgressPlan(raw) ? raw : null;
+  }
+
   async appendCsvAttachment(
     id: string,
     ownerId: string,
@@ -488,6 +513,22 @@ export class MockConversationStore implements SessionStore {
     conv.title = title;
     conv.updatedAt = new Date().toISOString();
     this.save();
+  }
+
+  async setInProgressPlan(id: string, plan: InProgressPlan | null): Promise<void> {
+    this.load();
+    const conv = this.conversations.get(id);
+    if (!conv) return;
+    conv.inProgressPlan = plan;
+    conv.updatedAt = new Date().toISOString();
+    this.save();
+  }
+
+  async getInProgressPlan(id: string): Promise<InProgressPlan | null> {
+    this.load();
+    const conv = this.conversations.get(id);
+    const raw = conv?.inProgressPlan ?? null;
+    return raw && isInProgressPlan(raw) ? raw : null;
   }
 }
 

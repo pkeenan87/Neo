@@ -1364,6 +1364,38 @@ export const TOOLS: Tool[] = [
       required: ["tool_use_id"],
     },
   },
+  // Non-destructive. Call at the START of a multi-step batch operation
+  // (e.g. remediating N messages, isolating N machines) so Neo can
+  // persist the remaining steps. If your turn is truncated by the
+  // output-token budget mid-execution, the next user message will
+  // resume from the unexecuted steps without re-prompting.
+  {
+    name: "emit_plan",
+    description:
+      "Call this at the start of a multi-step batch operation to persist the full plan. " +
+      "If Neo runs out of output budget mid-execution, the remaining steps will be surfaced to the user and resumed on the next turn. " +
+      "Do NOT call for single-step responses. Each step should be a short imperative describing one tool call or decision.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        steps: {
+          type: "array",
+          description:
+            "Ordered list of steps (imperative short strings, 1–50 items). Each step should describe one concrete tool call or decision the plan will execute.",
+          items: { type: "string", minLength: 1, maxLength: 500 },
+          minItems: 1,
+          maxItems: 50,
+        },
+        estimatedToolCalls: {
+          type: "integer",
+          description: "Total number of tool calls the plan is expected to execute end-to-end. Used to track remaining work across truncation boundaries.",
+          minimum: 1,
+          maximum: 100,
+        },
+      },
+      required: ["steps", "estimatedToolCalls"],
+    },
+  },
 ];
 
 export const DESTRUCTIVE_TOOLS = new Set([

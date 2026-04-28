@@ -13,6 +13,7 @@ import { CsvAttachmentCapError } from "./types";
 import type {
   Channel,
   DualWriteDivergencePayload,
+  InProgressPlan,
   Message,
   PendingTool,
   Session,
@@ -306,6 +307,39 @@ export class DispatchingSessionStore implements SessionStore {
     // v1 and dual-write: module-level dispatch in the v1 adapter
     // handles the dual-write mirror.
     return this.v1.updateTitle(id, title);
+  }
+
+  async setInProgressPlan(id: string, plan: InProgressPlan | null): Promise<void> {
+    const mode = getActiveStoreMode();
+    if (mode === "v2") return this.v2.setInProgressPlan(id, plan);
+    if (mode === "dual-read") {
+      return v2WriteWithV1Fallback(
+        id,
+        "setInProgressPlan",
+        () => this.v2.setInProgressPlan(id, plan),
+        () => this.v1.setInProgressPlan(id, plan),
+      );
+    }
+    // v1 and dual-write: module-level dispatch handles the mirror.
+    return this.v1.setInProgressPlan(id, plan);
+  }
+
+  async getInProgressPlan(id: string): Promise<InProgressPlan | null> {
+    const mode = getActiveStoreMode();
+    if (mode === "v2") return this.v2.getInProgressPlan(id);
+    if (mode === "dual-read") {
+      // v2 first; fall back to v1 on root-missing (v1-only
+      // conversations during the rolling migration).
+      try {
+        return await this.v2.getInProgressPlan(id);
+      } catch (err) {
+        if (err instanceof ConversationNotFoundV2Error) {
+          return this.v1.getInProgressPlan(id);
+        }
+        throw err;
+      }
+    }
+    return this.v1.getInProgressPlan(id);
   }
 }
 

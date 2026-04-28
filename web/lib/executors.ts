@@ -1,4 +1,4 @@
-import { env } from "./config";
+import { env, REMEDIATE_MAX_EXPLICIT_MESSAGES } from "./config";
 import { getAzureToken, getMSGraphToken, generateSecurePassword } from "./auth";
 import { getToolSecret } from "./secrets";
 import { logger, hashPii } from "./logger";
@@ -64,7 +64,9 @@ import type {
   QueryCsvInput,
   CSVReference,
   Message,
+  InProgressPlan,
 } from "./types";
+import { BatchTooLargeError } from "./types";
 import type { IndicatorType } from "./types";
 import {
   detectSearchType,
@@ -2132,11 +2134,31 @@ async function remediate_abnormal_messages(input: RemediateAbnormalMessagesInput
   }
 
   // search_filters is Omit<SearchAbnormalMessagesInput,...> which satisfies Record<string,unknown>
-  validateRemediateInput({
-    messages: input.messages,
-    remediate_all: input.remediate_all,
-    search_filters: input.search_filters as Record<string, unknown> | undefined,
-  });
+  try {
+    validateRemediateInput(
+      {
+        messages: input.messages,
+        remediate_all: input.remediate_all,
+        search_filters: input.search_filters as Record<string, unknown> | undefined,
+      },
+      { maxExplicitMessages: REMEDIATE_MAX_EXPLICIT_MESSAGES },
+    );
+  } catch (err) {
+    // BatchTooLargeError is a contract-visible signal to the agent:
+    // surface it as a structured tool_result (isError: true carrier
+    // is applied at the wrapToolResult site in agent.ts). Returning
+    // an error object rather than throwing keeps the turn alive so
+    // the agent can chunk the batch and retry.
+    if (err instanceof BatchTooLargeError) {
+      return {
+        error: err.message,
+        code: "BATCH_TOO_LARGE",
+        actual: err.actual,
+        limit: err.limit,
+      };
+    }
+    throw err;
+  }
 
   const messageCount = input.remediate_all ? "remediate_all" : String(input.messages?.length ?? 0);
   logger.info(`Abnormal remediation: ${input.action} (${messageCount} messages, reason: ${input.remediation_reason})`, "abnormal", {
@@ -3387,6 +3409,128 @@ const executors: Record<string, (input: Record<string, unknown>) => Promise<unkn
 export interface ExecuteToolContext {
   sessionMessages?: Message[];
   csvAttachments?: CSVReference[];
+  /** Session / conversation id — required by emit_plan so it can
+   *  persist the plan on the correct conversation root. Optional
+   *  because other executors don't need it and the agent loop may
+   *  not always have it threaded (CLI-one-shot paths). */
+  sessionId?: string;
+  /** Turn number at which the plan is declared. Used to tag the
+   *  InProgressPlan for audit (which turn originated the plan).
+   *  Defaults to 0 when absent — the plan still resumes correctly. */
+  turnNumber?: number;
+}
+
+interface EmitPlanInput {
+  steps: string[];
+  estimatedToolCalls: number;
+}
+
+// Server-side bounds on emit_plan — must match the Anthropic JSON schema
+// in tools.ts, enforced here too so a malformed tool_use block can't
+// bypass the schema validation and persist a multi-MB planText.
+const EMIT_PLAN_MAX_STEPS = 50;
+const EMIT_PLAN_MAX_STEP_LENGTH = 500;
+
+async function emit_plan(
+  input: EmitPlanInput,
+  ctx: ExecuteToolContext | undefined,
+): Promise<unknown> {
+  const sessionId = ctx?.sessionId;
+  if (!sessionId) {
+    // Non-fatal: tell the agent the plan wasn't persisted. Better than
+    // throwing, which would orphan the tool_use block.
+    logger.warn("emit_plan called without sessionId in context — plan not persisted", "executors");
+    return { acknowledged: false, reason: "no_session_id_in_context" };
+  }
+  if (!Array.isArray(input.steps) || input.steps.length === 0) {
+    return { acknowledged: false, reason: "steps must be a non-empty array" };
+  }
+
+  // Sanitize: clamp array size, per-item length, and type. Mirrors the
+  // Anthropic JSON schema limits so this never trusts the schema alone.
+  // Strip-and-continue per review direction: steps that fail sanitation
+  // are dropped rather than aborting the whole plan.
+  let anyClamped = input.steps.length > EMIT_PLAN_MAX_STEPS;
+  const clamped = input.steps.slice(0, EMIT_PLAN_MAX_STEPS);
+  const sanitizedSteps = clamped
+    .map((s) => {
+      if (typeof s !== "string") return "";
+      if (s.length > EMIT_PLAN_MAX_STEP_LENGTH) {
+        anyClamped = true;
+        return s.slice(0, EMIT_PLAN_MAX_STEP_LENGTH);
+      }
+      return s;
+    })
+    .filter((s) => {
+      const kept = s.trim().length > 0;
+      if (!kept) anyClamped = true; // dropped entry counts as sanitised
+      return kept;
+    });
+
+  if (sanitizedSteps.length === 0) {
+    return { acknowledged: false, reason: "no valid steps after sanitization" };
+  }
+
+  const rawPlanText = sanitizedSteps.map((s, i) => `${i + 1}. ${s}`).join("\n");
+
+  // Injection-guard scan — the agent-supplied steps can echo content
+  // from tool results (Sentinel alerts, email bodies, KQL output) that
+  // carry indirect prompt injection. Without a scan on the way out,
+  // adversarial text would be promoted from user-trust (tool_result)
+  // to system-trust (resumption hint in system prompt) on the next
+  // turn. The scanner logs + flags; strip-and-continue mode removes
+  // the injection markers but keeps the plan so the agent can still
+  // resume. If the entire planText trips the guard, decline the plan
+  // rather than persist sanitised nonsense.
+  const { scanUserInput } = await import("./injection-guard");
+  const scanResult = scanUserInput(rawPlanText, {
+    sessionId,
+    userId: sessionId,
+    role: "agent_plan",
+  });
+  let planText = rawPlanText;
+  if (scanResult.flagged) {
+    logger.warn("Injection patterns in emit_plan steps — stripping and continuing", "executors", {
+      sessionId,
+      matchCount: scanResult.matchCount,
+      label: scanResult.label,
+    });
+    // Collapse any matched substring patterns (label + pattern regex
+    // family). For defense-in-depth we neutralise the most common
+    // directives by tagging them so the model reads them as quoted
+    // rather than instruction-like. Cheap heuristic — the real defence
+    // is the scanner flag + operator audit trail.
+    planText = rawPlanText
+      .replace(/ignore (?:all )?previous instructions?/gi, "[redacted]")
+      .replace(/you are now (?:in )?developer mode/gi, "[redacted]")
+      .replace(/system:?/gi, "[redacted]:");
+  }
+
+  // Lazy import to avoid a module cycle with session-factory → here.
+  const { sessionStore } = await import("./session-factory");
+  const plan: InProgressPlan = {
+    schemaVersion: 1,
+    createdAt: new Date().toISOString(),
+    planText,
+    toolCallsRemaining: Math.max(1, Math.min(100, Math.floor(input.estimatedToolCalls))),
+    originalTurnNumber: ctx?.turnNumber ?? 0,
+    resumptionCount: 0,
+  };
+  try {
+    await sessionStore.setInProgressPlan(sessionId, plan);
+  } catch (err) {
+    logger.warn("emit_plan: setInProgressPlan failed — continuing without persistence", "executors", {
+      sessionId,
+      errorMessage: (err as Error).message,
+    });
+    return { acknowledged: false, reason: "persistence_failed" };
+  }
+  return {
+    acknowledged: true,
+    stepCount: sanitizedSteps.length,
+    estimatedToolCalls: plan.toolCallsRemaining,
+    sanitized: anyClamped || scanResult.flagged,
+  };
 }
 
 export async function executeTool(
@@ -3408,6 +3552,10 @@ export async function executeTool(
       toolInput as unknown as QueryCsvInput,
       context?.csvAttachments ?? [],
     );
+  }
+
+  if (toolName === "emit_plan") {
+    return emit_plan(toolInput as unknown as EmitPlanInput, context);
   }
 
   const fn = executors[toolName];

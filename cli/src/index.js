@@ -424,6 +424,20 @@ async function handlePromptCommand() {
         onSkillInvocation: (skill) => {
           process.stderr.write(`[skill] ${skill.name}\n`);
         },
+        onContextTrimmed: (info) => {
+          process.stderr.write(
+            `[context compressed — ${info.originalTokens} → ${info.newTokens} tokens via ${info.method}]\n`,
+          );
+        },
+        onOutputTruncated: (info) => {
+          process.stderr.write(`[output truncated — ${info.message}]\n`);
+          if (info.remainingPlan?.planText) {
+            process.stderr.write(`Remaining plan (${info.remainingPlan.toolCallsRemaining} step(s)):\n`);
+            for (const line of info.remainingPlan.planText.split("\n")) {
+              process.stderr.write(`  ${line}\n`);
+            }
+          }
+        },
       };
 
   let result;
@@ -710,6 +724,26 @@ async function main() {
     onSkillInvocation: (skill) => {
       clearThinking();
       console.log(chalk.magenta(`\n[skill] ${skill.name}`));
+    },
+    onContextTrimmed: (info) => {
+      // Passive notice — Neo compressed earlier context. Rendered
+      // dimly so it doesn't compete with the assistant response.
+      clearThinking();
+      process.stderr.write(
+        chalk.gray(
+          `\n  [context compressed — ${info.originalTokens.toLocaleString()} → ${info.newTokens.toLocaleString()} tokens via ${info.method}]\n`,
+        ),
+      );
+    },
+    onOutputTruncated: (info) => {
+      clearThinking();
+      process.stderr.write(chalk.yellow(`\n  [output truncated — ${info.message}]\n`));
+      if (info.remainingPlan?.planText) {
+        process.stderr.write(chalk.gray(`  Remaining plan (${info.remainingPlan.toolCallsRemaining} step(s)):\n`));
+        for (const line of info.remainingPlan.planText.split("\n")) {
+          process.stderr.write(chalk.gray(`    ${line}\n`));
+        }
+      }
     },
   };
 

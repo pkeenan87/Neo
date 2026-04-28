@@ -13,8 +13,9 @@ import type {
   SessionMeta,
   Channel,
   CSVReference,
+  InProgressPlan,
 } from "./types";
-import { CSV_MAX_REFERENCE_ATTACHMENTS, CsvAttachmentCapError } from "./types";
+import { CSV_MAX_REFERENCE_ATTACHMENTS, CsvAttachmentCapError, isInProgressPlan } from "./types";
 import type { DualWriteDivergencePayload } from "./types";
 import type { SessionStore } from "./session-store";
 import { truncateToolResults } from "./context-manager";
@@ -575,6 +576,76 @@ async function clearConversationPendingConfirmationV1Internal(
 }
 
 /**
+ * Persist a multi-step plan on the conversation root so the next user
+ * turn can resume when the current turn was truncated mid-tool-use.
+ * Pass `null` to clear. See _plans/output-budget.md.
+ */
+export async function setConversationInProgressPlan(
+  id: string,
+  ownerId: string,
+  plan: InProgressPlan | null,
+): Promise<void> {
+  if (useMock()) return mockStore.setConversationInProgressPlan(id, ownerId, plan);
+
+  const mode = getActiveStoreMode();
+  if (mode === "v2") {
+    return v2.setConversationInProgressPlanV2(id, ownerId, plan);
+  }
+  if (mode === "dual-read") {
+    return dualReadWriteWithV1Fallback(
+      id,
+      "setInProgressPlan",
+      ownerId,
+      () => v2.setConversationInProgressPlanV2(id, ownerId, plan),
+      () => setConversationInProgressPlanV1Internal(id, ownerId, plan),
+    );
+  }
+  if (mode === "dual-write") {
+    await setConversationInProgressPlanV1Internal(id, ownerId, plan);
+    await dualWriteV2BestEffort("setInProgressPlan", id, ownerId, () =>
+      v2.setConversationInProgressPlanV2(id, ownerId, plan),
+    );
+    return;
+  }
+  return setConversationInProgressPlanV1Internal(id, ownerId, plan);
+}
+
+async function setConversationInProgressPlanV1Internal(
+  id: string,
+  ownerId: string,
+  plan: InProgressPlan | null,
+): Promise<void> {
+  const container = getContainer();
+  const conv = await getConversationV1Internal(id, ownerId);
+  if (!conv) return;
+
+  conv.inProgressPlan = plan;
+  conv.updatedAt = new Date().toISOString();
+  await container.item(id, ownerId).replace(conv);
+}
+
+export async function getConversationInProgressPlan(
+  id: string,
+  ownerId: string,
+): Promise<InProgressPlan | null> {
+  if (useMock()) return mockStore.getConversationInProgressPlan(id, ownerId);
+
+  const conv = await getConversation(id, ownerId);
+  const raw = conv?.inProgressPlan ?? null;
+  // Shape-validate the persisted field before handing it to the agent
+  // loop. A corrupted Cosmos doc (or an older schema) returning an
+  // unrecognised object shape must NOT reach the system-prompt
+  // resumption hint. See security review S1.
+  if (raw && !isInProgressPlan(raw)) {
+    logger.warn("Persisted inProgressPlan failed shape validation — ignoring", "conversation-store", {
+      conversationId: id,
+    });
+    return null;
+  }
+  return raw;
+}
+
+/**
  * Append a CSV reference attachment to a conversation. Enforces the per-
  * conversation cap and retries etag conflicts up to APPEND_CSV_MAX_ATTEMPTS
  * times so that 3+ concurrent uploads at the cap boundary resolve without
@@ -688,6 +759,7 @@ function conversationToSession(conv: Conversation): Session {
     lastActivityAt: new Date(conv.updatedAt),
     messageCount: conv.messageCount,
     pendingConfirmation: conv.pendingConfirmation,
+    inProgressPlan: conv.inProgressPlan ?? null,
   };
 }
 
@@ -851,6 +923,18 @@ export class CosmosSessionStore implements SessionStore {
     const ownerId = await this.resolveOwner(id);
     if (!ownerId) return;
     await updateTitle(id, ownerId, title);
+  }
+
+  async setInProgressPlan(id: string, plan: InProgressPlan | null): Promise<void> {
+    const ownerId = await this.resolveOwner(id);
+    if (!ownerId) return;
+    await setConversationInProgressPlan(id, ownerId, plan);
+  }
+
+  async getInProgressPlan(id: string): Promise<InProgressPlan | null> {
+    const ownerId = await this.resolveOwner(id);
+    if (!ownerId) return null;
+    return getConversationInProgressPlan(id, ownerId);
   }
 
   /**

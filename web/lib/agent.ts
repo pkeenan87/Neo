@@ -7,8 +7,8 @@ import { logger } from "./logger";
 import { getToolIntegration } from "./integration-registry";
 import { wrapAndMaybeOffloadToolResult } from "./injection-guard";
 import { prepareMessages, sanitizeEmptyUserMessages, CHARS_PER_TOKEN } from "./context-manager";
-import { IncompleteToolUseError } from "./types";
-import type { Message, AgentLoopResult, AgentCallbacks, PendingTool, ModelPreference, TokenUsage, CSVReference } from "./types";
+import { IncompleteToolUseError, MAX_PLAN_RESUMPTION_ATTEMPTS } from "./types";
+import type { Message, AgentLoopResult, AgentCallbacks, PendingTool, ModelPreference, TokenUsage, CSVReference, InProgressPlan } from "./types";
 
 // Cheap heuristic: detect whether a turn started from a skill invocation
 // so we can pick the larger MAX_TOKENS_SKILL budget. The skill handler in
@@ -238,6 +238,61 @@ export async function runAgentLoop(
       : tool
   );
 
+  // Load any in-progress plan for this conversation — present when the
+  // previous turn was truncated mid-tool-use. On the first iteration of
+  // this turn we append a plan-resumption addendum to the system prompt
+  // so the model resumes from the unexecuted steps instead of starting
+  // fresh. See _plans/output-budget.md.
+  let inProgressPlan: InProgressPlan | null = null;
+  try {
+    const { sessionStore } = await import("./session-factory");
+    inProgressPlan = await sessionStore.getInProgressPlan(sessionId);
+  } catch (err) {
+    // Non-fatal — continue without the plan. Resumption is a soft
+    // feature; the user can always re-type what they want.
+    logger.warn("getInProgressPlan failed — continuing without resumption hint", "agent", {
+      sessionId,
+      errorMessage: (err as Error).message,
+    });
+  }
+
+  // Circuit breaker: if the plan has been resumed too many times
+  // without reaching end_turn, halt. Prevents an infinite loop where
+  // the agent keeps exhausting its output budget on the same step
+  // (e.g. a malformed giant tool input that gets retried on every
+  // turn). Clear the plan AND surface a visible error so the user
+  // knows to narrow the request.
+  if (inProgressPlan && (inProgressPlan.resumptionCount ?? 0) >= MAX_PLAN_RESUMPTION_ATTEMPTS) {
+    logger.warn("Plan resumption circuit breaker tripped — halting auto-resume", "agent", {
+      sessionId,
+      resumptionCount: inProgressPlan.resumptionCount,
+      limit: MAX_PLAN_RESUMPTION_ATTEMPTS,
+    });
+    try {
+      const { sessionStore } = await import("./session-factory");
+      await sessionStore.setInProgressPlan(sessionId, null);
+    } catch {
+      // best effort — the user will see the error regardless
+    }
+    return {
+      type: "response",
+      // planText is wrapped in a fenced code block — this prevents any
+      // adversarial Markdown that may have landed in the persisted plan
+      // (headers, links, blockquotes) from rendering as formatting in
+      // the client. See security review S8.
+      text:
+        `I hit my per-turn output budget ${MAX_PLAN_RESUMPTION_ATTEMPTS} times in a row ` +
+        `trying to complete this workflow, so I've stopped auto-resuming to avoid looping. ` +
+        `The plan so far:\n\n\`\`\`\n${inProgressPlan.planText}\n\`\`\`\n\n` +
+        `Please narrow the request (e.g. ask me to do a smaller slice: "just steps 1-3" or ` +
+        `"only the alice@corp.com messages"), and I'll start fresh.`,
+      messages: localMessages,
+      truncated: true,
+    };
+  }
+
+  let iterationCount = 0;
+
   try {
   while (true) {
     // Check abort signal between iterations
@@ -246,7 +301,7 @@ export async function runAgentLoop(
     if (callbacks.onThinking) callbacks.onThinking();
 
     // Prepare messages: truncate oversized tool results, compress if near limit
-    const prepared = await prepareMessages(localMessages, lastInputTokens, systemPromptTokenEstimate);
+    const prepared = await prepareMessages(localMessages, lastInputTokens, systemPromptTokenEstimate, { conversationId: sessionId });
 
     if (prepared.trimmed && callbacks.onContextTrimmed) {
       callbacks.onContextTrimmed(prepared.originalTokens, prepared.newTokens, prepared.method!);
@@ -258,6 +313,25 @@ export async function runAgentLoop(
       cache_control: { type: "ephemeral" },
     };
 
+    // Plan-resumption addendum — only on the first iteration so the
+    // model doesn't see the hint repeatedly in the same turn. Separate
+    // block with its own ephemeral cache so it doesn't invalidate the
+    // main system-prompt cache on clean (no-plan) turns.
+    const systemBlocks: CacheableTextBlock[] = [systemBlock];
+    if (iterationCount === 0 && inProgressPlan) {
+      systemBlocks.push({
+        type: "text",
+        text:
+          "\n\n[Resumption hint — the previous turn was truncated mid-execution by the per-turn output budget. " +
+          `The plan you committed to (${inProgressPlan.toolCallsRemaining} tool calls remaining):\n` +
+          inProgressPlan.planText +
+          "\n\nContinue from the unexecuted steps. Do NOT re-prompt the user for confirmation on steps " +
+          "they already approved, and do NOT repeat completed steps. If the user's most recent message " +
+          "explicitly redirects the plan (e.g. 'stop', 'cancel', 'do X instead'), follow that instead.]",
+        cache_control: { type: "ephemeral" },
+      });
+    }
+
     // Belt-and-suspenders: sanitize empty user messages again before hitting
     // the SDK. prepareMessages already sanitizes, but this catches any path
     // that might produce empty content after prepareMessages returns
@@ -268,7 +342,7 @@ export async function runAgentLoop(
     const apiParams: Anthropic.Messages.MessageCreateParamsNonStreaming = {
       model,
       max_tokens: maxTokens,
-      system: [systemBlock] as Anthropic.Messages.TextBlockParam[],
+      system: systemBlocks as Anthropic.Messages.TextBlockParam[],
       tools: cachedTools as Anthropic.Messages.Tool[],
       messages: sdkMessages,
     };
@@ -276,6 +350,7 @@ export async function runAgentLoop(
       apiParams.tool_choice = options.toolChoice;
     }
     const response = await createWithRetry(apiParams, signal);
+    iterationCount += 1;
 
     lastInputTokens = response.usage.input_tokens;
 
@@ -304,6 +379,20 @@ export async function runAgentLoop(
         .filter((b): b is Anthropic.Messages.TextBlock => b.type === "text")
         .map((b) => b.text)
         .join("\n");
+      // Clear the in-progress plan — the agent reached end_turn which
+      // means either (a) the plan completed, or (b) the model decided
+      // to wrap up (user changed direction, etc). Either way the plan
+      // no longer applies to subsequent turns. Fire-and-forget; any
+      // persistence failure is logged by the session store.
+      if (inProgressPlan) {
+        const { sessionStore } = await import("./session-factory");
+        void sessionStore.setInProgressPlan(sessionId, null).catch((err) => {
+          logger.warn("clear in-progress plan failed (best-effort)", "agent", {
+            sessionId,
+            errorMessage: (err as Error).message,
+          });
+        });
+      }
       logger.info("Agent loop completed", "agent");
       return { type: "response", text, messages: localMessages };
     }
@@ -422,6 +511,8 @@ export async function runAgentLoop(
           const result = await executeTool(name, input as Record<string, unknown>, {
             sessionMessages: localMessages,
             csvAttachments,
+            sessionId,
+            turnNumber: localMessages.length,
           });
           const durationMs = Date.now() - toolStart;
           logger.emitEvent("tool_execution", `Tool completed: ${name}`, "agent", {
@@ -507,7 +598,83 @@ export async function runAgentLoop(
       });
       if (lastIsToolUse) {
         const toolName = (lastBlock as Anthropic.Messages.ToolUseBlock).name;
-        throw new IncompleteToolUseError(toolName);
+        // Persist best-effort plan snapshot so the next user turn can
+        // resume. If emit_plan was called earlier in this conversation
+        // the plan is already on the root; we just leave it in place
+        // and attach its current state to the error. If no plan is
+        // available, derive a minimal fallback from the last assistant
+        // message's text content so resumption still has some
+        // structure to hand the next turn.
+        let planForError: InProgressPlan | null = inProgressPlan;
+        if (!planForError) {
+          const lastAssistant = localMessages[localMessages.length - 1];
+          let fallbackText = Array.isArray(lastAssistant?.content)
+            ? lastAssistant.content
+                .filter((b): b is Anthropic.Messages.TextBlock => (b as { type: string }).type === "text")
+                .map((b) => b.text)
+                .join("\n")
+                .slice(0, 4000)
+            : typeof lastAssistant?.content === "string"
+              ? lastAssistant.content.slice(0, 4000)
+              : "";
+          // Scan fallback text — the model may have echoed tool-result
+          // content (Sentinel alerts, email bodies) that carry indirect
+          // prompt injection. Without the scan on persistence, the
+          // resumption hint on the next turn promotes user-trust data
+          // to system-trust scope. Strip-and-continue: neutralise the
+          // most common directive patterns, log the detection.
+          if (fallbackText.trim()) {
+            const { scanUserInput } = await import("./injection-guard");
+            const scanResult = scanUserInput(fallbackText, {
+              sessionId,
+              userId: sessionId,
+              role: "agent_plan_fallback",
+            });
+            if (scanResult.flagged) {
+              logger.warn("Injection patterns in fallback planText — stripping", "agent", {
+                sessionId,
+                matchCount: scanResult.matchCount,
+                label: scanResult.label,
+              });
+              fallbackText = fallbackText
+                .replace(/ignore (?:all )?previous instructions?/gi, "[redacted]")
+                .replace(/you are now (?:in )?developer mode/gi, "[redacted]")
+                .replace(/system:?/gi, "[redacted]:");
+            }
+            planForError = {
+              schemaVersion: 1,
+              createdAt: new Date().toISOString(),
+              planText: fallbackText,
+              toolCallsRemaining: 1,
+              originalTurnNumber: localMessages.length,
+              resumptionCount: 0,
+            };
+          }
+        }
+        // Bump the resumption counter so the circuit breaker at the
+        // top of the next turn can detect a loop. Persist the updated
+        // plan (either the newly-derived fallback or the existing one
+        // with the counter incremented).
+        if (planForError) {
+          planForError = {
+            ...planForError,
+            resumptionCount: (planForError.resumptionCount ?? 0) + 1,
+          };
+          try {
+            const { sessionStore } = await import("./session-factory");
+            await sessionStore.setInProgressPlan(sessionId, planForError);
+          } catch (persistErr) {
+            logger.warn("Plan persistence failed on IncompleteToolUseError", "agent", {
+              sessionId,
+              errorMessage: (persistErr as Error).message,
+            });
+          }
+        }
+        const err = new IncompleteToolUseError(toolName) as IncompleteToolUseError & {
+          remainingPlan: InProgressPlan | null;
+        };
+        err.remainingPlan = planForError ?? null;
+        throw err;
       }
 
       const text = response.content
@@ -636,6 +803,8 @@ export async function resumeAfterConfirmation(
       const result = await executeTool(name, input, {
         sessionMessages: localMessages,
         csvAttachments: options.csvAttachments,
+        sessionId,
+        turnNumber: localMessages.length,
       });
       const durationMs = Date.now() - toolStart;
       logger.emitEvent("tool_execution", `Tool completed: ${name}`, "agent", {

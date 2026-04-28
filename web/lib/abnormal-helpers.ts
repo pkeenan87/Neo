@@ -1,6 +1,8 @@
 // ── Abnormal Security Pure Helpers ───────────────────────────
 // Shared between executors.ts and tests. No I/O, no side effects.
 
+import { BatchTooLargeError } from "./types";
+
 const MD5_RE = /^[a-f0-9]{32}$/i;
 const BASIC_EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
 const IPV4_RE = /^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$/;
@@ -48,7 +50,18 @@ export interface RemediateValidationInput {
   search_filters?: Record<string, unknown>;
 }
 
-export function validateRemediateInput(input: RemediateValidationInput): void {
+export interface RemediateValidationOptions {
+  /** Upper bound on explicit `messages` array size. When exceeded,
+   *  throws BatchTooLargeError so the agent receives a clear
+   *  "chunk to ≤N per call" hint rather than the vendor API's
+   *  generic 400 "Validation failed". See _plans/output-budget.md. */
+  maxExplicitMessages?: number;
+}
+
+export function validateRemediateInput(
+  input: RemediateValidationInput,
+  options: RemediateValidationOptions = {},
+): void {
   if (input.remediate_all) {
     if (!input.search_filters || Object.keys(input.search_filters).length === 0) {
       throw new Error("remediate_all requires search_filters to scope the remediation.");
@@ -59,6 +72,15 @@ export function validateRemediateInput(input: RemediateValidationInput): void {
   if (!input.messages || input.messages.length === 0) {
     throw new Error(
       "Either provide a non-empty messages array, or set remediate_all: true with search_filters.",
+    );
+  }
+
+  const cap = options.maxExplicitMessages;
+  if (typeof cap === "number" && input.messages.length > cap) {
+    throw new BatchTooLargeError(
+      "remediate_abnormal_messages",
+      input.messages.length,
+      cap,
     );
   }
 }

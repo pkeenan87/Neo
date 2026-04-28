@@ -74,6 +74,29 @@ async function processStream(response, callbacks) {
           if (callbacks.onSkillInvocation) callbacks.onSkillInvocation(event.skill);
           break;
 
+        case "context_trimmed":
+          if (callbacks.onContextTrimmed) {
+            callbacks.onContextTrimmed({
+              originalTokens: event.originalTokens,
+              newTokens: event.newTokens,
+              method: event.method,
+            });
+          }
+          break;
+
+        case "output_truncated":
+          if (callbacks.onOutputTruncated) {
+            callbacks.onOutputTruncated({
+              phase: event.phase,
+              message: event.message,
+              remainingPlan: event.remainingPlan ?? null,
+            });
+          }
+          // NDJSON stream doesn't include a response after this event
+          // (the agent couldn't finish). Signal an empty-text terminal
+          // response so the CLI can return without hanging.
+          return { type: "response", text: "", sessionId, outputTruncated: true };
+
         case "confirmation_required":
           return { type: "confirmation_required", tool: event.tool, sessionId };
 

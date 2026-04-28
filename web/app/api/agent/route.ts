@@ -8,7 +8,7 @@ import { scanUserInput, shouldBlock } from "@/lib/injection-guard";
 import { getSkill } from "@/lib/skill-store";
 import { logger, hashPii, setLogContext } from "@/lib/logger";
 import { isChannel, MAX_FILES_PER_MESSAGE, CsvAttachmentCapError } from "@/lib/types";
-import type { AgentRequest, ModelPreference, TokenUsage, LogIdentityContext, FileAttachment, CSVReference } from "@/lib/types";
+import type { AgentRequest, ModelPreference, TokenUsage, LogIdentityContext, FileAttachment, CSVReference, InProgressPlan } from "@/lib/types";
 import { DEFAULT_MODEL, SUPPORTED_MODELS } from "@/lib/config";
 import { checkBudget, createReservation, deleteReservation, recordUsage } from "@/lib/usage-tracker";
 import { isMultipartRequest, parseMultipart } from "@/lib/multipart-parser";
@@ -532,18 +532,23 @@ async function handleAgentRequest(
         // IncompleteToolUseError: the model ran out of output budget while
         // writing a tool_use block. There's no partial text to show and
         // the incomplete tool_use would corrupt the next turn, so we do
-        // NOT persist the assistant turn — just surface a friendly error.
+        // NOT persist the assistant turn. Surface an `output_truncated`
+        // event that carries the remaining plan (set by the agent loop
+        // via emit_plan, or derived best-effort on the way out).
         if ((err as Error).name === "IncompleteToolUseError") {
+          const errWithPlan = err as Error & { remainingPlan?: InProgressPlan | null };
           logger.warn("Agent loop truncated mid-tool-use", "api/agent", {
             sessionId,
             errorMessage: (err as Error).message,
           });
           await writer.write(
             encodeNDJSON({
-              type: "error",
+              type: "output_truncated",
+              phase: "tool_use",
               message:
-                "The agent couldn't finish planning the next step within the token budget. Try a more focused follow-up.",
-              code: "INCOMPLETE_TOOL_USE",
+                "Neo's per-turn output budget was exhausted before it could finish planning the next step. " +
+                "Type your next message and Neo will pick up from the remaining plan.",
+              remainingPlan: errWithPlan.remainingPlan ?? null,
             }),
           );
           return;

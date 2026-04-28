@@ -5,6 +5,9 @@ import {
   PER_TOOL_RESULT_TOKEN_CAP,
   PRESERVED_RECENT_MESSAGES,
   HAIKU_MODEL,
+  NEO_CONTEXT_MAX_INPUT_TOKENS,
+  HAIKU_INPUT_MAX_TOKENS,
+  FIRST_MESSAGE_MAX_TOKENS,
 } from "./config";
 import { logger } from "./logger";
 import type { Message } from "./types";
@@ -293,7 +296,43 @@ async function compressOlderMessages(
   const safeCapStart = rawCapStart <= 0
     ? 0
     : findSafeSliceStart(middle, rawCapStart);
-  const cappedMiddle = middle.slice(safeCapStart);
+  let cappedMiddle = middle.slice(safeCapStart);
+
+  // Pre-trim the Haiku input itself so the compression call never 400s
+  // with "prompt is too long: N > 200000". The middle slice can exceed
+  // 200K tokens when a single conversation has repeatedly appended
+  // oversized tool results. Drop pair-aware from the start of
+  // cappedMiddle until its own estimated tokens are under
+  // HAIKU_INPUT_MAX_TOKENS. See _plans/output-budget.md.
+  let haikuInputEstimate = estimateTokens(cappedMiddle);
+  let haikuPreTrimmed = 0;
+  while (haikuInputEstimate > HAIKU_INPUT_MAX_TOKENS && cappedMiddle.length > 2) {
+    const safeStart = findSafeSliceStart(cappedMiddle, 1);
+    let dropEnd = safeStart + 1;
+    if (
+      dropEnd < cappedMiddle.length &&
+      cappedMiddle[safeStart].role === "assistant" &&
+      hasToolUseBlocks(cappedMiddle[safeStart]) &&
+      cappedMiddle[dropEnd].role === "user" &&
+      hasToolResultBlocks(cappedMiddle[dropEnd])
+    ) {
+      dropEnd = safeStart + 2;
+    }
+    cappedMiddle = [
+      ...cappedMiddle.slice(0, safeStart),
+      ...cappedMiddle.slice(dropEnd),
+    ];
+    haikuPreTrimmed += dropEnd - safeStart;
+    haikuInputEstimate = estimateTokens(cappedMiddle);
+  }
+  if (haikuPreTrimmed > 0) {
+    logger.emitEvent("context_engineering", "Pre-trimmed Haiku compression input", "context-manager", {
+      reason: "haiku_pretrim",
+      droppedMessages: haikuPreTrimmed,
+      afterEnforcementTokens: haikuInputEstimate,
+      ceiling: HAIKU_INPUT_MAX_TOKENS,
+    });
+  }
 
   // Use assistant role for summary/fallback to prevent injection
   const summaryRole = "assistant" as const;
@@ -351,53 +390,324 @@ async function compressOlderMessages(
     result = [...anchor, fallbackMessage, ...recent];
   }
 
-  // Emergency progressive truncation: if the result still exceeds the
-  // threshold, drop the oldest messages from the recent window (pair-aware)
-  // until the estimate is under budget. This prevents the "prompt is too
-  // long" error that killed sessions during the 2026-04-16 incident.
-  //
-  // Minimum viable shape: anchor (0) + summary placeholder (1) + at least
-  // one recent message (2). Below this floor we cannot drop further.
+  // After summarization, run the ceiling-enforcement pass to guarantee
+  // the result fits under NEO_CONTEXT_MAX_INPUT_TOKENS. enforceCeiling
+  // returns a pair-aware, already shape-validated array.
+  return enforceCeiling(result, NEO_CONTEXT_MAX_INPUT_TOKENS, systemPromptTokenEstimate);
+}
+
+/**
+ * Pair-aware, progressive truncation that drops the oldest turn pairs
+ * (starting past the anchor + summary placeholder) until the estimated
+ * input size fits under `ceiling + systemPromptTokenEstimate`. Extracted
+ * from `compressOlderMessages` so it can also run as the final
+ * enforcement pass from `prepareMessages` after compression (the
+ * compression path alone isn't guaranteed to land under the ceiling
+ * when the recent window itself is oversized).
+ *
+ * Minimum viable shape preserved: anchor (0) + summary placeholder (1)
+ * + at least one recent message (2). If the floor still exceeds the
+ * ceiling, logs `Emergency truncation exhausted` at error level and
+ * returns the minimum-shape array regardless — the caller's alternative
+ * (send over ceiling) is strictly worse.
+ */
+export function enforceCeiling(
+  messages: Message[],
+  ceiling: number,
+  systemPromptTokenEstimate: number,
+): Message[] {
   const MIN_RESULT_LENGTH = 3;
-  let emergencyEstimate = estimateTokens(result) + systemPromptTokenEstimate;
-  while (emergencyEstimate > TRIM_TRIGGER_THRESHOLD && result.length > MIN_RESULT_LENGTH) {
-    // Use the same pair-aware helper as the outer slicing code
+  let result = messages;
+  let estimate = estimateTokens(result) + systemPromptTokenEstimate;
+  let dropped = 0;
+  const startEstimate = estimate;
+
+  while (estimate > ceiling && result.length > MIN_RESULT_LENGTH) {
     const rawDropIndex = 2;
     const safeDropIndex = findSafeSliceStart(result, rawDropIndex);
     let dropEnd = safeDropIndex + 1;
-    if (dropEnd < result.length && result[safeDropIndex].role === "assistant" &&
-        hasToolUseBlocks(result[safeDropIndex]) && result[dropEnd].role === "user" &&
-        hasToolResultBlocks(result[dropEnd])) {
+    if (
+      dropEnd < result.length &&
+      result[safeDropIndex].role === "assistant" &&
+      hasToolUseBlocks(result[safeDropIndex]) &&
+      result[dropEnd].role === "user" &&
+      hasToolResultBlocks(result[dropEnd])
+    ) {
       dropEnd = safeDropIndex + 2;
     }
 
     logger.warn("Emergency truncation: dropping messages to fit context", "context-manager", {
       droppedFromIndex: safeDropIndex,
       droppedCount: dropEnd - safeDropIndex,
-      estimatedTokens: emergencyEstimate,
-      threshold: TRIM_TRIGGER_THRESHOLD,
+      estimatedTokens: estimate,
+      ceiling,
     });
 
     result = [...result.slice(0, safeDropIndex), ...result.slice(dropEnd)];
-    emergencyEstimate = estimateTokens(result) + systemPromptTokenEstimate;
+    dropped += dropEnd - safeDropIndex;
+    estimate = estimateTokens(result) + systemPromptTokenEstimate;
   }
 
-  if (emergencyEstimate > TRIM_TRIGGER_THRESHOLD) {
+  if (estimate > ceiling) {
     logger.error(
-      "Emergency truncation exhausted: minimum conversation still exceeds threshold",
+      "Emergency truncation exhausted: minimum conversation still exceeds ceiling",
       "context-manager",
       {
-        estimatedTokens: emergencyEstimate,
-        threshold: TRIM_TRIGGER_THRESHOLD,
+        estimatedTokens: estimate,
+        ceiling,
         remainingMessages: result.length,
       },
     );
   }
 
-  // Validate shape after emergency loop (catches any orphans introduced by drops)
-  result = validateAndRepairConversationShape(result);
+  if (dropped > 0) {
+    logger.emitEvent("context_engineering", "Enforced input-token ceiling via emergency truncation", "context-manager", {
+      reason: "enforce_ceiling",
+      originalTokens: startEstimate,
+      afterEnforcementTokens: estimate,
+      droppedMessages: dropped,
+      ceiling,
+    });
+  }
 
-  return result;
+  // Validate shape after loop (catches any orphans introduced by drops)
+  return validateAndRepairConversationShape(result);
+}
+
+// ── In-flight tool-result offload ────────────────────────────
+
+/**
+ * Walk older tool_result blocks and replace oversized string payloads
+ * with the same trust-marked blob envelope string that the runtime
+ * persistence path (`injection-guard.ts#wrapAndMaybeOffloadToolResult`)
+ * produces. The agent can re-fetch the full payload via
+ * `get_full_tool_result` when it needs to — but in the meantime the
+ * prompt stays under ceiling.
+ *
+ * Contract:
+ *  - `skipLastTurn: true` protects the most recent tool_result blocks
+ *    (current agent turn) from being offloaded; otherwise the agent
+ *    would immediately round-trip `get_full_tool_result` to read what
+ *    it just received, which is pure overhead.
+ *  - `thresholdTokens` (default PER_TOOL_RESULT_TOKEN_CAP) is the
+ *    per-result cut-off — below it, the result stays inline.
+ *  - Already-envelope content (detected via `_neo_trust_boundary`
+ *    substring) is left untouched — idempotent.
+ *  - Blob storage failures are swallowed with a warn; the inline
+ *    result is preserved as a fallback so the prompt still works, even
+ *    if it risks the 200K ceiling for that turn.
+ */
+export async function offloadLargeToolResultsInPrompt(
+  messages: Message[],
+  ctx: {
+    conversationId: string;
+    skipLastTurn?: boolean;
+    thresholdTokens?: number;
+  },
+): Promise<{ messages: Message[]; offloadedCount: number }> {
+  const threshold = ctx.thresholdTokens ?? PER_TOOL_RESULT_TOKEN_CAP;
+  const charThreshold = threshold * CHARS_PER_TOKEN;
+  const skipLastTurn = ctx.skipLastTurn ?? true;
+
+  // Identify the end of the region we're allowed to rewrite. The
+  // "last turn" is the last assistant + user tool_result pair; we
+  // want to keep it intact when skipLastTurn is true.
+  let cutoffIndex = messages.length;
+  if (skipLastTurn) {
+    // Walk back until we pass one user-with-tool-result message AND
+    // its preceding assistant-with-tool-use message.
+    for (let i = messages.length - 1; i >= 0; i--) {
+      const m = messages[i];
+      if (m.role === "user" && hasToolResultBlocks(m)) {
+        cutoffIndex = Math.max(0, i - 1);
+        break;
+      }
+    }
+  }
+
+  let offloadedCount = 0;
+  const { maybeOffloadToolResult } = await import("./tool-result-blob-store");
+
+  const out: Message[] = [];
+  for (let i = 0; i < messages.length; i++) {
+    const msg = messages[i];
+    if (i >= cutoffIndex || !Array.isArray(msg.content)) {
+      out.push(msg);
+      continue;
+    }
+
+    let mutated = false;
+    const newContent: typeof msg.content = [];
+    for (const block of msg.content) {
+      if (block.type !== "tool_result") {
+        newContent.push(block);
+        continue;
+      }
+      const tr = block as Anthropic.Messages.ToolResultBlockParam;
+      const content = tr.content;
+      if (typeof content !== "string" || content.length <= charThreshold) {
+        newContent.push(block);
+        continue;
+      }
+      // Already-envelope content — parse-based check so a legitimate
+      // tool result that happens to contain the internal marker
+      // substrings (e.g., a Sentinel alert mentioning Neo internals)
+      // doesn't get skipped as if it were already offloaded. Fast-path
+      // with a cheap substring check to avoid JSON.parse on the common
+      // non-envelope case.
+      if (
+        content.includes("_neo_trust_boundary") &&
+        content.includes("_neo_blob_ref")
+      ) {
+        let parsed: unknown;
+        try {
+          parsed = JSON.parse(content);
+        } catch {
+          parsed = null;
+        }
+        if (
+          parsed &&
+          typeof parsed === "object" &&
+          typeof (parsed as { _neo_trust_boundary?: unknown })._neo_trust_boundary === "object" &&
+          (parsed as { data?: { _neo_blob_ref?: unknown } }).data?._neo_blob_ref === true
+        ) {
+          newContent.push(block);
+          continue;
+        }
+      }
+
+      try {
+        // Attempt to offload the raw payload. `maybeOffloadToolResult`
+        // expects the full wrapper JSON so it can compute a stable
+        // content-hash; we pass the tool_result's string content as-is
+        // (already the serialized payload).
+        const outcome = await maybeOffloadToolResult(content, {
+          conversationId: ctx.conversationId,
+          sourceTool: tr.tool_use_id ?? "unknown",
+        });
+        if (typeof outcome === "string") {
+          // Below blob-store threshold or storage unavailable — inline.
+          newContent.push(block);
+          continue;
+        }
+        // Above threshold — wrap in the trust-marked envelope. Same
+        // shape as wrapAndMaybeOffloadToolResult so downstream
+        // resolvers treat it identically.
+        const envelope = JSON.stringify(
+          {
+            _neo_trust_boundary: {
+              source: "tool_offload_inflight",
+              tool: tr.tool_use_id ?? "unknown",
+              injection_detected: false,
+            },
+            data: outcome,
+          },
+          null,
+          2,
+        );
+        newContent.push({ ...tr, content: envelope });
+        offloadedCount += 1;
+        mutated = true;
+      } catch (err) {
+        logger.warn("In-flight tool-result offload failed (preserving inline)", "context-manager", {
+          errorMessage: (err as Error).message,
+          conversationId: ctx.conversationId,
+        });
+        newContent.push(block);
+      }
+    }
+
+    out.push(mutated ? { ...msg, content: newContent } : msg);
+  }
+
+  if (offloadedCount > 0) {
+    logger.emitEvent("context_engineering", "Offloaded in-flight tool results to blob", "context-manager", {
+      reason: "inflight_offload",
+      offloadedCount,
+      conversationId: ctx.conversationId,
+    });
+  }
+
+  return { messages: out, offloadedCount };
+}
+
+// ── Anchor summarisation ─────────────────────────────────────
+
+/**
+ * When the very first user message on its own already exceeds
+ * FIRST_MESSAGE_MAX_TOKENS, replace it in-place with a Haiku-generated
+ * summary. Without this, `compressOlderMessages` preserves the anchor
+ * verbatim and the bloated first message dominates every subsequent
+ * prompt. A hard character-level truncation is the fallback if Haiku
+ * fails — strictly worse than a summary but still fits under the
+ * budget. See _plans/output-budget.md.
+ *
+ * Only touches string-content user messages; array-content first
+ * messages (images, attached docs) are left alone because character-
+ * counting on structured content is unreliable and the offload /
+ * truncation paths downstream already handle oversized tool results.
+ */
+async function maybeSummarizeAnchor(
+  messages: Message[],
+): Promise<Message[]> {
+  if (messages.length === 0) return messages;
+
+  // Find the first user message (anchor).
+  let anchorIndex = -1;
+  for (let i = 0; i < messages.length; i++) {
+    if (messages[i].role === "user") {
+      anchorIndex = i;
+      break;
+    }
+  }
+  if (anchorIndex < 0) return messages;
+
+  const anchor = messages[anchorIndex];
+  if (typeof anchor.content !== "string") return messages;
+
+  const anchorTokens = Math.ceil(anchor.content.length / CHARS_PER_TOKEN);
+  if (anchorTokens <= FIRST_MESSAGE_MAX_TOKENS) return messages;
+
+  logger.emitEvent("context_engineering", "Anchor exceeds FIRST_MESSAGE_MAX_TOKENS — summarising", "context-manager", {
+    reason: "anchor_oversize",
+    originalTokens: anchorTokens,
+    ceiling: FIRST_MESSAGE_MAX_TOKENS,
+  });
+
+  let summarised: string;
+  try {
+    const response = await anthropicClient.messages.create({
+      model: HAIKU_MODEL,
+      max_tokens: 1024,
+      system:
+        "Summarise the following user message in 3-5 bullet points. The original " +
+        "message was too large to fit in the model's context window. Capture the " +
+        "user's intent, any specific identifiers (IPs, hostnames, UPNs, alert IDs, " +
+        "URLs), and any constraints or deadlines. Output only the bullet points — " +
+        "no preamble.",
+      messages: [
+        { role: "user", content: anchor.content },
+        { role: "user", content: "Please summarise the message above." },
+      ],
+    });
+    const summaryText = response.content
+      .filter((b): b is Anthropic.Messages.TextBlock => b.type === "text")
+      .map((b) => b.text)
+      .join("\n");
+    summarised = `[Anchor summary — original was ${anchorTokens} tokens, summarised to stay within context budget]\n${summaryText}`;
+  } catch (err) {
+    logger.warn("Anchor summarisation failed — using hard truncation fallback", "context-manager", {
+      errorMessage: (err as Error).message,
+    });
+    const charCap = FIRST_MESSAGE_MAX_TOKENS * CHARS_PER_TOKEN;
+    summarised =
+      anchor.content.slice(0, charCap) +
+      `\n\n[anchor truncated — original was ${anchor.content.length} chars]`;
+  }
+
+  const out = [...messages];
+  out[anchorIndex] = { ...anchor, content: summarised };
+  return out;
 }
 
 // ── Empty-content sanitizer ──────────────────────────────────
@@ -477,15 +787,29 @@ export function sanitizeEmptyUserMessages(messages: Message[]): Message[] {
 
 // ── Main entry point ─────────────────────────────────────────
 
+export interface PrepareMessagesContext {
+  /** Conversation / session id, used by in-flight tool-result offload
+   *  to key blob uploads. Optional — when absent, the offload pass is
+   *  skipped and only summary compression + emergency truncation run. */
+  conversationId?: string;
+}
+
 export async function prepareMessages(
   messages: Message[],
   lastInputTokens: number | null,
   systemPromptTokenEstimate: number,
+  ctx: PrepareMessagesContext = {},
 ): Promise<PrepareResult> {
-  // Step 1: Truncate individual oversized tool results
-  const { messages: truncatedMessages, anyTruncated } = truncateToolResults(messages);
+  // Step 1: Anchor summary — if the very first user message alone is
+  // already larger than FIRST_MESSAGE_MAX_TOKENS, replace with a
+  // Haiku-generated summary in-place. Without this, the anchor is
+  // never dropped and dominates every subsequent turn's budget.
+  const anchorSummarised = await maybeSummarizeAnchor(messages);
 
-  // Step 2: Estimate total context size
+  // Step 2: Truncate individual oversized tool results (per-result cap)
+  const { messages: truncatedMessages, anyTruncated } = truncateToolResults(anchorSummarised);
+
+  // Step 3: Estimate total context size
   // When lastInputTokens comes from response.usage.input_tokens, it already
   // includes the system prompt, so we use it directly. On the first call
   // (null), we fall back to the char÷4 heuristic plus system prompt estimate.
@@ -494,18 +818,37 @@ export async function prepareMessages(
     ? messageTokens
     : messageTokens + systemPromptTokenEstimate;
 
-  // Step 3: Compress if over threshold
+  // Step 3b: In-flight offload — only when projected prompt exceeds the
+  // ceiling. Replaces oversized OLDER tool results (skipping the last
+  // turn) with trust-marked envelope strings so the current turn
+  // remains under budget without forcing an immediate re-fetch of
+  // just-arrived results.
+  let afterOffload = truncatedMessages;
+  if (
+    ctx.conversationId &&
+    totalEstimate > NEO_CONTEXT_MAX_INPUT_TOKENS
+  ) {
+    const offloaded = await offloadLargeToolResultsInPrompt(truncatedMessages, {
+      conversationId: ctx.conversationId,
+      skipLastTurn: true,
+    });
+    afterOffload = offloaded.messages;
+  }
+
+  // Step 4: Compress if over the trim trigger threshold. compressOlderMessages
+  // internally runs enforceCeiling as its final step, so a successful
+  // compression return is already guaranteed to fit under
+  // NEO_CONTEXT_MAX_INPUT_TOKENS.
   if (totalEstimate > TRIM_TRIGGER_THRESHOLD) {
     logger.info("Context trimming triggered", "context-manager", {
       estimatedTokens: totalEstimate,
       threshold: TRIM_TRIGGER_THRESHOLD,
-      messageCount: truncatedMessages.length,
+      ceiling: NEO_CONTEXT_MAX_INPUT_TOKENS,
+      messageCount: afterOffload.length,
     });
 
-    // compressOlderMessages() handles shape validation and emergency
-    // truncation internally — no need to re-validate here.
     const compressed = await compressOlderMessages(
-      truncatedMessages,
+      afterOffload,
       PRESERVED_RECENT_MESSAGES,
       systemPromptTokenEstimate,
     );
@@ -521,8 +864,18 @@ export async function prepareMessages(
     };
   }
 
-  if (anyTruncated) {
-    const sanitized = sanitizeEmptyUserMessages(truncatedMessages);
+  // Step 5: Defensive ceiling enforcement even below the trim trigger.
+  // Catches the edge case where compression has already run on a prior
+  // turn and the current estimate is close to (but below) the threshold,
+  // AND the anchor + recent window still exceeds the hard ceiling.
+  // Rarely fires in practice but cheap when it doesn't.
+  if (totalEstimate > NEO_CONTEXT_MAX_INPUT_TOKENS) {
+    const enforced = enforceCeiling(
+      afterOffload,
+      NEO_CONTEXT_MAX_INPUT_TOKENS,
+      systemPromptTokenEstimate,
+    );
+    const sanitized = sanitizeEmptyUserMessages(enforced);
     const newTokens = estimateTokens(sanitized) + systemPromptTokenEstimate;
     return {
       messages: sanitized,
@@ -533,7 +886,19 @@ export async function prepareMessages(
     };
   }
 
-  const sanitized = sanitizeEmptyUserMessages(truncatedMessages);
+  if (anyTruncated) {
+    const sanitized = sanitizeEmptyUserMessages(afterOffload);
+    const newTokens = estimateTokens(sanitized) + systemPromptTokenEstimate;
+    return {
+      messages: sanitized,
+      trimmed: true,
+      method: "truncation",
+      originalTokens: totalEstimate,
+      newTokens,
+    };
+  }
+
+  const sanitized = sanitizeEmptyUserMessages(afterOffload);
   return {
     messages: sanitized,
     trimmed: false,

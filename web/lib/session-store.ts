@@ -1,7 +1,8 @@
 import crypto from "crypto";
 import { RATE_LIMITS, type Role } from "./permissions";
 import { logger, hashPii } from "./logger";
-import type { Message, Session, SessionMeta, PendingTool, Channel } from "./types";
+import type { Message, Session, SessionMeta, PendingTool, Channel, InProgressPlan } from "./types";
+import { isInProgressPlan } from "./types";
 
 const TTL_MS = 30 * 60 * 1000; // 30 minutes
 const SWEEP_INTERVAL_MS = 60 * 1000; // 1 minute
@@ -25,6 +26,11 @@ export interface SessionStore {
   isRateLimited(id: string): Promise<boolean>;
   saveMessages(id: string, messages: Message[], title?: string): Promise<void>;
   updateTitle(id: string, title: string): Promise<void>;
+  /** Persist a multi-step plan on the conversation so the next user
+   *  turn can resume when the current turn was truncated mid-tool-use.
+   *  Pass `null` to clear. See _plans/output-budget.md. */
+  setInProgressPlan(id: string, plan: InProgressPlan | null): Promise<void>;
+  getInProgressPlan(id: string): Promise<InProgressPlan | null>;
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -50,6 +56,7 @@ export class InMemorySessionStore implements SessionStore {
       lastActivityAt: new Date(),
       messageCount: 0,
       pendingConfirmation: null,
+      inProgressPlan: null,
     });
     logger.info("Session created", "session-store", { sessionId: id, role, ownerIdHash: hashPii(ownerId) });
     return id;
@@ -138,6 +145,17 @@ export class InMemorySessionStore implements SessionStore {
 
   async updateTitle(_id: string, _title: string): Promise<void> {
     // No-op — in-memory sessions don't persist titles
+  }
+
+  async setInProgressPlan(id: string, plan: InProgressPlan | null): Promise<void> {
+    const session = this.sessions.get(id);
+    if (session) session.inProgressPlan = plan;
+  }
+
+  async getInProgressPlan(id: string): Promise<InProgressPlan | null> {
+    const session = this.sessions.get(id);
+    const raw = session?.inProgressPlan ?? null;
+    return raw && isInProgressPlan(raw) ? raw : null;
   }
 
   private sweep(): void {

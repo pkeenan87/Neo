@@ -22,8 +22,9 @@ import type {
   SessionMeta,
   Channel,
   CSVReference,
+  InProgressPlan,
 } from "./types";
-import { CSV_MAX_REFERENCE_ATTACHMENTS, CsvAttachmentCapError } from "./types";
+import { CSV_MAX_REFERENCE_ATTACHMENTS, CsvAttachmentCapError, isInProgressPlan } from "./types";
 import type { SessionStore } from "./session-store";
 import { promoteStagingBlob, isBlobRefDescriptor } from "./tool-result-blob-store";
 
@@ -168,6 +169,7 @@ export function splitConversationToDocs(conv: Conversation): {
     latestCheckpointId: null,
     rollingSummary: null,
     pendingConfirmation: conv.pendingConfirmation,
+    inProgressPlan: conv.inProgressPlan ?? null,
     model: conv.model,
     ttl,
     csvAttachments: conv.csvAttachments,
@@ -233,6 +235,7 @@ export function rebuildConversationFromDocs(input: {
     channel: input.root.channel,
     messages,
     pendingConfirmation: input.root.pendingConfirmation,
+    inProgressPlan: input.root.inProgressPlan ?? null,
     model: input.root.model,
     ttl: input.root.ttl,
     csvAttachments: input.root.csvAttachments,
@@ -740,6 +743,50 @@ export async function clearConversationPendingConfirmationV2(
   return pending;
 }
 
+/**
+ * Narrow root patch for the in-progress plan. See
+ * `_plans/output-budget.md`. Pass `null` to clear. Mirror of the v1
+ * adapter's `setConversationInProgressPlan` but as a minimal root
+ * patch instead of a full-doc replace.
+ */
+export async function setConversationInProgressPlanV2(
+  id: string,
+  ownerId: string,
+  plan: InProgressPlan | null,
+): Promise<void> {
+  const container = getContainerV2();
+  const { resource } = await container.item(id, id).read<ConversationV2Root>();
+  if (!resource || resource.docType !== "root") {
+    throw new ConversationNotFoundV2Error(id);
+  }
+  if (resource.ownerId !== ownerId) return;
+
+  await container.item(id, id).patch({
+    operations: [
+      { op: "set", path: "/inProgressPlan", value: plan },
+      { op: "set", path: "/updatedAt", value: nowIso() },
+    ],
+  });
+}
+
+export async function getConversationInProgressPlanV2(
+  id: string,
+  ownerId: string,
+): Promise<InProgressPlan | null> {
+  const container = getContainerV2();
+  const { resource } = await container.item(id, id).read<ConversationV2Root>();
+  if (!resource || resource.docType !== "root") return null;
+  if (resource.ownerId !== ownerId) return null;
+  const raw = resource.inProgressPlan ?? null;
+  if (raw && !isInProgressPlan(raw)) {
+    logger.warn("Persisted inProgressPlan (v2) failed shape validation — ignoring", "conversation-store-v2", {
+      conversationId: id,
+    });
+    return null;
+  }
+  return raw;
+}
+
 const APPEND_CSV_MAX_ATTEMPTS = 3;
 
 export async function appendCsvAttachmentV2(
@@ -834,6 +881,7 @@ function rootToSession(root: ConversationV2Root, turns: TurnDoc[]): Session {
     lastActivityAt: new Date(root.updatedAt),
     messageCount: root.turnCount,
     pendingConfirmation: root.pendingConfirmation,
+    inProgressPlan: root.inProgressPlan ?? null,
   };
 }
 
@@ -1055,6 +1103,39 @@ export class CosmosV2SessionStore implements SessionStore {
     const { resource } = await container.item(id, id).read<ConversationV2Root>();
     if (!resource) throw new ConversationNotFoundV2Error(id);
     await updateTitleV2(id, resource.ownerId, title);
+  }
+
+  async setInProgressPlan(id: string, plan: InProgressPlan | null): Promise<void> {
+    // Read the root once (for ownerId + existence), then patch.
+    // Previously this class did a read here AND inside
+    // setConversationInProgressPlanV2 — two round trips per call with a
+    // needless TOCTOU window. Inline the patch to keep it to one read
+    // + one patch. See security review S6.
+    const container = getContainerV2();
+    const { resource } = await container.item(id, id).read<ConversationV2Root>();
+    if (!resource || resource.docType !== "root") throw new ConversationNotFoundV2Error(id);
+    await container.item(id, id).patch({
+      operations: [
+        { op: "set", path: "/inProgressPlan", value: plan },
+        { op: "set", path: "/updatedAt", value: nowIso() },
+      ],
+    });
+  }
+
+  async getInProgressPlan(id: string): Promise<InProgressPlan | null> {
+    const container = getContainerV2();
+    const { resource } = await container.item(id, id).read<ConversationV2Root>();
+    if (!resource) return null;
+    const raw = resource.inProgressPlan ?? null;
+    if (raw && !isInProgressPlan(raw)) {
+      logger.warn(
+        "Persisted inProgressPlan (v2 session-store) failed shape validation — ignoring",
+        "conversation-store-v2",
+        { conversationId: id },
+      );
+      return null;
+    }
+    return raw;
   }
 }
 

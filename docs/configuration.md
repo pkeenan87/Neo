@@ -155,10 +155,21 @@ INJECTION_GUARD_MODE=monitor
 |----------|-------|-------------|
 | `DEFAULT_MODEL` | `claude-sonnet-4-6` | Default Claude model for the agent loop. Users can override per-session with Opus. |
 | `CONTEXT_TOKEN_LIMIT` | 180,000 | Maximum token budget for API calls |
-| `TRIM_TRIGGER_THRESHOLD` | 160,000 | Token count that triggers conversation compression |
+| `TRIM_TRIGGER_THRESHOLD` | 140,000 | Token count that triggers conversation compression |
 | `PER_TOOL_RESULT_TOKEN_CAP` | 50,000 | Maximum tokens per individual tool result before truncation |
 | `PRESERVED_RECENT_MESSAGES` | 10 | Number of recent messages always preserved during compression |
 | `USAGE_LIMITS.warningThreshold` | 0.80 | Usage fraction at which a warning is sent to the client |
+
+**Output-budget management** (per-turn context ceiling + truncation recovery — see `_plans/output-budget.md`):
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `NEO_CONTEXT_MAX_INPUT_TOKENS` | 180000 | Hard input-token ceiling enforced AFTER compression. Must stay < 200 000 (Anthropic's prompt-too-long cap). |
+| `HAIKU_INPUT_MAX_TOKENS` | 160000 | Pre-trim cap for the Haiku compression call's own input. Prevents cascading 400s when the middle slice is oversized. |
+| `FIRST_MESSAGE_MAX_TOKENS` | 100000 | When the anchor (first user message) alone exceeds this, Neo replaces it with a Haiku summary so the bloated message doesn't dominate every subsequent turn. |
+| `REMEDIATE_MAX_EXPLICIT_MESSAGES` | 20 | Cap on `messages[]` array size accepted by `remediate_abnormal_messages`. Exceeding the cap surfaces a `BATCH_TOO_LARGE` tool_result to the agent instead of reaching the vendor API. |
+
+The three input-token budgets nest: `TRIM_TRIGGER_THRESHOLD < NEO_CONTEXT_MAX_INPUT_TOKENS < 200000`. Compression starts at the trigger; the ceiling is enforced afterwards by dropping older turn pairs; Anthropic's 200 K is the hard cap.
 
 ### API Key Management
 

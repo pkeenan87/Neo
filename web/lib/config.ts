@@ -23,6 +23,33 @@ export const PRESERVED_RECENT_MESSAGES = parsePositiveInt("PRESERVED_RECENT_MESS
 // under Cosmos DB's 2 MB document limit.
 export const PERSISTENCE_TOOL_RESULT_TOKEN_CAP = parsePositiveInt("PERSISTENCE_TOOL_RESULT_TOKEN_CAP", 10_000);
 
+// ── Output budget — per-turn input-token budgeting ───────────
+// See _plans/output-budget.md.
+//
+// TRIM_TRIGGER_THRESHOLD is the START-compressing watermark (default 140K).
+// NEO_CONTEXT_MAX_INPUT_TOKENS is the MUST-NOT-EXCEED ceiling applied after
+// compression (default 180K, giving 20K headroom under Anthropic's 200K
+// prompt-too-long hard limit). HAIKU_INPUT_MAX_TOKENS caps what the Haiku
+// compression call itself sees — if the middle slice destined for Haiku
+// exceeds this, we pre-trim before dispatch so the Haiku API never 400s
+// with "prompt is too long" (which would cascade to the hard-truncation
+// fallback). FIRST_MESSAGE_MAX_TOKENS triggers a dedicated anchor-summary
+// pass when the very first user message alone is already bloated (think
+// copy-pasted log dumps) — without this, the anchor is never dropped and
+// dominates the budget.
+export const NEO_CONTEXT_MAX_INPUT_TOKENS = parsePositiveInt("NEO_CONTEXT_MAX_INPUT_TOKENS", 180_000);
+export const HAIKU_INPUT_MAX_TOKENS = parsePositiveInt("HAIKU_INPUT_MAX_TOKENS", 160_000);
+export const FIRST_MESSAGE_MAX_TOKENS = parsePositiveInt("FIRST_MESSAGE_MAX_TOKENS", 100_000);
+
+// ── Destructive-batch preflight ──────────────────────────────
+// Upper bound on explicit `messages` arrays passed to
+// remediate_abnormal_messages before the executor rejects the tool call
+// with a chunking hint. Catches the degenerate case from the Output
+// Budget incident where the agent ran out of mid-construction and sent
+// toolInput:"{}" — the preflight failure tells the agent to chunk
+// instead of surfacing the Abnormal API's "Validation failed" 400.
+export const REMEDIATE_MAX_EXPLICIT_MESSAGES = parsePositiveInt("REMEDIATE_MAX_EXPLICIT_MESSAGES", 20);
+
 // ── Conversation storage v2 (split-document + blob offload) ──
 // See _plans/conversation-storage-split-blob-offload.md.
 //
@@ -292,6 +319,32 @@ export function validateConfig(): void {
     );
   }
 
+  // Output-budget guardrails. The three budgets must nest:
+  //   TRIM_TRIGGER_THRESHOLD < NEO_CONTEXT_MAX_INPUT_TOKENS < 200K (hard)
+  // Compression must start before the ceiling, and the ceiling must sit
+  // under Anthropic's 200K prompt limit so we have headroom for the
+  // system prompt + tool schemas not counted in message estimates.
+  if (TRIM_TRIGGER_THRESHOLD >= NEO_CONTEXT_MAX_INPUT_TOKENS) {
+    console.warn(
+      `TRIM_TRIGGER_THRESHOLD (${TRIM_TRIGGER_THRESHOLD}) >= NEO_CONTEXT_MAX_INPUT_TOKENS ` +
+      `(${NEO_CONTEXT_MAX_INPUT_TOKENS}) — ceiling enforcement has no headroom above the ` +
+      `compression trigger. Lower TRIM_TRIGGER_THRESHOLD or raise NEO_CONTEXT_MAX_INPUT_TOKENS.`,
+    );
+  }
+  if (NEO_CONTEXT_MAX_INPUT_TOKENS >= 200_000) {
+    console.warn(
+      `NEO_CONTEXT_MAX_INPUT_TOKENS (${NEO_CONTEXT_MAX_INPUT_TOKENS}) >= 200K — Anthropic's ` +
+      `prompt-too-long ceiling is 200K and the system prompt + tool schemas add to every call. ` +
+      `Lower NEO_CONTEXT_MAX_INPUT_TOKENS (default 180K leaves ~20K headroom).`,
+    );
+  }
+  if (HAIKU_INPUT_MAX_TOKENS >= 200_000) {
+    console.warn(
+      `HAIKU_INPUT_MAX_TOKENS (${HAIKU_INPUT_MAX_TOKENS}) >= 200K — Haiku's compression call ` +
+      `will 400 prompt-too-long and cascade to hard-truncation. Keep below 180K.`,
+    );
+  }
+
   if (env.MOCK_MODE) {
     console.warn("Running in MOCK MODE — tool calls return simulated data.");
     console.warn("Set MOCK_MODE=false in .env and add Azure credentials to use real APIs.");
@@ -459,6 +512,20 @@ dataset must be queried via the \`query_csv\` tool using the provided
 \`csv_id\`. The table name is always \`csv\`. Prefer SQL aggregations
 (COUNT, GROUP BY, AVG) over raw row dumps. Queries must be read-only
 (SELECT / WITH / PRAGMA table_info). Query results are limited to 100 rows.
+
+## MULTI-STEP BATCH OPERATIONS
+
+For any request that will require 3+ tool calls in sequence (e.g.
+remediating multiple messages, isolating multiple machines, investigating
+N users), CALL THE \`emit_plan\` TOOL FIRST before executing any step.
+Pass the ordered list of steps and an estimate of total tool calls. This
+persists the plan to the conversation, so if your per-turn output budget
+is exhausted mid-execution, the remaining steps can be resumed on the
+user's next message without re-prompting. Skip \`emit_plan\` only for
+single-step responses or purely informational replies. If you cannot
+enumerate the steps yet (e.g. you need search results first), run the
+discovery tool, then call \`emit_plan\` with the concrete batch before
+starting the destructive loop.
 
 ## CONTEXT
 - Environment: ${ORG_NAME} — treat all data with appropriate sensitivity

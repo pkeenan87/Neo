@@ -161,7 +161,8 @@ export type LogEventType =
   | "conversation_blob_resolve"
   | "conversation_checkpoint_written"
   | "conversation_store_mode_override"
-  | "conversation_dual_write_divergence";
+  | "conversation_dual_write_divergence"
+  | "context_engineering";
 
 export interface LogIdentityContext {
   userName: string;
@@ -207,6 +208,7 @@ export type AgentEventType =
   | "error"
   | "warning"
   | "context_trimmed"
+  | "output_truncated"
   | "skill_invocation"
   | "interrupted";
 
@@ -236,9 +238,84 @@ export type AgentEvent =
   | { type: "error"; message: string; code?: string }
   | { type: "warning"; message: string; code: string }
   | { type: "context_trimmed"; originalTokens: number; newTokens: number; method: "truncation" | "summary" }
+  // output_truncated carries the full `remainingPlan.planText` so the
+  // client can show "here's what I was about to do next". planText may
+  // contain UPNs / KQL / indicator values — the same data class the
+  // authenticated session owner already sees via `tool_call` /
+  // `tool_result` stream events, so this is not a new exposure
+  // surface, but it is NOT sanitised for multi-tenant / operator-
+  // shared pipelines. See security review S4.
+  | { type: "output_truncated"; phase: "tool_use" | "text"; message: string; remainingPlan: InProgressPlan | null }
   | { type: "usage"; usage: TokenUsage; model: ModelPreference }
   | { type: "skill_invocation"; skill: { id: string; name: string } }
   | { type: "interrupted" };
+
+/**
+ * A multi-step plan the agent committed to before running a batch
+ * operation, persisted on the conversation root so the next user turn
+ * can automatically resume the unexecuted steps when the previous turn
+ * was truncated by Anthropic's output-token cap mid-tool-use.
+ *
+ * Captured explicitly via the `emit_plan` tool (agent-declared), with a
+ * best-effort fallback to the text of the last assistant message when
+ * no explicit plan was emitted but truncation fires anyway.
+ *
+ * Cleared when the remaining-tool-calls count reaches zero on a clean
+ * `end_turn`. Versioned so future plan shapes (structured steps,
+ * per-step status) can evolve.
+ */
+export interface InProgressPlan {
+  schemaVersion: 1;
+  createdAt: string;
+  planText: string;
+  toolCallsRemaining: number;
+  originalTurnNumber: number;
+  /** Number of consecutive resumption turns this plan has survived.
+   *  Starts at 0, increments every time the agent loop resumes a turn
+   *  carrying this plan. Circuit-broken at
+   *  MAX_PLAN_RESUMPTION_ATTEMPTS to prevent an infinite loop when the
+   *  agent keeps exhausting its output budget on the same step. */
+  resumptionCount?: number;
+}
+
+/** Maximum consecutive auto-resumptions before the agent loop halts
+ *  with an explicit error and clears the plan. Not configurable via
+ *  env var — this is a safety rail, not a tuning knob. */
+export const MAX_PLAN_RESUMPTION_ATTEMPTS = 3;
+
+export function isInProgressPlan(value: unknown): value is InProgressPlan {
+  if (!value || typeof value !== "object") return false;
+  const v = value as Record<string, unknown>;
+  return (
+    v.schemaVersion === 1 &&
+    typeof v.createdAt === "string" &&
+    typeof v.planText === "string" &&
+    typeof v.toolCallsRemaining === "number" &&
+    typeof v.originalTurnNumber === "number"
+  );
+}
+
+/**
+ * Thrown by `validateRemediateInput` (and other destructive-batch
+ * tools) when the agent-supplied batch exceeds the per-tool cap — the
+ * executor catches it and surfaces a `tool_result` with `isError:true`
+ * instructing the agent to chunk the batch. Distinct class so the
+ * executor can match by instanceof rather than string-sniffing.
+ */
+export class BatchTooLargeError extends Error {
+  readonly actual: number;
+  readonly limit: number;
+  constructor(tool: string, actual: number, limit: number) {
+    super(
+      `${tool}: batch of ${actual} items exceeds the per-call limit of ${limit}. ` +
+        `Chunk the batch to ≤${limit} items per call and invoke the tool again for each chunk.`,
+    );
+    Object.setPrototypeOf(this, BatchTooLargeError.prototype);
+    this.name = "BatchTooLargeError";
+    this.actual = actual;
+    this.limit = limit;
+  }
+}
 
 // ─────────────────────────────────────────────────────────────
 //  Session
@@ -271,6 +348,9 @@ export interface Session {
   lastActivityAt: Date;
   messageCount: number;
   pendingConfirmation: PendingTool | null;
+  /** See Conversation.inProgressPlan — optional so pre-feature
+   *  sessions that predate this field round-trip safely. */
+  inProgressPlan?: InProgressPlan | null;
 }
 
 export interface SessionMeta {
@@ -303,12 +383,17 @@ export interface Conversation {
   channel: Channel;
   messages: Message[];
   pendingConfirmation: PendingTool | null;
+  /** Optional multi-step plan the agent committed to. Non-null when a
+   *  previous turn was truncated mid-execution; the next user turn
+   *  uses the plan as a resumption hint in the system prompt. Cleared
+   *  once the remaining steps complete. See _plans/output-budget.md. */
+  inProgressPlan?: InProgressPlan | null;
   model?: string;
   ttl?: number;
   csvAttachments?: CSVReference[];
 }
 
-export type ConversationMeta = Omit<Conversation, "messages" | "pendingConfirmation">;
+export type ConversationMeta = Omit<Conversation, "messages" | "pendingConfirmation" | "inProgressPlan">;
 
 // ─────────────────────────────────────────────────────────────
 //  Conversation v2 — split-document schema
@@ -355,6 +440,8 @@ export interface ConversationV2Root {
   latestCheckpointId: string | null;
   rollingSummary: string | null;
   pendingConfirmation: PendingTool | null;
+  /** See Conversation.inProgressPlan. Narrow root patch endpoint on v2. */
+  inProgressPlan?: InProgressPlan | null;
   model?: string;
   ttl?: number;
   csvAttachments?: CSVReference[];
@@ -457,7 +544,8 @@ export interface DualWriteDivergencePayload {
     | "setPendingConfirmation"
     | "clearPendingConfirmation"
     | "deleteConversation"
-    | "createConversation";
+    | "createConversation"
+    | "setInProgressPlan";
   errorMessage: string;
   ownerId?: string;
 }

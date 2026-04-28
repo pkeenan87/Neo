@@ -71,6 +71,14 @@ interface ResponseEvent { type: 'response'; text: string; interrupted?: boolean;
 interface ErrorEvent { type: 'error'; message: string; code?: string }
 interface SkillInvocationEvent { type: 'skill_invocation'; skill: { id: string; name: string } }
 interface InterruptedEvent { type: 'interrupted' }
+interface ContextTrimmedEvent { type: 'context_trimmed'; originalTokens: number; newTokens: number; method: 'truncation' | 'summary' }
+interface OutputTruncatedPlan { planText: string; toolCallsRemaining: number }
+interface OutputTruncatedEvent {
+  type: 'output_truncated'
+  phase: 'tool_use' | 'text'
+  message: string
+  remainingPlan: OutputTruncatedPlan | null
+}
 
 type StreamEvent =
   | SessionEvent
@@ -82,6 +90,8 @@ type StreamEvent =
   | ErrorEvent
   | SkillInvocationEvent
   | InterruptedEvent
+  | ContextTrimmedEvent
+  | OutputTruncatedEvent
 
 interface TextBlock { type: 'text'; text: string }
 
@@ -894,6 +904,46 @@ export function ChatInterface({
                 },
               ])
               break
+            case 'context_trimmed': {
+              // Passive status — Neo compressed earlier context to stay
+              // within the per-turn input-token budget. No action
+              // required from the user.
+              const delta = event.originalTokens - event.newTokens
+              if (delta > 1000) {
+                setMessages(prev => [
+                  ...prev,
+                  {
+                    id: crypto.randomUUID(),
+                    role: 'assistant',
+                    content: `_Context was compressed to fit the per-turn budget (${event.originalTokens.toLocaleString()} → ${event.newTokens.toLocaleString()} tokens)._`,
+                  },
+                ])
+              }
+              break
+            }
+            case 'output_truncated': {
+              // Actionable — the agent's per-turn OUTPUT budget was
+              // exhausted. Show the remaining plan (if any) and hint
+              // that the next message will resume the workflow.
+              setIsThinking(false)
+              // Wrap planText in a fenced code block so any adversarial
+              // Markdown that landed in the persisted plan (headers,
+              // links, blockquotes) renders as preformatted text rather
+              // than formatting directives. See security review S8.
+              const planPreview = event.remainingPlan
+                ? `\n\n**Remaining plan** (${event.remainingPlan.toolCallsRemaining} step${event.remainingPlan.toolCallsRemaining === 1 ? '' : 's'} left):\n\n\`\`\`\n${event.remainingPlan.planText}\n\`\`\``
+                : ''
+              setMessages(prev => [
+                ...prev,
+                {
+                  id: crypto.randomUUID(),
+                  role: 'assistant',
+                  content: `${event.message}${planPreview}`,
+                  toolsUsed: toolsUsed.length > 0 ? [...toolsUsed] : undefined,
+                },
+              ])
+              break
+            }
           }
         } catch {
           // Skip malformed JSON lines

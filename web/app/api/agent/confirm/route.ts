@@ -7,7 +7,7 @@ import { resolveAuth, type ResolvedAuth } from "@/lib/auth-helpers";
 import { canUseTool } from "@/lib/permissions";
 import { logger, hashPii, setLogContext } from "@/lib/logger";
 import { withStoreModeFromRequest } from "@/lib/conversation-store-mode";
-import type { ConfirmRequest, LogIdentityContext } from "@/lib/types";
+import type { ConfirmRequest, LogIdentityContext, InProgressPlan } from "@/lib/types";
 
 export async function POST(request: NextRequest) {
   const identity = await resolveAuth(request);
@@ -171,16 +171,19 @@ async function handleConfirmPost(request: NextRequest, identity: ResolvedAuth): 
         // truncation is distinct from other agent errors because we must
         // NOT persist the partial assistant turn.
         if ((err as Error).name === "IncompleteToolUseError") {
+          const errWithPlan = err as Error & { remainingPlan?: InProgressPlan | null };
           logger.warn("Agent loop truncated mid-tool-use (resume path)", "api/confirm", {
             sessionId: body.sessionId,
             errorMessage: (err as Error).message,
           });
           await writer.write(
             encodeNDJSON({
-              type: "error",
+              type: "output_truncated",
+              phase: "tool_use",
               message:
-                "The agent couldn't finish planning the next step within the token budget. Try a more focused follow-up.",
-              code: "INCOMPLETE_TOOL_USE",
+                "Neo's per-turn output budget was exhausted before it could finish planning the next step. " +
+                "Type your next message and Neo will pick up from the remaining plan.",
+              remainingPlan: errWithPlan.remainingPlan ?? null,
             }),
           );
           return;

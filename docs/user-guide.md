@@ -18,6 +18,7 @@ This guide covers day-to-day usage of Neo for both regular users (readers) and a
   - [Managing Sessions](#managing-sessions)
   - [One-Shot Prompts (Agent-to-Agent Composition)](#one-shot-prompts-agent-to-agent-composition)
     - [Security considerations for agent-to-agent use](#security-considerations-for-agent-to-agent-use)
+  - [Context Management](#context-management)
   - [Settings](#settings)
   - [Debugging](#debugging)
 - [Common Tasks — Reader](#common-tasks--reader)
@@ -350,6 +351,36 @@ The `neo prompt` subcommand is designed to be invoked by other agents and CI sys
 - **Prefer `NEO_API_KEY` over `--api-key` for non-interactive callers.** The `--api-key` flag is visible in `ps aux` and often captured by container / CI audit logs. The env-var path avoids process-table exposure entirely. `neo prompt` emits a one-line stderr warning when invoked with `--api-key` to flag this at runtime.
 
 - **stdin is capped at 1 MB.** `neo prompt -` reads from stdin until EOF or the 1 MB limit; above that the stream is destroyed and the process exits `2`. This prevents an accidental `neo prompt - < /dev/urandom` or a misbehaving upstream from OOMing the CLI host, and doubles as a coarse upper bound on prompt-injection payload size for untrusted callers.
+
+### Context Management
+
+Long investigations (many tool calls, large KQL result sets, batch remediations) will approach Anthropic's per-request 200 K input-token ceiling. Neo manages this automatically with a layered strategy; the user-visible signals are covered here so you know what you're seeing.
+
+**What Neo does behind the scenes**
+
+- **Compresses older context** once the estimated input size crosses `TRIM_TRIGGER_THRESHOLD` (default 140 K). A Haiku call summarises the middle of the conversation into 3–5 bullet points; the anchor (first user message) and the recent N messages are preserved verbatim.
+- **Enforces an input-token ceiling** of `NEO_CONTEXT_MAX_INPUT_TOKENS` (default 180 K) after compression. If the summary + recent window still exceeds the ceiling, Neo drops the oldest turn pairs until it fits. Leaves 20 K headroom for the system prompt + tool schemas.
+- **Offloads oversized older tool results to blob storage** when projected input exceeds the ceiling. The current turn's tool results stay inline; only older ones are replaced with blob references. The agent can re-fetch the full payload via `get_full_tool_result` when it needs to.
+- **Summarises huge first messages** if the anchor alone exceeds `FIRST_MESSAGE_MAX_TOKENS` (default 100 K). Common trigger: copy-pasted log dumps or CSV content.
+
+**Two user-visible status signals**
+
+1. **Context compressed** — passive notice when Neo compressed earlier conversation to stay within budget. In the web UI: a one-line italic status message. In the CLI: a dim stderr line `[context compressed — N → M tokens via summary]`. No action required; the assistant response continues as normal.
+
+2. **Output truncated** — actionable notice when Neo ran out of per-turn *output* budget mid-execution (distinct from input compression). Typically fires during multi-step batch workflows (e.g. remediating dozens of messages, isolating several machines). Neo preserves the remaining plan and automatically resumes it on your next message.
+
+**How plan resumption works**
+
+When Neo starts a multi-step batch, it calls an internal `emit_plan` tool to persist the plan on the conversation. If the current turn runs out of output budget mid-execution:
+
+- The web UI shows the remaining plan with a hint: *"Type your next message and Neo will pick up from the remaining plan."*
+- Your next message (even a simple "continue" or a course-correction like "actually, skip step 3") automatically includes the plan in Neo's context. Neo resumes from the unexecuted steps without re-prompting for confirmations you already approved.
+
+**If you want to abandon the plan**, just tell Neo explicitly ("stop", "cancel", "do X instead"). The resumption hint is non-binding — Neo follows your most recent instruction over the stale plan.
+
+**Destructive-batch preflight**
+
+Tools that accept an explicit list of items to act on (e.g. `remediate_abnormal_messages`) reject batches larger than `REMEDIATE_MAX_EXPLICIT_MESSAGES` (default 20) with a `BATCH_TOO_LARGE` error. This is deliberate — surprisingly-large batches are the exact symptom of the agent running out of output budget mid-JSON, and the preflight catches it before the vendor API returns a generic 400. Neo will see the error and offer to chunk the batch for you.
 
 ### Model Selection
 
