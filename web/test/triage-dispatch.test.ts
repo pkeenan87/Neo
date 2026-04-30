@@ -18,7 +18,7 @@ vi.mock("../lib/skill-store", () => {
     },
   };
   return {
-    getSkill: (id: string) => skills[id] ?? undefined,
+    getSkill: async (id: string) => skills[id] ?? undefined,
   };
 });
 
@@ -52,15 +52,15 @@ function makeSource(overrides: Partial<TriageSource> = {}): TriageSource {
 }
 
 describe("resolveTriageSkill", () => {
-  it("resolves a mapped product:alertType to the correct skill", () => {
-    const result = resolveTriageSkill(makeSource());
+  it("resolves a mapped product:alertType to the correct skill", async () => {
+    const result = await resolveTriageSkill(makeSource());
     expect(result).not.toBeNull();
     expect(result!.skillId).toBe("defender-endpoint-triage");
     expect(result!.skill.name).toBe("Defender Endpoint Triage");
   });
 
-  it("falls back to the generic catch-all for unmapped alert types", () => {
-    const result = resolveTriageSkill(makeSource({
+  it("falls back to the generic catch-all for unmapped alert types", async () => {
+    const result = await resolveTriageSkill(makeSource({
       product: "Sentinel",
       alertType: "Unknown.AlertType",
     }));
@@ -68,9 +68,9 @@ describe("resolveTriageSkill", () => {
     expect(result!.skillId).toBe("generic-alert-triage");
   });
 
-  it("falls back to catch-all when the mapped skill ID is not registered", () => {
+  it("falls back to catch-all when the mapped skill ID is not registered", async () => {
     // DefenderXDR:SomeOtherType is not in TRIAGE_SKILL_MAP
-    const result = resolveTriageSkill(makeSource({
+    const result = await resolveTriageSkill(makeSource({
       alertType: "SomeOtherType",
     }));
     expect(result).not.toBeNull();

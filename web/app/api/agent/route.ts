@@ -94,7 +94,7 @@ async function handleAgentPost(request: NextRequest, identity: ResolvedAuth): Pr
     const userArgs = parts.slice(1).join(" ");
 
     if (skillId) {
-      const skill = getSkill(skillId);
+      const skill = await getSkill(skillId);
       if (skill) {
         if (skill.requiredRole === "admin" && identity.role !== "admin") {
           return new Response(

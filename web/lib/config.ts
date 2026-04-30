@@ -286,6 +286,19 @@ export function validateConfig(): void {
     throw new Error("Missing ANTHROPIC_API_KEY in .env — server cannot start");
   }
 
+  // Multi-instance deployment guard — production MUST have Cosmos
+  // configured. Without it, the in-memory session store + skill cache
+  // + API key file cache produce different state per instance, which
+  // silently breaks correctness behind a load balancer. See
+  // _plans/multi-instance-deployment.md.
+  if (process.env.NODE_ENV === "production" && !env.COSMOS_ENDPOINT) {
+    throw new Error(
+      "Multi-instance deployment requires COSMOS_ENDPOINT in production. " +
+        "Set the env var to your Cosmos DB endpoint (e.g. https://<account>.documents.azure.com:443/), " +
+        "or set NODE_ENV=development if running on a single dev machine.",
+    );
+  }
+
   if (process.env.DEV_AUTH_BYPASS === "true" && process.env.NODE_ENV !== "development") {
     throw new Error("DEV_AUTH_BYPASS must not be enabled outside of development — aborting.");
   }
@@ -567,7 +580,7 @@ export async function getSystemPrompt(role: Role): Promise<string> {
     }
   }
 
-  const skills = getSkillsForRole(role);
+  const skills = await getSkillsForRole(role);
   if (skills.length === 0) return prompt;
 
   const skillBlocks = skills.map((skill) => {

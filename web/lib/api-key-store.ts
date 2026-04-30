@@ -5,6 +5,7 @@ import { fileURLToPath } from "url";
 import { CosmosClient, type Container } from "@azure/cosmos";
 import { ManagedIdentityCredential } from "@azure/identity";
 import { env } from "./config";
+import { logger } from "./logger";
 import { encryptApiKey, decryptApiKey } from "./api-key-crypto";
 import type { Role } from "./permissions";
 
@@ -46,13 +47,25 @@ const CONTAINER_NAME = "api-keys";
 const DATABASE_NAME = "neo-db";
 
 // ─────────────────────────────────────────────────────────────
-//  JSON file fallback (existing behavior)
+//  JSON file fallback — DEV / MOCK_MODE ONLY.
+//
+//  Production with Cosmos configured (`useCosmosOnly()` true) bypasses
+//  the file path entirely: the file is never opened, the watcher is
+//  never installed, and a Cosmos miss returns undefined rather than
+//  falling back to a stale file. This is the security fix from the
+//  multi-instance migration — the file path was a known hole that
+//  let revoked keys keep working on instances that hadn't re-read
+//  api-keys.json. See _plans/multi-instance-deployment.md.
 // ─────────────────────────────────────────────────────────────
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const KEY_FILE = resolve(__dirname, "../api-keys.json");
 
 let keyCache: ApiKeyEntry[] = [];
+
+function useCosmosOnly(): boolean {
+  return Boolean(env.COSMOS_ENDPOINT) && !env.MOCK_MODE;
+}
 
 function loadKeys(): void {
   try {
@@ -63,14 +76,15 @@ function loadKeys(): void {
   }
 }
 
-loadKeys();
-
-try {
-  watch(KEY_FILE, () => {
-    loadKeys();
-  });
-} catch {
-  // File may not exist yet
+if (!useCosmosOnly()) {
+  loadKeys();
+  try {
+    watch(KEY_FILE, () => {
+      loadKeys();
+    });
+  } catch {
+    // File may not exist yet
+  }
 }
 
 function safeCompare(a: string, b: string): boolean {
@@ -128,21 +142,35 @@ function isSuperAdmin(ownerId: string): boolean {
 // ─────────────────────────────────────────────────────────────
 
 /**
- * Look up an API key. Tries Cosmos DB first, falls back to JSON file
- * only when Cosmos is not configured. Cosmos errors fail closed.
+ * Look up an API key.
+ *
+ * Production (Cosmos configured AND not MOCK_MODE) is Cosmos-only —
+ * a miss returns undefined regardless of what's in api-keys.json. This
+ * closes the multi-instance security hole where a revoked key in
+ * Cosmos was still accepted on instances that had cached the
+ * pre-revocation state of the file. See
+ * _plans/multi-instance-deployment.md.
+ *
+ * Dev / MOCK_MODE: Cosmos-first, file-fallback for unmigrated keys.
+ * Cosmos errors fail closed in either mode.
  */
 export async function findApiKey(
   key: string
 ): Promise<ApiKeyEntry | undefined> {
   const container = getApiKeysContainer();
+  const cosmosOnly = useCosmosOnly();
 
   if (container) {
     try {
       const hash = hashApiKey(key);
       const { resource } = await container.item(hash, hash).read<ApiKeyRecord>();
 
-      // Key not in Cosmos — check JSON file for unmigrated keys
-      if (!resource) return findApiKeyFromFile(key);
+      // Key not in Cosmos:
+      //   - Production: undefined — DO NOT consult the file.
+      //   - Dev: fall back to file for unmigrated keys.
+      if (!resource) {
+        return cosmosOnly ? undefined : findApiKeyFromFile(key);
+      }
 
       // Known Cosmos key — enforce revocation and expiration (never fall through)
       if (resource.revoked) return undefined;
@@ -152,14 +180,29 @@ export async function findApiKey(
       if (!safeCompare(decrypted, key)) return undefined;
 
       return { key, role: resource.role, label: resource.label };
-    } catch {
+    } catch (err: unknown) {
       // Cosmos configured but erroring — fail closed to prevent
-      // revoked keys from authenticating via JSON fallback
+      // revoked keys from authenticating via JSON fallback. Log a
+      // distinct event so on-call dashboards can distinguish
+      // "Cosmos unavailable" from "bad key" — both surface as 401
+      // to the client but the operator response is very different.
+      logger.error(
+        "API key lookup failed — Cosmos unavailable, denying request",
+        "api-key-store",
+        {
+          event: "cosmos_unavailable",
+          errorMessage: err instanceof Error ? err.message : String(err),
+          errorCode:
+            err && typeof err === "object" && "code" in err
+              ? (err as { code: number | string }).code
+              : undefined,
+        },
+      );
       return undefined;
     }
   }
 
-  // Cosmos not configured — JSON file is the only source
+  // Cosmos not configured — JSON file is the only source (dev only).
   return findApiKeyFromFile(key);
 }
 

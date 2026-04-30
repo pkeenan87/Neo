@@ -86,8 +86,8 @@ vi.mock("../lib/skill-store", () => ({
 
 // Mock circuit breaker
 vi.mock("../lib/triage-circuit-breaker", () => ({
-  checkCircuitBreaker: vi.fn().mockReturnValue({ open: false }),
-  recordTriageOutcome: vi.fn(),
+  checkCircuitBreaker: vi.fn().mockResolvedValue({ open: false }),
+  recordTriageOutcome: vi.fn().mockResolvedValue(undefined),
 }));
 
 import { POST } from "../app/api/triage/route";

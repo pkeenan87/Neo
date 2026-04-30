@@ -15,7 +15,7 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  const skills = getSkillsForRole(identity.role).map(toSkillMeta);
+  const skills = (await getSkillsForRole(identity.role)).map(toSkillMeta);
   return NextResponse.json({ skills });
 }
 
@@ -54,12 +54,12 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: contentError }, { status: 400 });
   }
 
-  if (getSkill(body.id)) {
+  if (await getSkill(body.id)) {
     return NextResponse.json({ error: "Skill already exists" }, { status: 409 });
   }
 
   try {
-    const skill = createSkill(body.id, body.content);
+    const skill = await createSkill(body.id, body.content);
     return NextResponse.json({ skill: toSkillMeta(skill) }, { status: 201 });
   } catch (err) {
     console.error(`[skills] POST /api/skills failed:`, err);

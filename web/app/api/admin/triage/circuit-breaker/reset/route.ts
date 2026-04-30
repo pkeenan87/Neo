@@ -12,7 +12,21 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
 
-  resetCircuitBreaker();
+  // Surface persistent storage errors as 500. Without this, the admin
+  // sees 200 and walks away while the fleet stays tripped because the
+  // Cosmos write never landed.
+  try {
+    await resetCircuitBreaker();
+  } catch (err) {
+    logger.error("Triage circuit breaker reset failed", "admin-triage", {
+      ownerIdHash: hashPii(identity.ownerId),
+      errorMessage: err instanceof Error ? err.message : String(err),
+    });
+    return NextResponse.json(
+      { error: "Failed to reset circuit breaker — see server logs" },
+      { status: 500 },
+    );
+  }
 
   logger.info("Triage circuit breaker manually reset", "admin-triage", {
     ownerIdHash: hashPii(identity.ownerId),

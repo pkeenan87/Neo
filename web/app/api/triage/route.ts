@@ -32,25 +32,21 @@ import { TRIAGE_RUN_TTL } from "@/lib/types";
 
 // ── Per-caller rate limiter ───────────────────────────────────
 // Prevents a single service principal from tripping the circuit breaker
-// by flooding the endpoint with requests. Resets per window.
+// by flooding the endpoint with requests. The cap is GLOBAL across all
+// App Service instances — backed by the Cosmos-shared counter primitive
+// so a caller hitting two instances doesn't double their budget. See
+// _plans/multi-instance-deployment.md.
 const RATE_LIMIT_PER_CALLER = 100;
 const RATE_LIMIT_WINDOW_MS = 15 * 60 * 1000; // 15 min
 
-interface CallerWindow {
-  count: number;
-  windowStart: number;
-}
-const callerWindows = new Map<string, CallerWindow>();
-
-function checkCallerRateLimit(callerId: string): boolean {
-  const now = Date.now();
-  const entry = callerWindows.get(callerId);
-  if (!entry || now - entry.windowStart > RATE_LIMIT_WINDOW_MS) {
-    callerWindows.set(callerId, { count: 1, windowStart: now });
-    return true;
-  }
-  entry.count++;
-  return entry.count <= RATE_LIMIT_PER_CALLER;
+async function checkCallerRateLimit(callerId: string): Promise<boolean> {
+  const { incrementCounter } = await import("@/lib/instance-shared-counter");
+  const result = await incrementCounter(
+    `rate:triage:${callerId}`,
+    RATE_LIMIT_WINDOW_MS,
+    RATE_LIMIT_PER_CALLER,
+  );
+  return result.allowed;
 }
 
 const VALID_PRODUCTS = new Set<string>([
@@ -320,7 +316,7 @@ async function handleTriagePost(request: NextRequest, identity: ResolvedAuth): P
     });
 
     // 3a. Per-caller rate limit
-    if (!checkCallerRateLimit(identity.ownerId)) {
+    if (!(await checkCallerRateLimit(identity.ownerId))) {
       logger.warn("Triage rate limit exceeded for caller", "api/triage", {
         callerId: hashPii(identity.ownerId),
       });
@@ -331,7 +327,7 @@ async function handleTriagePost(request: NextRequest, identity: ResolvedAuth): P
     }
 
     // 3b. Circuit breaker
-    const breaker = checkCircuitBreaker();
+    const breaker = await checkCircuitBreaker();
     if (breaker.open) {
       logger.warn("Circuit breaker open — returning escalate", "api/triage", { reason: breaker.reason });
       const response = buildFailSafeResponse(
@@ -361,7 +357,7 @@ async function handleTriagePost(request: NextRequest, identity: ResolvedAuth): P
     }
 
     // 5. Resolve skill
-    const resolved = resolveTriageSkill(source);
+    const resolved = await resolveTriageSkill(source);
     if (!resolved) {
       const response: TriageResponse = {
         verdict: "inconclusive",
@@ -471,7 +467,7 @@ async function handleTriagePost(request: NextRequest, identity: ResolvedAuth): P
           dryRun,
           reason: "response_truncated",
         };
-        recordTriageOutcome(false);
+        void recordTriageOutcome(false);
         run.response = failSafe;
         run.durationMs = durationMs;
         run.rawClaudeResponse = agentResult.text;
@@ -486,7 +482,7 @@ async function handleTriagePost(request: NextRequest, identity: ResolvedAuth): P
 
       // 13. Record outcome
       const success = !triageResponse.reason?.startsWith("neo_");
-      recordTriageOutcome(success);
+      void recordTriageOutcome(success);
 
       // 14. Track usage (no budget enforcement)
       for (const usage of accumulatedUsage) {
@@ -512,7 +508,7 @@ async function handleTriagePost(request: NextRequest, identity: ResolvedAuth): P
       return NextResponse.json(triageResponse);
     } catch (err) {
       // 17. Fail-safe
-      recordTriageOutcome(false);
+      void recordTriageOutcome(false);
       const durationMs = Date.now() - startMs;
       logger.error("Triage pipeline error", "api/triage", {
         alertId: source.alertId,

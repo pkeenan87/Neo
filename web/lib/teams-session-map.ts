@@ -1,6 +1,17 @@
 // Read-through cache from Teams conversationId to Neo sessionId.
-// In-memory for fast lookups; backed by Cosmos DB for persistence
-// across restarts and multi-instance deployments.
+//
+// The in-memory `map` is per-instance best-effort — a write on
+// instance A populates A's map but NOT B's, so B will cache-miss on
+// its first lookup and fall through to Cosmos. The Cosmos document
+// (`teams-mappings` container, partition key /id) is the source of
+// truth across the fleet; the cache is purely a hot-path latency
+// optimization. See _plans/multi-instance-deployment.md.
+//
+// TTL is intentionally short so a stale per-instance cache entry
+// doesn't outlive a relevant Cosmos write from a sibling instance.
+// If two instances handle alternating messages on the same Teams
+// thread, the worst case is that B's first lookup is a Cosmos point-
+// read — fast (<10ms, ~1 RU on /id partition) and idempotent.
 
 import { env } from "./config";
 import { logger } from "./logger";
@@ -17,7 +28,11 @@ interface MapEntry {
   cachedAt: number;
 }
 
-const TTL_MS = 35 * 60 * 1000; // in-memory cache TTL
+// Short TTL so a per-instance cache entry doesn't outlive a relevant
+// write from a sibling instance. Cosmos is the source of truth; a
+// cache miss costs ~1 RU and <10ms, which is acceptable to keep the
+// multi-instance contract simple.
+const TTL_MS = 60 * 1000; // 60s — was 35min when single-instance was assumed
 const map = new Map<string, MapEntry>();
 
 // Periodic sweep for stale cache entries
@@ -41,9 +56,17 @@ function useCosmosDb(): boolean {
 export async function getSessionId(
   conversationId: string,
 ): Promise<string | undefined> {
-  // Fast path: in-memory cache
+  // Fast path: in-memory cache. Enforce TTL on the hit path —
+  // without this, the periodic sweep is the only enforcement, which
+  // means an entry could be served for up to ~2× TTL (sweep period +
+  // sweep evaluation lag). Falling through to Cosmos on TTL expiry
+  // is exactly what we want: the Cosmos round-trip refreshes the
+  // entry with the up-to-date sessionId from sibling instances.
   const cached = map.get(conversationId);
-  if (cached) return cached.sessionId;
+  if (cached && Date.now() - cached.cachedAt < TTL_MS) {
+    return cached.sessionId;
+  }
+  if (cached) map.delete(conversationId); // expired — drop and re-fetch
 
   // Slow path: Cosmos DB lookup
   if (useCosmosDb()) {

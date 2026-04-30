@@ -18,19 +18,19 @@ const GENERIC_SKILL_ID = "generic-alert-triage";
  * catch-all skill if no specific mapping exists. Returns null only if
  * neither the mapped skill nor the catch-all is registered.
  */
-export function resolveTriageSkill(
+export async function resolveTriageSkill(
   source: TriageSource,
-): { skillId: string; skill: Skill } | null {
+): Promise<{ skillId: string; skill: Skill } | null> {
   const key = `${source.product}:${source.alertType}`;
   const mappedId = TRIAGE_SKILL_MAP[key];
 
   if (mappedId) {
-    const skill = getSkill(mappedId);
+    const skill = await getSkill(mappedId);
     if (skill) return { skillId: mappedId, skill };
   }
 
   // Fall back to generic catch-all
-  const generic = getSkill(GENERIC_SKILL_ID);
+  const generic = await getSkill(GENERIC_SKILL_ID);
   if (generic) return { skillId: GENERIC_SKILL_ID, skill: generic };
 
   return null;

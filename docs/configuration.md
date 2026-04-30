@@ -31,6 +31,7 @@ This guide covers all configuration options for the Neo web server and CLI clien
   - [Skill File Format](#skill-file-format)
 - [Chat Persistence (Cosmos DB)](#chat-persistence-cosmos-db)
   - [Conversation Schema (v1 vs v2)](#conversation-schema-v1-vs-v2)
+  - [Horizontal scaling (multiple App Service instances)](#horizontal-scaling-multiple-app-service-instances)
 - [Prompt Injection Guard](#prompt-injection-guard)
 - [Structured Logging](#structured-logging)
 - [Azure Deployment](#azure-deployment)
@@ -948,6 +949,61 @@ Rollback is symmetric: flip the mode backward one step at a time. For conversati
 ### Without Cosmos DB
 
 If `COSMOS_ENDPOINT` is not set (or `MOCK_MODE` is `true`), Neo falls back to the in-memory session store. A warning is logged once at startup. Conversations are not persisted across server restarts, and the web UI sidebar will not show conversation history.
+
+In **production** (`NODE_ENV=production`), `COSMOS_ENDPOINT` is mandatory. The server fails fast at boot with a clear error message if the env var is unset — see "Horizontal scaling" below for why.
+
+### Horizontal scaling (multiple App Service instances)
+
+Neo is safe to run on multiple App Service instances behind a load balancer. Conversations, browser auth (JWT), API/CLI auth (JWKS + Cosmos), the agent loop, the context manager, blob storage, and Event Hub logging are all stateless or externally backed; counters, the skill store, and the API key cache moved to Cosmos in this release so they're safe across instances too. See `_plans/multi-instance-deployment.md` for the migration history.
+
+**Hard requirements**
+
+- `COSMOS_ENDPOINT` must be set in production. The server enforces this with a startup assertion that throws a clear error if missing — no silent in-memory fallback in prod.
+- The two new Cosmos containers `skills` (partition key `/id`) and `instance-shared` (partition key `/key`, 24 h TTL) must exist. Both are created automatically by `scripts/provision-cosmos-db.ps1`. To add them to an already-provisioned account, re-run the script — it's idempotent.
+- The App Service's managed identity needs `Cosmos DB Built-in Data Contributor` on the account (already granted by the provisioning script).
+
+**Recommended scaling rules**
+
+- App Service Plan: **Premium V3** (P1v3 or larger) with min 2, max 4 instances during initial rollout. Scale up to 6+ once you've established a baseline RU + Cosmos throughput envelope.
+- Auto-scale on CPU > 70% sustained for 5 minutes. Triage burst traffic is the dominant load profile; CPU is the right signal.
+- Set the App Service Health Check path to `/api/health` (returns 200 once `validateConfig` passes — bad-config instances drop out of the LB rotation automatically).
+
+**ARR Affinity / sticky sessions**
+
+The steady-state target is **ARR Affinity off** so the LB routes round-robin and the multi-instance correctness paths actually run. With affinity on, sticky sessions hide most of the bugs the new Cosmos-backed counters exist to prevent. Affinity-on is a valid temporary state during the first 24-48 h of rollout — flip it off after a load test confirms the shared-state code is healthy.
+
+To toggle in the Azure portal: **App Service → Configuration → General settings → ARR affinity = Off**.
+
+**Skill migration (one-time)**
+
+Skills used to live on the local file system (`web/skills/*.md`) with `fs.watch` hot-reload — that approach broke when admin updates on instance A weren't visible on instance B. Skills now live in the `skills` Cosmos container in production with a 15 s read-through cache per instance, so an admin save propagates within one cache window without a restart. The window is intentionally tight (vs. the original 60 s) to bound the role-downgrade exploitation window for destructive admin skills.
+
+Run the one-shot migration to copy any existing `skills/*.md` files into Cosmos on cutover:
+
+```bash
+# From a developer workstation with az login + Cosmos data-plane RBAC
+cd web
+npm run migrate:skills -- --dry-run   # report what would migrate
+npm run migrate:skills                # actual run
+
+# Or from App Service SSH using the bundled output:
+node dist/migrate-skills.mjs
+```
+
+The script is idempotent (upsert) so re-running is safe. After the migration, the file system is no longer consulted in production — `MOCK_MODE=true` (dev only) preserves the file-mode workflow.
+
+**What to expect during a rolling deploy**
+
+- Each new instance fails fast at boot if Cosmos is unreachable — health-check then routes traffic away from that instance until it recovers.
+- The first ~30 s of a new instance's life: cache misses on the skill cache and Teams session map fall through to single-RU Cosmos point reads. No user-visible impact at typical traffic.
+- The triage rate limiter and circuit breaker are shared globally from the first request onward — you cannot bypass either by hitting two instances.
+
+**Operator runbook bullets**
+
+- A trip on instance A causes instance B to refuse traffic too. Use `POST /api/admin/triage/circuit-breaker/reset` to clear globally.
+- An API key revocation via the admin UI is honored fleet-wide within ≤60 s (Cosmos lookup happens on every request).
+- A skill update via the admin UI is visible on all instances within 15 s; the saving admin sees their own write immediately.
+- Teams thread continuity survives round-robin LB routing — a thread that lands on instance A can have its next message land on B without creating a duplicate Neo session.
 
 ---
 

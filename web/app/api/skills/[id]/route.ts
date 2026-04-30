@@ -25,7 +25,7 @@ export async function GET(request: NextRequest, { params }: RouteParams) {
     return NextResponse.json({ error: idError }, { status: 400 });
   }
 
-  const skill = getSkill(id);
+  const skill = await getSkill(id);
   if (!skill) {
     return NextResponse.json({ error: "Skill not found" }, { status: 404 });
   }
@@ -54,7 +54,7 @@ export async function PUT(request: NextRequest, { params }: RouteParams) {
     return NextResponse.json({ error: idError }, { status: 400 });
   }
 
-  if (!getSkill(id)) {
+  if (!(await getSkill(id))) {
     return NextResponse.json({ error: "Skill not found" }, { status: 404 });
   }
 
@@ -75,7 +75,7 @@ export async function PUT(request: NextRequest, { params }: RouteParams) {
   }
 
   try {
-    const skill = updateSkill(id, body.content);
+    const skill = await updateSkill(id, body.content);
     return NextResponse.json({ skill: toSkillMeta(skill) });
   } catch (err) {
     console.error(`[skills] PUT /api/skills/${id} failed:`, err);
@@ -99,12 +99,12 @@ export async function DELETE(request: NextRequest, { params }: RouteParams) {
     return NextResponse.json({ error: idError }, { status: 400 });
   }
 
-  if (!getSkill(id)) {
+  if (!(await getSkill(id))) {
     return NextResponse.json({ error: "Skill not found" }, { status: 404 });
   }
 
   try {
-    deleteSkill(id);
+    await deleteSkill(id);
     return NextResponse.json({ deleted: true });
   } catch (err) {
     console.error(`[skills] DELETE /api/skills/${id} failed:`, err);

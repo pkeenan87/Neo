@@ -38,6 +38,12 @@ param(
     [string]$ApiKeysContainerName = "api-keys",
 
     [ValidateNotNullOrEmpty()]
+    [string]$SkillsContainerName = "skills",
+
+    [ValidateNotNullOrEmpty()]
+    [string]$InstanceSharedContainerName = "instance-shared",
+
+    [ValidateNotNullOrEmpty()]
     [string]$Location = "eastus",
 
     [ValidateRange(86400, 31536000)]
@@ -77,7 +83,7 @@ Write-Host ""
 
 # ── Resource Group ─────────────────────────────────────────
 
-Write-Host "1/9 Creating resource group..." -ForegroundColor Green
+Write-Host "1/11 Creating resource group..." -ForegroundColor Green
 az group create `
     --name $ResourceGroupName `
     --location $Location `
@@ -86,7 +92,7 @@ Write-Host "     Resource group '$ResourceGroupName' ready."
 
 # ── Cosmos DB Account ──────────────────────────────────────
 
-Write-Host "2/9 Creating Cosmos DB account (serverless)..." -ForegroundColor Green
+Write-Host "2/11 Creating Cosmos DB account (serverless)..." -ForegroundColor Green
 $existing = az cosmosdb show --name $AccountName --resource-group $ResourceGroupName 2>$null | ConvertFrom-Json
 if ($existing) {
     Write-Host "     Account '$AccountName' already exists — skipping."
@@ -104,7 +110,7 @@ if ($existing) {
 
 # ── Database ───────────────────────────────────────────────
 
-Write-Host "3/9 Creating database..." -ForegroundColor Green
+Write-Host "3/11 Creating database..." -ForegroundColor Green
 $existingDb = az cosmosdb sql database show `
     --account-name $AccountName `
     --resource-group $ResourceGroupName `
@@ -122,7 +128,7 @@ if ($existingDb) {
 
 # ── Container ──────────────────────────────────────────────
 
-Write-Host "4/9 Creating conversations container..." -ForegroundColor Green
+Write-Host "4/11 Creating conversations container..." -ForegroundColor Green
 $existingContainer = az cosmosdb sql container show `
     --account-name $AccountName `
     --resource-group $ResourceGroupName `
@@ -144,7 +150,7 @@ if ($existingContainer) {
 
 # ── Teams Mappings Container ───────────────────────────────
 
-Write-Host "5/9 Creating teams-mappings container..." -ForegroundColor Green
+Write-Host "5/11 Creating teams-mappings container..." -ForegroundColor Green
 $existingMappings = az cosmosdb sql container show `
     --account-name $AccountName `
     --resource-group $ResourceGroupName `
@@ -166,7 +172,7 @@ if ($existingMappings) {
 
 # ── Usage Logs Container ──────────────────────────────────
 
-Write-Host "6/9 Creating usage-logs container..." -ForegroundColor Green
+Write-Host "6/11 Creating usage-logs container..." -ForegroundColor Green
 $existingUsage = az cosmosdb sql container show `
     --account-name $AccountName `
     --resource-group $ResourceGroupName `
@@ -188,7 +194,7 @@ if ($existingUsage) {
 
 # ── API Keys Container ────────────────────────────────────
 
-Write-Host "7/9 Creating api-keys container..." -ForegroundColor Green
+Write-Host "7/11 Creating api-keys container..." -ForegroundColor Green
 $existingApiKeys = az cosmosdb sql container show `
     --account-name $AccountName `
     --resource-group $ResourceGroupName `
@@ -207,9 +213,52 @@ if ($existingApiKeys) {
     Write-Host "     Container '$ApiKeysContainerName' created with /id partition key."
 }
 
+# ── Skills Container (multi-instance source of truth) ─────
+
+Write-Host "8/11 Creating skills container..." -ForegroundColor Green
+$existingSkills = az cosmosdb sql container show `
+    --account-name $AccountName `
+    --resource-group $ResourceGroupName `
+    --database-name $DatabaseName `
+    --name $SkillsContainerName 2>$null | ConvertFrom-Json
+if ($existingSkills) {
+    Write-Host "     Container '$SkillsContainerName' already exists — skipping."
+} else {
+    az cosmosdb sql container create `
+        --account-name $AccountName `
+        --resource-group $ResourceGroupName `
+        --database-name $DatabaseName `
+        --name $SkillsContainerName `
+        --partition-key-path "/id" `
+        --output none
+    Write-Host "     Container '$SkillsContainerName' created with /id partition key (no TTL)."
+}
+
+# ── Instance-Shared Counter Container (rate limiter + breaker) ────
+
+Write-Host "9/11 Creating instance-shared container..." -ForegroundColor Green
+$existingInstanceShared = az cosmosdb sql container show `
+    --account-name $AccountName `
+    --resource-group $ResourceGroupName `
+    --database-name $DatabaseName `
+    --name $InstanceSharedContainerName 2>$null | ConvertFrom-Json
+if ($existingInstanceShared) {
+    Write-Host "     Container '$InstanceSharedContainerName' already exists — skipping."
+} else {
+    az cosmosdb sql container create `
+        --account-name $AccountName `
+        --resource-group $ResourceGroupName `
+        --database-name $DatabaseName `
+        --name $InstanceSharedContainerName `
+        --partition-key-path "/key" `
+        --ttl 86400 `
+        --output none
+    Write-Host "     Container '$InstanceSharedContainerName' created with /key partition key and 24h TTL (idle counters auto-GC)."
+}
+
 # ── Triage Runs Container ─────────────────────────────────
 
-Write-Host "8/9 Creating triageRuns container..." -ForegroundColor Green
+Write-Host "10/11 Creating triageRuns container..." -ForegroundColor Green
 $existingTriageRuns = az cosmosdb sql container show `
     --account-name $AccountName `
     --resource-group $ResourceGroupName `
@@ -232,7 +281,7 @@ if ($existingTriageRuns) {
 
 # ── Managed Identity Role Assignment ───────────────────────
 
-Write-Host "9/9 Assigning Managed Identity role..." -ForegroundColor Green
+Write-Host "11/11 Assigning Managed Identity role..." -ForegroundColor Green
 if ($WebAppName) {
     $principalId = az webapp identity show `
         --name $WebAppName `
