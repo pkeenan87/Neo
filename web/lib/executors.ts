@@ -2120,12 +2120,20 @@ async function search_abnormal_messages(input: SearchAbnormalMessagesInput): Pro
 
   const body: Record<string, unknown> = {
     source: input.source ?? "abnormal",
-    page_size: pageSize,
-    page_number: input.page_number ?? 1,
     filters,
   };
 
-  return await abnormalApi(config, "POST", "/v1/search", body);
+  // Pagination MUST be query-string params, not body fields. With them
+  // in the body, the Abnormal API silently ignores them and returns
+  // page 1 every time — which manifests as a "data gap" where pages
+  // 2..N look identical to page 1. Cross-referenced against Xsoar's
+  // canonical `search_messages_request` (Packs/AbnormalSecurity), which
+  // passes `pageNumber`/`pageSize` as `params` (URL query) and the
+  // body as `json_data`. Field names are camelCase in the URL.
+  const pageNumber = Math.max(1, input.page_number ?? 1);
+  const path = `/v1/search?pageNumber=${pageNumber}&pageSize=${pageSize}`;
+
+  return await abnormalApi(config, "POST", path, body);
 }
 
 async function remediate_abnormal_messages(input: RemediateAbnormalMessagesInput): Promise<unknown> {
