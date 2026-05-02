@@ -1,5 +1,5 @@
 import Anthropic from "@anthropic-ai/sdk";
-import { env, getSystemPrompt, DEFAULT_MODEL, HAIKU_MODEL, resolveMaxTokens } from "./config";
+import { env, getSystemPrompt, DEFAULT_MODEL, resolveMaxTokens } from "./config";
 import { DESTRUCTIVE_TOOLS } from "./tools";
 import { executeTool } from "./executors";
 import { getToolsForRole, type Role } from "./permissions";

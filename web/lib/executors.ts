@@ -268,7 +268,7 @@ async function get_user_info({ upn }: UserInfoInput): Promise<unknown> {
 
 // ── Destructive Actions ───────────────────────────────────────
 
-async function reset_user_password({ upn, revoke_sessions = true, justification }: ResetPasswordInput): Promise<unknown> {
+async function reset_user_password({ upn, revoke_sessions = true, justification: _justification }: ResetPasswordInput): Promise<unknown> {
   validateUpn(upn);
 
   if (env.MOCK_MODE) {

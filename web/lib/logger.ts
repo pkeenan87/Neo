@@ -222,14 +222,14 @@ const FLUSH_THRESHOLD = 50;
 
 let _producer: EventHubProducerClient | null = null;
 let _producerInitAttempted = false;
-let _buffer: LogEntry[] = [];
+const _buffer: LogEntry[] = [];
 let _flushTimer: ReturnType<typeof setInterval> | null = null;
 
 // ── Analytics Event Hub (optional) ──
 
 let _analyticsProducer: EventHubProducerClient | null = null;
 let _analyticsProducerInitAttempted = false;
-let _analyticsBuffer: LogEntry[] = [];
+const _analyticsBuffer: LogEntry[] = [];
 let _analyticsFlushTimer: ReturnType<typeof setInterval> | null = null;
 
 let _closing = false;

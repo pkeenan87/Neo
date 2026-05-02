@@ -339,8 +339,7 @@ describe("MockConversationStore on-disk parity", () => {
 describe("MockConversationStore existence check", () => {
   it("does not create the file until first save", () => {
     const path = makeTempPath();
-    // eslint-disable-next-line @typescript-eslint/no-unused-vars
-    const unused = new MockConversationStore(path);
+    new MockConversationStore(path);
     expect(existsSync(path)).toBe(false);
     rmSync(path, { force: true });
   });

@@ -1,0 +1,35 @@
+# Code owners — used by GitHub to suggest reviewers and (when branch
+# protection is enabled with "Require review from Code Owners") to
+# require their approval before merge.
+#
+# Required-review enforcement is intentionally NOT yet enabled at the
+# branch-protection level — see _plans/audit-quick-wins.md for the
+# bootstrap-path decision. This file goes in first; enforcement gets
+# flipped on in a follow-up PR once a second reviewer is designated.
+
+* @pkeenan87
+
+# ── Security / authn / authz ──
+/web/lib/auth.ts                    @pkeenan87
+/web/lib/auth-helpers.ts            @pkeenan87
+/web/lib/permissions.ts             @pkeenan87
+/web/lib/api-key-store.ts           @pkeenan87
+/web/lib/api-key-crypto.ts          @pkeenan87
+/web/lib/secrets.ts                 @pkeenan87
+/web/lib/ai-search-auth.ts          @pkeenan87
+/web/lib/injection-guard.ts         @pkeenan87
+
+# ── Agent loop / tool dispatch / executors ──
+/web/lib/agent.ts                   @pkeenan87
+/web/lib/executors.ts               @pkeenan87
+
+# ── Persistence ──
+/web/lib/conversation-store.ts      @pkeenan87
+/web/lib/conversation-store-v2.ts   @pkeenan87
+/web/lib/session-factory.ts         @pkeenan87
+
+# ── Observability / audit ──
+/web/lib/logger.ts                  @pkeenan87
+
+# ── CI / governance ──
+/.github/                           @pkeenan87

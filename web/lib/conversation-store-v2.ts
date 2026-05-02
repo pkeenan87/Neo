@@ -112,10 +112,14 @@ function turnDocId(conversationId: string, turnNumber: number): string {
   return `${TURN_ID_PREFIX}${conversationId}_${turnNumber}`;
 }
 
+// Reserved id helpers for blob-ref and checkpoint docs. Currently unused
+// at the call site but retained for documentation + future reconciliation.
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 function blobRefDocId(sha256: string): string {
   return `${BLOBREF_ID_PREFIX}${sha256}`;
 }
 
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 function checkpointDocId(conversationId: string, rangeEndTurn: number): string {
   return `${CHECKPOINT_ID_PREFIX}${conversationId}_${rangeEndTurn}`;
 }

@@ -22,7 +22,6 @@ import type {
   TriageRequest,
   TriageResponse,
   TriageRun,
-  TriageSource,
   TriageProduct,
   TriageAlertSeverity,
   TokenUsage,

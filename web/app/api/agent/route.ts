@@ -7,7 +7,7 @@ import { resolveAuth } from "@/lib/auth-helpers";
 import { scanUserInput, shouldBlock } from "@/lib/injection-guard";
 import { getSkill } from "@/lib/skill-store";
 import { logger, hashPii, setLogContext } from "@/lib/logger";
-import { isChannel, MAX_FILES_PER_MESSAGE, CsvAttachmentCapError } from "@/lib/types";
+import { isChannel, CsvAttachmentCapError } from "@/lib/types";
 import type { AgentRequest, ModelPreference, TokenUsage, LogIdentityContext, FileAttachment, CSVReference, InProgressPlan } from "@/lib/types";
 import { DEFAULT_MODEL, SUPPORTED_MODELS } from "@/lib/config";
 import { checkBudget, createReservation, deleteReservation, recordUsage } from "@/lib/usage-tracker";

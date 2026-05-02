@@ -286,7 +286,7 @@ async function compressOlderMessages(
 
   const anchor = messages.slice(0, anchorIndex + 1);
   const middle = messages.slice(anchorIndex + 1, safeRecentStart);
-  let recent = messages.slice(safeRecentStart);
+  const recent = messages.slice(safeRecentStart);
 
   if (middle.length === 0) return messages;
 

@@ -21,7 +21,6 @@ import type {
   TurnDoc,
   BlobRefDoc,
   BlobRefDescriptor,
-  Message,
 } from "./types";
 
 // ─────────────────────────────────────────────────────────────
