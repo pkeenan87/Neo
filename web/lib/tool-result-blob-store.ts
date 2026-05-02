@@ -45,6 +45,12 @@ const SHA256_RE = /^[0-9a-f]{64}$/;
 //  for blob-ref descriptors whose sha doesn't exist at blobs/<sha>
 //  and re-promotes from staging/<sha> when present. Belt + suspenders
 //  against the pod-restart-between-commit-and-promote race.
+//  LEGAL-HOLD INVARIANT: when this reconciliation job ships, it must
+//  also consult the conversation root's retentionClass and skip any
+//  reaping of orphan blobs whose referencing conversations are on
+//  legal hold (`isLegalHold(retentionClass) === true`). Today the
+//  invariant is satisfied transitively: deleteConversationV2 refuses
+//  to run on a held conversation, so blob-ref docs survive.
 //
 //  SSRF GUARD: resolveBlobRef validates the descriptor's `uri` belongs
 //  to the configured container before fetching. A maliciously crafted

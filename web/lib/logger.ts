@@ -158,6 +158,11 @@ const SAFE_METADATA_FIELDS = new Set([
   "label",
   "createdBy",
   "revokedBy",
+  // Legal-hold violation audit fields. retentionClass is one of four
+  // low-cardinality enum values; "attempted" describes the blocked
+  // action (e.g. "delete").
+  "retentionClass",
+  "attempted",
 ]);
 
 function sanitizeMetadata(
@@ -185,6 +190,10 @@ const ANALYTICS_EVENT_TYPES = new Set<LogEventType>([
   "skill_invocation",
   "session_started",
   "session_ended",
+  // Legal-hold violations route to BOTH the operational topic (default)
+  // for ops alerting AND the analytics topic for trend reporting. Per
+  // the spec's open-question answer.
+  "legal_hold_violation",
 ]);
 
 function isAnalyticsEvent(eventType: LogEventType): boolean {

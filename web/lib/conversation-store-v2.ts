@@ -8,7 +8,7 @@ import {
   NEO_CONVERSATIONS_V2_CONTAINER,
   NEO_RETENTION_CLASS_DEFAULT,
 } from "./config";
-import { resolveRetentionTtlSeconds, COSMOS_TTL_NEVER } from "./retention";
+import { resolveRetentionTtlSeconds, COSMOS_TTL_NEVER, isLegalHold, LegalHoldViolationError } from "./retention";
 import type {
   Conversation,
   ConversationMeta,
@@ -674,6 +674,12 @@ export async function deleteConversationV2(
   }
   if (resource.ownerId !== ownerId) {
     throw new Error(`Conversation ${id} owner mismatch (v2)`);
+  }
+
+  // Defense-in-depth legal-hold gate. The route layer is the primary
+  // enforcement; this throw catches future direct-to-store callers.
+  if (isLegalHold(resource.retentionClass)) {
+    throw new LegalHoldViolationError(id);
   }
 
   // Partition-scoped query to enumerate all doc IDs in this partition.

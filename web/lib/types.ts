@@ -168,7 +168,8 @@ export type LogEventType =
   | "conversation_checkpoint_written"
   | "conversation_store_mode_override"
   | "conversation_dual_write_divergence"
-  | "context_engineering";
+  | "context_engineering"
+  | "legal_hold_violation";
 
 export interface LogIdentityContext {
   userName: string;
@@ -397,6 +398,11 @@ export interface Conversation {
   model?: string;
   ttl?: number;
   csvAttachments?: CSVReference[];
+  /** Records-policy class for this conversation. Surfaced on v1 docs
+   *  written via the v1↔v2 dual-write path, and on the v2 root's
+   *  hydrated shape. Optional because pre-migration v1 docs may not
+   *  carry it; absence is treated as "not on legal hold". */
+  retentionClass?: RetentionClass;
 }
 
 export type ConversationMeta = Omit<Conversation, "messages" | "pendingConfirmation" | "inProgressPlan">;

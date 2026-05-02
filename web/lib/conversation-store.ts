@@ -23,6 +23,7 @@ import { PERSISTENCE_TOOL_RESULT_TOKEN_CAP } from "./config";
 import { mockStore } from "./mock-conversation-store";
 import { getActiveStoreMode } from "./conversation-store-mode";
 import * as v2 from "./conversation-store-v2";
+import { isLegalHold, LegalHoldViolationError } from "./retention";
 
 // Dev-mode dispatch guard. When true, all module-level CRUD functions
 // short-circuit to the file-backed MockConversationStore instead of
@@ -480,6 +481,13 @@ async function deleteConversationV1Internal(
   ownerId: string,
 ): Promise<void> {
   const container = getContainer();
+  // Defense-in-depth legal-hold gate. Older v1 docs may not carry
+  // retentionClass — treat absence as not-on-hold for backwards
+  // compatibility. The route layer is the primary enforcement.
+  const { resource } = await container.item(id, ownerId).read<{ retentionClass?: string }>();
+  if (resource?.retentionClass && isLegalHold(resource.retentionClass as Parameters<typeof isLegalHold>[0])) {
+    throw new LegalHoldViolationError(id);
+  }
   await container.item(id, ownerId).delete();
   logger.info("Conversation deleted", "conversation-store", {
     conversationId: id,

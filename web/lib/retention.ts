@@ -55,3 +55,17 @@ export function resolveRetentionTtlSeconds(retentionClass: RetentionClass): numb
 export function isLegalHold(retentionClass: RetentionClass): boolean {
   return retentionClass === "legal-hold";
 }
+
+/**
+ * Thrown when a delete operation targets a conversation whose
+ * retentionClass is "legal-hold". Defense-in-depth — the API route
+ * catches this from store-layer paths so a future caller that bypasses
+ * the route still cannot delete a held conversation. The route surfaces
+ * this as HTTP 423 Locked.
+ */
+export class LegalHoldViolationError extends Error {
+  constructor(public readonly conversationId: string) {
+    super(`Conversation ${conversationId} is on legal hold and cannot be deleted`);
+    this.name = "LegalHoldViolationError";
+  }
+}

@@ -6,6 +6,8 @@ import {
   updateTitle,
 } from "@/lib/conversation-store";
 import { withStoreModeFromRequest } from "@/lib/conversation-store-mode";
+import { isLegalHold, LegalHoldViolationError } from "@/lib/retention";
+import { logger, hashPii } from "@/lib/logger";
 
 interface RouteParams {
   params: Promise<{ id: string }>;
@@ -53,7 +55,53 @@ export async function DELETE(request: NextRequest, { params }: RouteParams) {
       return NextResponse.json({ error: "Forbidden" }, { status: 403 });
     }
 
-    await deleteConversation(id, identity.ownerId);
+    if (conv.retentionClass && isLegalHold(conv.retentionClass)) {
+      logger.emitEvent(
+        "legal_hold_violation",
+        "Legal hold prevented conversation delete",
+        "api/conversations",
+        {
+          conversationId: id,
+          retentionClass: conv.retentionClass,
+          ownerIdHash: hashPii(identity.ownerId),
+          role: identity.role,
+          attempted: "delete",
+        },
+      );
+      return NextResponse.json(
+        { error: "Conversation is on legal hold and cannot be deleted" },
+        { status: 423 },
+      );
+    }
+
+    try {
+      await deleteConversation(id, identity.ownerId);
+    } catch (err) {
+      // Defense-in-depth: if a future caller bypasses the route layer
+      // and reaches the store directly, the store throws this same
+      // error. Surface it consistently as 423 here too. Use a name
+      // check rather than `instanceof` so test boundaries that re-
+      // import the class still match (vitest cross-module identity).
+      if (err instanceof LegalHoldViolationError || (err as Error)?.name === "LegalHoldViolationError") {
+        logger.emitEvent(
+          "legal_hold_violation",
+          "Legal hold prevented conversation delete (store-layer)",
+          "api/conversations",
+          {
+            conversationId: id,
+            retentionClass: conv.retentionClass,
+            ownerIdHash: hashPii(identity.ownerId),
+            role: identity.role,
+            attempted: "delete",
+          },
+        );
+        return NextResponse.json(
+          { error: "Conversation is on legal hold and cannot be deleted" },
+          { status: 423 },
+        );
+      }
+      throw err;
+    }
     return new Response(null, { status: 204 });
   });
 }
