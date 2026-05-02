@@ -162,7 +162,11 @@ async function handleConfirmPost(request: NextRequest, identity: ResolvedAuth): 
           session.role,
           body.sessionId,
           undefined,
-          { csvAttachments },
+          {
+            csvAttachments,
+            // Forward identity for Anthropic per-user attribution.
+            ownerId: identity.ownerId,
+          },
         );
 
         await writeAgentResult(result, session, body.sessionId, writer);

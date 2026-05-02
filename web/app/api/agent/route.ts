@@ -509,6 +509,9 @@ async function handleAgentRequest(
             // picks MAX_TOKENS_SKILL without re-parsing the injected
             // `[SKILL INVOCATION: ...]` prefix.
             skillInvocation: resolvedSkill !== null,
+            // Forward identity for Anthropic per-user attribution.
+            // hashPii() is applied inside the loop.
+            ownerId: identity.ownerId,
           },
         );
 

@@ -599,7 +599,12 @@ async function handleTurn(context: TurnContext): Promise<void> {
     sessionId: resolvedSessionId,
   };
   const result = await setLogContext(teamsLogContext, () =>
-    runAgentLoop(apiMessages, {}, session.role, resolvedSessionId)
+    runAgentLoop(apiMessages, {}, session.role, resolvedSessionId, undefined, undefined, {
+      // Forward identity for Anthropic per-user attribution. session.ownerId
+      // is either the AAD object id (DM) or the synthetic teams-thread:<id>
+      // (channel/thread). hashPii handles either input deterministically.
+      ownerId: session.ownerId,
+    })
   );
 
   session.messages = result.messages;

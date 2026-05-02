@@ -22,6 +22,11 @@ describe("startup assertion — multi-instance Cosmos guard", () => {
     // assignments suppress override (dotenv doesn't replace existing
     // env vars), avoiding spurious failures from unrelated guards.
     process.env.DEV_AUTH_BYPASS = "";
+    // The MOCK_MODE production guard would otherwise fire on the
+    // production-mode cases below (since .env carries MOCK_MODE=true
+    // for local dev); pin it false so this suite stays focused on
+    // the COSMOS_ENDPOINT requirement.
+    process.env.MOCK_MODE = "false";
   });
 
   afterEach(() => {

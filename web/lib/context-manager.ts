@@ -9,7 +9,7 @@ import {
   HAIKU_INPUT_MAX_TOKENS,
   FIRST_MESSAGE_MAX_TOKENS,
 } from "./config";
-import { logger } from "./logger";
+import { logger, hashPii } from "./logger";
 import type { Message } from "./types";
 
 export const CHARS_PER_TOKEN = 3.5;
@@ -267,6 +267,7 @@ async function compressOlderMessages(
   messages: Message[],
   preserveCount: number,
   systemPromptTokenEstimate: number,
+  ownerId?: string,
 ): Promise<Message[]> {
   if (messages.length <= preserveCount + 1) return messages;
 
@@ -355,6 +356,7 @@ async function compressOlderMessages(
         ...validatedMiddle,
         { role: "user", content: "Please summarize the conversation above." },
       ],
+      ...(ownerId ? { metadata: { user_id: hashPii(ownerId) } } : {}),
     });
 
     logger.info("Context compression usage", "context-manager", {
@@ -649,6 +651,7 @@ export async function offloadLargeToolResultsInPrompt(
  */
 async function maybeSummarizeAnchor(
   messages: Message[],
+  ownerId?: string,
 ): Promise<Message[]> {
   if (messages.length === 0) return messages;
 
@@ -689,6 +692,7 @@ async function maybeSummarizeAnchor(
         { role: "user", content: anchor.content },
         { role: "user", content: "Please summarise the message above." },
       ],
+      ...(ownerId ? { metadata: { user_id: hashPii(ownerId) } } : {}),
     });
     const summaryText = response.content
       .filter((b): b is Anthropic.Messages.TextBlock => b.type === "text")
@@ -792,6 +796,11 @@ export interface PrepareMessagesContext {
    *  to key blob uploads. Optional — when absent, the offload pass is
    *  skipped and only summary compression + emergency truncation run. */
   conversationId?: string;
+  /** Authenticated user's stable identifier. Forwarded to Anthropic
+   *  on the Haiku compression and anchor-summarisation calls as
+   *  hashed `metadata.user_id` so vendor-side trust-and-safety
+   *  enforcement can be user-scoped. Optional. */
+  ownerId?: string;
 }
 
 export async function prepareMessages(
@@ -804,7 +813,7 @@ export async function prepareMessages(
   // already larger than FIRST_MESSAGE_MAX_TOKENS, replace with a
   // Haiku-generated summary in-place. Without this, the anchor is
   // never dropped and dominates every subsequent turn's budget.
-  const anchorSummarised = await maybeSummarizeAnchor(messages);
+  const anchorSummarised = await maybeSummarizeAnchor(messages, ctx.ownerId);
 
   // Step 2: Truncate individual oversized tool results (per-result cap)
   const { messages: truncatedMessages, anyTruncated } = truncateToolResults(anchorSummarised);
@@ -851,6 +860,7 @@ export async function prepareMessages(
       afterOffload,
       PRESERVED_RECENT_MESSAGES,
       systemPromptTokenEstimate,
+      ctx.ownerId,
     );
     const sanitized = sanitizeEmptyUserMessages(compressed);
     const newTokens = estimateTokens(sanitized) + systemPromptTokenEstimate;

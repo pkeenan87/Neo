@@ -3,7 +3,7 @@ import { env, getSystemPrompt, DEFAULT_MODEL, resolveMaxTokens } from "./config"
 import { DESTRUCTIVE_TOOLS } from "./tools";
 import { executeTool } from "./executors";
 import { getToolsForRole, type Role } from "./permissions";
-import { logger } from "./logger";
+import { logger, hashPii } from "./logger";
 import { getToolIntegration } from "./integration-registry";
 import { wrapAndMaybeOffloadToolResult } from "./injection-guard";
 import { prepareMessages, sanitizeEmptyUserMessages, CHARS_PER_TOKEN } from "./context-manager";
@@ -144,6 +144,15 @@ export interface RunAgentLoopOptions {
    * scanning the first user message for the `[SKILL INVOCATION:` prefix.
    */
   skillInvocation?: boolean;
+  /**
+   * Authenticated user's stable identifier (Entra AAD object id, or a
+   * synthetic id for Teams threads / service-principal API keys). When
+   * present, the loop forwards `metadata: { user_id: hashPii(ownerId) }`
+   * on every Anthropic `messages.create` call so vendor-side trust-and-
+   * safety enforcement can be user-scoped. Optional for backwards
+   * compatibility — older callers that don't pass it omit the metadata.
+   */
+  ownerId?: string;
 }
 
 export async function runAgentLoop(
@@ -301,7 +310,10 @@ export async function runAgentLoop(
     if (callbacks.onThinking) callbacks.onThinking();
 
     // Prepare messages: truncate oversized tool results, compress if near limit
-    const prepared = await prepareMessages(localMessages, lastInputTokens, systemPromptTokenEstimate, { conversationId: sessionId });
+    const prepared = await prepareMessages(localMessages, lastInputTokens, systemPromptTokenEstimate, {
+      conversationId: sessionId,
+      ownerId: options.ownerId,
+    });
 
     if (prepared.trimmed && callbacks.onContextTrimmed) {
       callbacks.onContextTrimmed(prepared.originalTokens, prepared.newTokens, prepared.method!);
@@ -348,6 +360,9 @@ export async function runAgentLoop(
     };
     if (options.toolChoice) {
       apiParams.tool_choice = options.toolChoice;
+    }
+    if (options.ownerId) {
+      apiParams.metadata = { user_id: hashPii(options.ownerId) };
     }
     const response = await createWithRetry(apiParams, signal);
     iterationCount += 1;

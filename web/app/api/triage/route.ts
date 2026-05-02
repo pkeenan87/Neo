@@ -437,6 +437,8 @@ async function handleTriagePost(request: NextRequest, identity: ResolvedAuth): P
           // fully to be valid. Explicitly opt out of the skill-sized budget
           // and stay on MAX_TOKENS_DEFAULT; any truncation fails the run.
           skillInvocation: false,
+          // Forward identity for Anthropic per-user attribution.
+          ownerId: identity.ownerId,
         },
       );
 
