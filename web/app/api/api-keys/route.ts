@@ -6,7 +6,7 @@ import {
   ApiKeyValidationError,
   MAX_API_KEY_LIFETIME_MS,
 } from "@/lib/api-key-store";
-import { logger } from "@/lib/logger";
+import { logger, hashPii } from "@/lib/logger";
 import type { Role } from "@/lib/permissions";
 
 const VALID_ROLES = new Set<string>(["admin", "reader"]);
@@ -91,7 +91,7 @@ export async function POST(request: NextRequest) {
       keyId: result.record.id,
       label: result.record.label,
       role: result.record.role,
-      createdBy: identity.name,
+      createdBy: hashPii(identity.ownerId),
     });
 
     return NextResponse.json(result, { status: 201 });

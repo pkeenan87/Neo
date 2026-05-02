@@ -151,6 +151,13 @@ const SAFE_METADATA_FIELDS = new Set([
   "topRerankerScore",
   "urls",
   "searchIndex",
+  // API-key audit fields. createdBy/revokedBy carry hashPii(ownerId)
+  // only — never raw UPN/email. label is the user-supplied display
+  // string (e.g. "ci-bot"), not PII.
+  "keyId",
+  "label",
+  "createdBy",
+  "revokedBy",
 ]);
 
 function sanitizeMetadata(

@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { resolveAuth } from "@/lib/auth-helpers";
 import { revokeApiKey } from "@/lib/api-key-store";
-import { logger } from "@/lib/logger";
+import { logger, hashPii } from "@/lib/logger";
 
 const SHA256_HEX_RE = /^[0-9a-f]{64}$/;
 
@@ -28,7 +28,7 @@ export async function DELETE(
 
     logger.info("API key revoked", "api-keys", {
       keyId: id,
-      revokedBy: identity.name,
+      revokedBy: hashPii(identity.ownerId),
     });
 
     return NextResponse.json({ success: true });
