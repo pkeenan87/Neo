@@ -32,7 +32,13 @@ const ROLE_PERMISSIONS: Record<Role, RolePermissions> = {
 
 export class ToolPermissionError extends Error {
   constructor(public readonly role: Role, public readonly toolName: string) {
-    super(`Tool not permitted for your role: ${toolName}`);
+    // SECURITY: do NOT include `toolName` in the message string. The
+    // agent loop's tool-error catch surfaces err.message back to the
+    // model as tool_result content, which is then rendered to the
+    // user. Confirming which exact tool a role can't reach helps a
+    // prompt-injection probe enumerate the surface. The role + tool
+    // name remain on typed properties for server-side audit only.
+    super("Tool not permitted for your role.");
     this.name = "ToolPermissionError";
   }
 }

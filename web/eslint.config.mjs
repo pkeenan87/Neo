@@ -75,4 +75,16 @@ export default tseslint.config(
       "@typescript-eslint/no-unused-vars": "off",
     },
   },
+
+  // No `console.log` in UI surfaces (app/, components/). lib/ keeps
+  // legitimate raw-console usage in `validateConfig`, the Event Hub
+  // fallback path, and similar bootstrap-time observability sites.
+  // `console.warn` and `console.error` remain allowed for visible
+  // error reporting; `console.log` is the noisy one.
+  {
+    files: ["app/**/*.{ts,tsx}", "components/**/*.{ts,tsx}"],
+    rules: {
+      "no-console": ["error", { allow: ["warn", "error"] }],
+    },
+  },
 );

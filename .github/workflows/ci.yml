@@ -57,8 +57,12 @@ jobs:
           cache-dependency-path: cli/package-lock.json
       - name: Install
         run: npm ci
+      # Symmetric with the web job: don't fail PRs on a fresh upstream
+      # advisory before Dependabot has had a chance to land a fix. Flip
+      # to fail-closed once Dependabot is steady-state.
       - name: npm audit (high+ only)
         run: npm audit --audit-level=high
+        continue-on-error: true
 
   codeql:
     name: CodeQL (security-extended)

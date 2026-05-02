@@ -152,8 +152,14 @@ const SAFE_METADATA_FIELDS = new Set([
   "urls",
   "searchIndex",
   // API-key audit fields. createdBy/revokedBy carry hashPii(ownerId)
-  // only — never raw UPN/email. label is the user-supplied display
-  // string (e.g. "ci-bot"), not PII.
+  // only — never raw UPN/email.
+  //
+  // SECURITY NOTE: `label` is user-supplied free text (capped to 128
+  // chars at the route layer, no charset restriction). A user CAN
+  // launder identifying text through it ("john@firm.com" as a label).
+  // The route layer is responsible for validating; this allowlist
+  // entry assumes legitimate use only. If audit fidelity becomes a
+  // concern, restrict label charset at the route or hash here.
   "keyId",
   "label",
   "createdBy",

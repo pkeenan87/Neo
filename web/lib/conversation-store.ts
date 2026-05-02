@@ -440,6 +440,12 @@ async function updateTitleV1Internal(
   if (!resource) throw new Error(`Conversation ${id} not found`);
   if (!etag) throw new Error(`Missing ETag for conversation ${id}`);
 
+  // Defense-in-depth legal-hold gate (renames). Pre-migration v1 docs
+  // may not carry retentionClass — absence is treated as not-on-hold.
+  if (resource.retentionClass && isLegalHold(resource.retentionClass)) {
+    throw new LegalHoldViolationError(id, resource.retentionClass, "rename");
+  }
+
   resource.title = title;
   resource.updatedAt = new Date().toISOString();
   await container.item(id, ownerId).replace(resource, {
@@ -484,9 +490,9 @@ async function deleteConversationV1Internal(
   // Defense-in-depth legal-hold gate. Older v1 docs may not carry
   // retentionClass — treat absence as not-on-hold for backwards
   // compatibility. The route layer is the primary enforcement.
-  const { resource } = await container.item(id, ownerId).read<{ retentionClass?: string }>();
-  if (resource?.retentionClass && isLegalHold(resource.retentionClass as Parameters<typeof isLegalHold>[0])) {
-    throw new LegalHoldViolationError(id);
+  const { resource } = await container.item(id, ownerId).read<Conversation>();
+  if (resource?.retentionClass && isLegalHold(resource.retentionClass)) {
+    throw new LegalHoldViolationError(id, resource.retentionClass, "delete");
   }
   await container.item(id, ownerId).delete();
   logger.info("Conversation deleted", "conversation-store", {

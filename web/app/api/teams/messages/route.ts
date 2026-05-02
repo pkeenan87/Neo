@@ -603,6 +603,15 @@ async function handleTurn(context: TurnContext): Promise<void> {
       // Forward identity for Anthropic per-user attribution. session.ownerId
       // is either the AAD object id (DM) or the synthetic teams-thread:<id>
       // (channel/thread). hashPii handles either input deterministically.
+      //
+      // CAVEAT: in channel/thread mode this gives Anthropic per-thread,
+      // not per-user, attribution. The Bot Framework activity
+      // (`context.activity.from.aadObjectId`, captured in
+      // `teamsLogContext.userIdHash` above) DOES carry the submitter's
+      // AAD object id and could power per-user attribution; switching
+      // would require also re-keying the session model. Spec accepted
+      // the per-thread compromise for v1; revisit when matter-tenancy
+      // / per-user channel attribution lands.
       ownerId: session.ownerId,
     })
   );

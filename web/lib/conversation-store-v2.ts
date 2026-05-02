@@ -653,6 +653,13 @@ export async function updateTitleV2(
     throw new Error(`Conversation ${id} owner mismatch (v2)`);
   }
 
+  // Defense-in-depth legal-hold gate. Renaming a held conversation
+  // is a record-tampering surface that bypasses the route's
+  // pre-check if a future caller reaches the store directly.
+  if (resource.retentionClass && isLegalHold(resource.retentionClass)) {
+    throw new LegalHoldViolationError(id, resource.retentionClass, "rename");
+  }
+
   await container.item(id, id).patch({
     operations: [
       { op: "set", path: "/title", value: title },
@@ -678,8 +685,8 @@ export async function deleteConversationV2(
 
   // Defense-in-depth legal-hold gate. The route layer is the primary
   // enforcement; this throw catches future direct-to-store callers.
-  if (isLegalHold(resource.retentionClass)) {
-    throw new LegalHoldViolationError(id);
+  if (resource.retentionClass && isLegalHold(resource.retentionClass)) {
+    throw new LegalHoldViolationError(id, resource.retentionClass, "delete");
   }
 
   // Partition-scoped query to enumerate all doc IDs in this partition.

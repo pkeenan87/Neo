@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { resolveAuth } from "@/lib/auth-helpers";
+import { resolveAuth, type ResolvedAuth } from "@/lib/auth-helpers";
 import {
   getConversation,
   deleteConversation,
@@ -8,9 +8,34 @@ import {
 import { withStoreModeFromRequest } from "@/lib/conversation-store-mode";
 import { isLegalHold, LegalHoldViolationError } from "@/lib/retention";
 import { logger, hashPii } from "@/lib/logger";
+import type { RetentionClass } from "@/lib/types";
 
 interface RouteParams {
   params: Promise<{ id: string }>;
+}
+
+function rejectLegalHold(
+  conversationId: string,
+  retentionClass: RetentionClass,
+  identity: ResolvedAuth,
+  attempted: "delete" | "rename",
+): NextResponse {
+  logger.emitEvent(
+    "legal_hold_violation",
+    `Legal hold prevented conversation ${attempted}`,
+    "api/conversations",
+    {
+      conversationId,
+      retentionClass,
+      ownerIdHash: hashPii(identity.ownerId),
+      role: identity.role,
+      attempted,
+    },
+  );
+  return NextResponse.json(
+    { error: `Conversation is on legal hold and cannot be ${attempted === "delete" ? "deleted" : "renamed"}` },
+    { status: 423 },
+  );
 }
 
 export async function GET(request: NextRequest, { params }: RouteParams) {
@@ -56,49 +81,14 @@ export async function DELETE(request: NextRequest, { params }: RouteParams) {
     }
 
     if (conv.retentionClass && isLegalHold(conv.retentionClass)) {
-      logger.emitEvent(
-        "legal_hold_violation",
-        "Legal hold prevented conversation delete",
-        "api/conversations",
-        {
-          conversationId: id,
-          retentionClass: conv.retentionClass,
-          ownerIdHash: hashPii(identity.ownerId),
-          role: identity.role,
-          attempted: "delete",
-        },
-      );
-      return NextResponse.json(
-        { error: "Conversation is on legal hold and cannot be deleted" },
-        { status: 423 },
-      );
+      return rejectLegalHold(id, conv.retentionClass, identity, "delete");
     }
 
     try {
       await deleteConversation(id, identity.ownerId);
     } catch (err) {
-      // Defense-in-depth: if a future caller bypasses the route layer
-      // and reaches the store directly, the store throws this same
-      // error. Surface it consistently as 423 here too. Use a name
-      // check rather than `instanceof` so test boundaries that re-
-      // import the class still match (vitest cross-module identity).
-      if (err instanceof LegalHoldViolationError || (err as Error)?.name === "LegalHoldViolationError") {
-        logger.emitEvent(
-          "legal_hold_violation",
-          "Legal hold prevented conversation delete (store-layer)",
-          "api/conversations",
-          {
-            conversationId: id,
-            retentionClass: conv.retentionClass,
-            ownerIdHash: hashPii(identity.ownerId),
-            role: identity.role,
-            attempted: "delete",
-          },
-        );
-        return NextResponse.json(
-          { error: "Conversation is on legal hold and cannot be deleted" },
-          { status: 423 },
-        );
+      if (err instanceof LegalHoldViolationError) {
+        return rejectLegalHold(id, err.retentionClass, identity, err.attempted);
       }
       throw err;
     }
@@ -141,7 +131,18 @@ export async function PATCH(request: NextRequest, { params }: RouteParams) {
       return NextResponse.json({ error: "Forbidden" }, { status: 403 });
     }
 
-    await updateTitle(id, identity.ownerId, title);
+    if (conv.retentionClass && isLegalHold(conv.retentionClass)) {
+      return rejectLegalHold(id, conv.retentionClass, identity, "rename");
+    }
+
+    try {
+      await updateTitle(id, identity.ownerId, title);
+    } catch (err) {
+      if (err instanceof LegalHoldViolationError) {
+        return rejectLegalHold(id, err.retentionClass, identity, err.attempted);
+      }
+      throw err;
+    }
     return NextResponse.json({ id, title });
   });
 }
