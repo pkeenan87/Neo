@@ -309,6 +309,17 @@ export function validateConfig(): void {
     throw new Error("DEV_AUTH_BYPASS must not be enabled outside of development — aborting.");
   }
 
+  // Mirror the DEV_AUTH_BYPASS guard for MOCK_MODE. In production, mock
+  // mode silently swallows tool calls and re-activates the API-key file
+  // fallback (web/lib/api-key-store.ts). Failing fast at boot is the
+  // intended posture; there is no escape hatch for live-fire DR drills.
+  if (process.env.NODE_ENV === "production" && env.MOCK_MODE) {
+    throw new Error(
+      "MOCK_MODE must not be enabled in production — aborting. " +
+        "Set MOCK_MODE=false in App Service settings, or run with NODE_ENV !== 'production'.",
+    );
+  }
+
   if (!process.env.AUTH_SECRET) {
     console.warn("AUTH_SECRET is not set — Auth.js requires this in production.");
   }
