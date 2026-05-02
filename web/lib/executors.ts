@@ -3,6 +3,7 @@ import { getAzureToken, getMSGraphToken, generateSecurePassword } from "./auth";
 import { getToolSecret } from "./secrets";
 import { logger, hashPii } from "./logger";
 import { queryCsv } from "./csv-query-executor";
+import { canUseTool, ToolPermissionError, type Role } from "./permissions";
 import type {
   SentinelKqlInput,
   SentinelIncidentsInput,
@@ -3724,6 +3725,12 @@ export interface ExecuteToolContext {
    *  InProgressPlan for audit (which turn originated the plan).
    *  Defaults to 0 when absent — the plan still resumes correctly. */
   turnNumber?: number;
+  /** Caller's role. When provided, executeTool re-checks
+   *  canUseTool(role, toolName) at the top of dispatch and throws
+   *  ToolPermissionError if mismatched — defense-in-depth so a
+   *  future regression in tool-list filtering or a triage skill
+   *  allowlisting a destructive tool can't bypass the gate. */
+  role?: Role;
 }
 
 interface EmitPlanInput {
@@ -3845,6 +3852,18 @@ export async function executeTool(
   context?: ExecuteToolContext,
 ): Promise<unknown> {
   logger.debug(`Executing tool: ${toolName}`, "executors", { toolName });
+
+  // Defense-in-depth: re-check role before dispatch. The agent loop's
+  // tool-visibility filter (getToolsForRole) is the primary gate, but
+  // a regression there or a triage skill allowlisting a destructive
+  // tool would silently bypass it. See audit Top-10 #6.
+  if (context?.role && !canUseTool(context.role, toolName)) {
+    logger.warn("executeTool role re-check rejected dispatch", "executors", {
+      toolName,
+      role: context.role,
+    });
+    throw new ToolPermissionError(context.role, toolName);
+  }
 
   if (toolName === "get_full_tool_result") {
     return await get_full_tool_result(

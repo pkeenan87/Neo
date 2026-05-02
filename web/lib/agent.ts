@@ -528,6 +528,7 @@ export async function runAgentLoop(
             csvAttachments,
             sessionId,
             turnNumber: localMessages.length,
+            role,
           });
           const durationMs = Date.now() - toolStart;
           logger.emitEvent("tool_execution", `Tool completed: ${name}`, "agent", {
@@ -820,6 +821,7 @@ export async function resumeAfterConfirmation(
         csvAttachments: options.csvAttachments,
         sessionId,
         turnNumber: localMessages.length,
+        role,
       });
       const durationMs = Date.now() - toolStart;
       logger.emitEvent("tool_execution", `Tool completed: ${name}`, "agent", {
