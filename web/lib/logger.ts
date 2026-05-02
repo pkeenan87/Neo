@@ -143,6 +143,14 @@ const SAFE_METADATA_FIELDS = new Set([
   "percentUsed",
   "eventType",
   "toolInput",
+  // AI Search audit fields — query is user-supplied text, not PII;
+  // urls are SharePoint document paths inside the workspace; index is
+  // the AI Search index name. Truncated/clamped at the call site.
+  "query",
+  "resultCount",
+  "topRerankerScore",
+  "urls",
+  "searchIndex",
 ]);
 
 function sanitizeMetadata(

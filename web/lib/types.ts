@@ -56,6 +56,12 @@ export interface EnvConfig {
   TRIAGE_CIRCUIT_BREAKER_COOLDOWN_MS: number;
   TRIAGE_CALLER_ALLOWLIST: string;
   TRIAGE_RAW_PAYLOAD_MAX_BYTES: number;
+  // AI Search (SharePoint RAG)
+  AI_SEARCH_ENDPOINT: string | undefined;
+  AI_SEARCH_INDEX_DEFAULT: string;
+  AI_SEARCH_API_VERSION: string;
+  AI_SEARCH_RERANKER_THRESHOLD: number;
+  AI_SEARCH_ALLOW_DISABLE_THRESHOLD: boolean;
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -1023,6 +1029,40 @@ export interface QueryCsvInput {
   csv_id: string;
   query: string;
 }
+
+// ── AI Search (SharePoint RAG) ───────────────────────────────
+
+export interface SearchKnowledgeBaseInput {
+  query: string;
+  top?: number;
+  index?: string;
+}
+
+export interface SearchKnowledgeBaseResult {
+  chunk: string;
+  header_1: string | null;
+  header_2: string | null;
+  header_3: string | null;
+  title: string;
+  url: string;
+  lastModified: string | null;
+  rerankerScore: number;
+  captions: string[];
+}
+
+export type SearchKnowledgeBaseResponse =
+  | {
+      status: "ok";
+      results: SearchKnowledgeBaseResult[];
+      topRerankerScore: number;
+      truncated: boolean;
+    }
+  | {
+      status: "no_results";
+      reason: "empty_index" | "below_threshold";
+      query: string;
+      suggestion: string;
+    };
 
 export class CsvAttachmentCapError extends Error {
   constructor(public readonly cap: number) {

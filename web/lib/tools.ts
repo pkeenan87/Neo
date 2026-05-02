@@ -1396,6 +1396,41 @@ export const TOOLS: Tool[] = [
       required: ["steps", "estimatedToolCalls"],
     },
   },
+  {
+    name: "searchKnowledgeBase",
+    description:
+      "Hybrid (BM25 + vector + semantic rerank) retrieval against the SharePoint document index. " +
+      "Use for OPEN-ENDED natural-language questions about company policies, procedures, runbooks, memos, " +
+      "and templates — when you do NOT already know which SharePoint document to fetch. " +
+      "If you DO have a specific SharePoint URL or know the exact document, use the direct SharePoint " +
+      "fetch executor instead. " +
+      "Always cite source URLs from the results in your response. " +
+      "When no result clears the relevance threshold, this tool returns a structured " +
+      "{ status: \"no_results\", reason, suggestion } payload — read the suggestion and rephrase or fall back, " +
+      "do not treat it as an error.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        query: {
+          type: "string",
+          description: "Natural-language question to retrieve grounding context for.",
+          minLength: 1,
+          maxLength: 2000,
+        },
+        top: {
+          type: "integer",
+          description: "Number of result chunks to return. Range 1–20, default 5.",
+          minimum: 1,
+          maximum: 20,
+        },
+        index: {
+          type: "string",
+          description: "Index name. Defaults to \"sharepoint-docx\". Only known indices are accepted.",
+        },
+      },
+      required: ["query"],
+    },
+  },
 ];
 
 export const DESTRUCTIVE_TOOLS = new Set([

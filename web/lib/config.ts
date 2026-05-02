@@ -277,6 +277,12 @@ export const env: EnvConfig = {
   TRIAGE_CIRCUIT_BREAKER_COOLDOWN_MS:   parsePositiveInt("TRIAGE_CIRCUIT_BREAKER_COOLDOWN_MS", 30 * 60 * 1000),
   TRIAGE_CALLER_ALLOWLIST:              process.env.TRIAGE_CALLER_ALLOWLIST || "",
   TRIAGE_RAW_PAYLOAD_MAX_BYTES:         parsePositiveInt("TRIAGE_RAW_PAYLOAD_MAX_BYTES", 500_000),
+  // AI Search (SharePoint RAG executor)
+  AI_SEARCH_ENDPOINT:                   process.env.AI_SEARCH_ENDPOINT?.replace(/\/+$/, "") || undefined,
+  AI_SEARCH_INDEX_DEFAULT:              process.env.AI_SEARCH_INDEX_DEFAULT || "sharepoint-docx",
+  AI_SEARCH_API_VERSION:                process.env.AI_SEARCH_API_VERSION || "2024-07-01",
+  AI_SEARCH_RERANKER_THRESHOLD:         Number(process.env.AI_SEARCH_RERANKER_THRESHOLD ?? "1.5"),
+  AI_SEARCH_ALLOW_DISABLE_THRESHOLD:    process.env.AI_SEARCH_ALLOW_DISABLE_THRESHOLD === "true",
 };
 
 // Note: validateConfig uses console.warn directly (not logger) because
@@ -361,6 +367,20 @@ export function validateConfig(): void {
   if (env.MOCK_MODE) {
     console.warn("Running in MOCK MODE — tool calls return simulated data.");
     console.warn("Set MOCK_MODE=false in .env and add Azure credentials to use real APIs.");
+  }
+
+  if (!env.MOCK_MODE && !env.AI_SEARCH_ENDPOINT) {
+    console.warn(
+      "AI_SEARCH_ENDPOINT is not set — searchKnowledgeBase will fail at call time. " +
+      "Set it to your Azure AI Search endpoint (e.g. https://srch-neo-prod-001.search.windows.net) " +
+      "or unset MOCK_MODE if you don't need the RAG executor.",
+    );
+  }
+  if (!Number.isFinite(env.AI_SEARCH_RERANKER_THRESHOLD) || env.AI_SEARCH_RERANKER_THRESHOLD < 0) {
+    console.warn(
+      `AI_SEARCH_RERANKER_THRESHOLD must be a non-negative number (got "${process.env.AI_SEARCH_RERANKER_THRESHOLD}") — ` +
+      `falling back to 1.5 at runtime.`,
+    );
   }
 
   const rawBotRole = process.env.TEAMS_BOT_ROLE;
@@ -525,6 +545,15 @@ dataset must be queried via the \`query_csv\` tool using the provided
 \`csv_id\`. The table name is always \`csv\`. Prefer SQL aggregations
 (COUNT, GROUP BY, AVG) over raw row dumps. Queries must be read-only
 (SELECT / WITH / PRAGMA table_info). Query results are limited to 100 rows.
+
+## KNOWLEDGE BASE RETRIEVAL
+
+For open-ended natural-language questions about ${ORG_NAME}'s policies, procedures, runbooks, memos, or templates, use the \`searchKnowledgeBase\` tool — it performs hybrid (BM25 + vector + semantic rerank) retrieval against the SharePoint document index and returns ranked, captioned chunks with source URLs.
+
+- Prefer \`searchKnowledgeBase\` when you do NOT already know which document to read.
+- When you DO have a specific SharePoint URL or know the exact document, fetch it directly with the SharePoint executor instead.
+- Always cite source URLs from the results in your response.
+- A \`status: "no_results"\` payload is not an error — read the embedded \`suggestion\` and either rephrase, broaden, or fall back to direct fetch.
 
 ## MULTI-STEP BATCH OPERATIONS
 

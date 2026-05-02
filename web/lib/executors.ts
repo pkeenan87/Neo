@@ -62,6 +62,9 @@ import type {
   ActionAppOmniFindingInput,
   GetFullToolResultInput,
   QueryCsvInput,
+  SearchKnowledgeBaseInput,
+  SearchKnowledgeBaseResult,
+  SearchKnowledgeBaseResponse,
   CSVReference,
   Message,
   InProgressPlan,
@@ -3263,6 +3266,300 @@ function mockGetAppOmniAuditLogs(): unknown {
   };
 }
 
+// ── AI Search (SharePoint RAG retrieval) ──────────────────────
+
+const AI_SEARCH_QUERY_MAX_CHARS = 2_000;
+const AI_SEARCH_TOP_MIN = 1;
+const AI_SEARCH_TOP_MAX = 20;
+const AI_SEARCH_TOP_DEFAULT = 5;
+const AI_SEARCH_CHUNK_TRUNCATE_CHARS = 1_500;
+const AI_SEARCH_CAPTION_TRUNCATE_CHARS = 300;
+const AI_SEARCH_CAPTIONS_PER_HIT = 3;
+const AI_SEARCH_SUPPORTED_INDICES = new Set(["sharepoint-docx"]);
+
+interface AzureSearchHit {
+  chunk?: string;
+  header_1?: string | null;
+  header_2?: string | null;
+  header_3?: string | null;
+  title?: string;
+  url?: string;
+  lastModified?: string | null;
+  "@search.rerankerScore"?: number;
+  "@search.captions"?: { text?: string }[];
+}
+
+function clampTop(raw: number | undefined): number {
+  if (raw === undefined || raw === null || !Number.isFinite(raw)) return AI_SEARCH_TOP_DEFAULT;
+  const n = Math.floor(raw);
+  if (n < AI_SEARCH_TOP_MIN) return AI_SEARCH_TOP_MIN;
+  if (n > AI_SEARCH_TOP_MAX) return AI_SEARCH_TOP_MAX;
+  return n;
+}
+
+function truncateChunk(chunk: string): string {
+  if (chunk.length <= AI_SEARCH_CHUNK_TRUNCATE_CHARS) return chunk;
+  return chunk.slice(0, AI_SEARCH_CHUNK_TRUNCATE_CHARS) + "…";
+}
+
+function truncateCaption(text: string): string {
+  if (text.length <= AI_SEARCH_CAPTION_TRUNCATE_CHARS) return text;
+  return text.slice(0, AI_SEARCH_CAPTION_TRUNCATE_CHARS) + "…";
+}
+
+function rerankerThreshold(): number {
+  const raw = env.AI_SEARCH_RERANKER_THRESHOLD;
+  return Number.isFinite(raw) && raw >= 0 ? raw : 1.5;
+}
+
+async function searchKnowledgeBase(
+  input: SearchKnowledgeBaseInput,
+): Promise<SearchKnowledgeBaseResponse> {
+  const rawQuery = typeof input.query === "string" ? input.query.trim() : "";
+  if (!rawQuery) {
+    throw new Error("searchKnowledgeBase: `query` must be a non-empty string.");
+  }
+  if (rawQuery.length > AI_SEARCH_QUERY_MAX_CHARS) {
+    throw new Error(
+      `searchKnowledgeBase: \`query\` exceeds ${AI_SEARCH_QUERY_MAX_CHARS} characters — shorten and retry.`,
+    );
+  }
+
+  const requestedIndex = input.index ?? env.AI_SEARCH_INDEX_DEFAULT;
+  if (!AI_SEARCH_SUPPORTED_INDICES.has(requestedIndex)) {
+    throw new Error(
+      `searchKnowledgeBase: unsupported index "${requestedIndex}". Supported indices: ${[...AI_SEARCH_SUPPORTED_INDICES].join(", ")}.`,
+    );
+  }
+
+  const top = clampTop(input.top);
+  // disableThreshold is operator-controlled, not model-controlled — the
+  // tool schema does not expose this knob, so prompt-injected tool_use
+  // blocks cannot surface below-threshold (e.g. legal-hold, draft) content.
+  const disableThreshold = env.AI_SEARCH_ALLOW_DISABLE_THRESHOLD;
+
+  if (env.MOCK_MODE) {
+    return mockSearchKnowledgeBase(rawQuery, top, disableThreshold);
+  }
+
+  if (!env.AI_SEARCH_ENDPOINT) {
+    throw new Error(
+      "AI_SEARCH_ENDPOINT is not configured. Set it to your Azure AI Search endpoint or enable MOCK_MODE.",
+    );
+  }
+
+  const body = {
+    search: rawQuery,
+    vectorQueries: [
+      {
+        kind: "text",
+        text: rawQuery,
+        fields: "vector",
+        k: 50,
+      },
+    ],
+    queryType: "semantic",
+    semanticConfiguration: "default-semantic",
+    captions: "extractive",
+    answers: "extractive|count-3",
+    select: "chunk,header_1,header_2,header_3,title,url,lastModified",
+    top,
+  };
+
+  const url =
+    `${env.AI_SEARCH_ENDPOINT}/indexes/${encodeURIComponent(requestedIndex)}/docs/search` +
+    `?api-version=${encodeURIComponent(env.AI_SEARCH_API_VERSION)}`;
+
+  const raw = await aiSearchFetch(url, body);
+
+  const rawValue = (raw as { value?: unknown })?.value;
+  const hits: AzureSearchHit[] = Array.isArray(rawValue) ? (rawValue as AzureSearchHit[]) : [];
+  const mapped: SearchKnowledgeBaseResult[] = hits.map((hit) => {
+    const score = hit["@search.rerankerScore"];
+    return {
+      chunk: truncateChunk(typeof hit.chunk === "string" ? hit.chunk : ""),
+      header_1: hit.header_1 ?? null,
+      header_2: hit.header_2 ?? null,
+      header_3: hit.header_3 ?? null,
+      title: typeof hit.title === "string" ? hit.title : "",
+      url: typeof hit.url === "string" ? hit.url : "",
+      lastModified: hit.lastModified ?? null,
+      rerankerScore: typeof score === "number" && Number.isFinite(score) ? score : 0,
+      captions: Array.isArray(hit["@search.captions"])
+        ? hit["@search.captions"]
+            .map((c) => (typeof c?.text === "string" ? c.text : ""))
+            .filter((t) => t.length > 0)
+            .slice(0, AI_SEARCH_CAPTIONS_PER_HIT)
+            .map(truncateCaption)
+        : [],
+    };
+  });
+
+  const threshold = rerankerThreshold();
+  const filtered = disableThreshold
+    ? mapped
+    : mapped.filter((r) => r.rerankerScore >= threshold);
+
+  if (filtered.length === 0) {
+    const reason: "empty_index" | "below_threshold" =
+      mapped.length === 0 ? "empty_index" : "below_threshold";
+    const suggestion =
+      reason === "empty_index"
+        ? "No documents matched. Try rephrasing the query, broadening keywords, or fall back to fetching a known SharePoint document directly."
+        : `No results cleared the reranker threshold (>= ${threshold}). Consider rephrasing, broadening, or fetching a known SharePoint document directly.`;
+
+    logger.info("AI Search query returned no usable results", "executors", {
+      toolName: "searchKnowledgeBase",
+      query: rawQuery.slice(0, 500),
+      resultCount: 0,
+      topRerankerScore: 0,
+      urls: [],
+      searchIndex: requestedIndex,
+    });
+
+    return {
+      status: "no_results",
+      reason,
+      query: rawQuery,
+      suggestion,
+    };
+  }
+
+  filtered.sort((a, b) => b.rerankerScore - a.rerankerScore);
+  const topRerankerScore = filtered[0].rerankerScore;
+  const truncated = filtered.some((r) => r.chunk.endsWith("…"));
+
+  logger.info("AI Search query succeeded", "executors", {
+    toolName: "searchKnowledgeBase",
+    query: rawQuery.slice(0, 500),
+    resultCount: filtered.length,
+    topRerankerScore,
+    urls: filtered.map((r) => r.url).filter((u) => !!u),
+    searchIndex: requestedIndex,
+  });
+
+  return {
+    status: "ok",
+    results: filtered,
+    topRerankerScore,
+    truncated,
+  };
+}
+
+async function aiSearchFetch(url: string, body: unknown): Promise<unknown> {
+  const res = await aiSearchFetchOnce(url, body);
+  if (res.status !== 401) return finalizeAiSearchResponse(res);
+
+  // Bearer token may have expired between cache hit and request — clear
+  // and retry exactly once with a fresh token. Pure key auth has no
+  // refresh path, so the second 401 falls through to the error case.
+  const { clearAiSearchTokenCache } = await import("./ai-search-auth");
+  clearAiSearchTokenCache();
+  const retried = await aiSearchFetchOnce(url, body);
+  return finalizeAiSearchResponse(retried);
+}
+
+async function aiSearchFetchOnce(url: string, body: unknown): Promise<Response> {
+  const { getAiSearchAuth } = await import("./ai-search-auth");
+  const auth = await getAiSearchAuth();
+
+  const headers: Record<string, string> = { "Content-Type": "application/json" };
+  if (auth.kind === "bearer") {
+    headers["Authorization"] = `Bearer ${auth.token}`;
+  } else {
+    headers["api-key"] = auth.key;
+  }
+
+  return await fetch(url, {
+    method: "POST",
+    headers,
+    body: JSON.stringify(body),
+  });
+}
+
+async function finalizeAiSearchResponse(res: Response): Promise<unknown> {
+  if (!res.ok) {
+    const errText = await res.text();
+    throw new Error(`AI Search request failed (${res.status}): ${errText}`);
+  }
+  return await res.json();
+}
+
+function mockSearchKnowledgeBase(
+  query: string,
+  top: number,
+  disableThreshold: boolean,
+): SearchKnowledgeBaseResponse {
+  const lc = query.toLowerCase();
+  const isPolicy = lc.includes("outside counsel") || lc.includes("guidelines") ||
+    lc.includes("policy") || lc.includes("policies");
+  const isEmptyTrigger = lc.includes("__no_results__");
+  const isLowScoreTrigger = lc.includes("__low_score__");
+
+  if (isEmptyTrigger) {
+    return {
+      status: "no_results",
+      reason: "empty_index",
+      query,
+      suggestion:
+        "No documents matched. Try rephrasing the query, broadening keywords, or fall back to fetching a known SharePoint document directly.",
+    };
+  }
+
+  const baseHits: SearchKnowledgeBaseResult[] = [
+    {
+      chunk: isPolicy
+        ? "Information Security Policy: all employees must complete annual security awareness training and report suspicious activity to the SOC within 1 hour of detection."
+        : "Helpdesk Runbook: standard onboarding procedure includes provisioning Microsoft 365, Adobe Creative Cloud, and role-specific access groups based on the new hire's department.",
+      header_1: isPolicy ? "Information Security Policy" : "Helpdesk Runbooks",
+      header_2: "Overview",
+      header_3: null,
+      title: isPolicy ? "Information-Security-Policy.docx" : "Onboarding-Runbook.docx",
+      url: isPolicy
+        ? "https://example.sharepoint.com/sites/InformationSecurity/Shared%20Documents/Information-Security-Policy.docx"
+        : "https://example.sharepoint.com/sites/InformationSecurity/Shared%20Documents/Onboarding-Runbook.docx",
+      lastModified: "2026-02-14T09:30:00Z",
+      rerankerScore: isLowScoreTrigger ? 0.4 : 2.7,
+      captions: [
+        isPolicy
+          ? "Annual security awareness training is mandatory…"
+          : "Standard onboarding procedure includes provisioning…",
+      ],
+    },
+    {
+      chunk: "Section 4.2 — Audit Requirements: all access to sensitive resources must be logged and reviewed quarterly by the responsible owner.",
+      header_1: "Audit Requirements",
+      header_2: "Section 4.2",
+      header_3: null,
+      title: "Audit-Requirements.docx",
+      url: "https://example.sharepoint.com/sites/InformationSecurity/Shared%20Documents/Audit-Requirements.docx",
+      lastModified: "2026-01-08T12:00:00Z",
+      rerankerScore: 1.95,
+      captions: ["All access to sensitive resources must be logged…"],
+    },
+  ];
+
+  const limited = baseHits.slice(0, top);
+  const threshold = rerankerThreshold();
+  const filtered = disableThreshold ? limited : limited.filter((r) => r.rerankerScore >= threshold);
+
+  if (filtered.length === 0) {
+    return {
+      status: "no_results",
+      reason: "below_threshold",
+      query,
+      suggestion: `No results cleared the reranker threshold (>= ${threshold}). Consider rephrasing, broadening, or fetching a known SharePoint document directly.`,
+    };
+  }
+
+  return {
+    status: "ok",
+    results: filtered,
+    topRerankerScore: filtered[0].rerankerScore,
+    truncated: filtered.some((r) => r.chunk.endsWith("…")),
+  };
+}
+
 // ── Context Retrieval ─────────────────────────────────────────
 
 // Anthropic tool_use_id format: "toolu_" followed by alphanumerics
@@ -3412,6 +3709,7 @@ const executors: Record<string, (input: Record<string, unknown>) => Promise<unkn
   list_appomni_discovered_apps: (input) => list_appomni_discovered_apps(input as unknown as ListAppOmniDiscoveredAppsInput),
   get_appomni_audit_logs: (input) => get_appomni_audit_logs(input as unknown as GetAppOmniAuditLogsInput),
   action_appomni_finding: (input) => action_appomni_finding(input as unknown as ActionAppOmniFindingInput),
+  searchKnowledgeBase: (input) => searchKnowledgeBase(input as unknown as SearchKnowledgeBaseInput),
 };
 
 export interface ExecuteToolContext {
