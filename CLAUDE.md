@@ -48,6 +48,89 @@ cd web && npm run build  # Production build
 
 Set `MOCK_MODE=true` (default) in `.env` to test without Azure credentials. Set `MOCK_MODE=false` and provide Azure credentials for live API calls.
 
+## Repository Workflow
+
+`main` is protected. Any change must land via a pull request — direct pushes are blocked except for admin bypass (which should only be used for genuine hotfixes, not as a shortcut around CI).
+
+### Required CI checks (all must be green to merge)
+
+- **`All checks passed`** — aggregator job in `.github/workflows/ci.yml`. The `web-checks` and `cli-checks` jobs are path-filtered (skipped when the PR doesn't touch their surface), and GitHub records `skipped` rather than `success` for them. The aggregator runs `if: always()` and translates skipped/success → green so a single required check covers both surfaces.
+- **`CodeQL (security-extended)`** — runs on every push regardless of paths
+- **`Secret scan (gitleaks)`** — runs on every push regardless of paths
+
+### PR rules
+
+- Required PR before merging (0 approvals — solo maintainer can self-merge once checks are green)
+- All conversation comments must be resolved before merging
+- Branches must be up to date with `main` before merging (strict mode)
+- Force push and branch deletion are blocked
+- CODEOWNERS surfaces suggested reviewers but does not enforce review (will be flipped on when more maintainers join)
+
+### Workflow for a typical change
+
+```bash
+git checkout -b <type>/<short-name>           # e.g., fix/integration-redirects
+# … edit, test locally …
+cd web && npm run typecheck && npm run lint && npm run test
+git commit -m "..."
+git push -u origin <branch>
+gh pr create --fill                           # or with --title/--body
+# wait for CI; resolve any comments; then:
+gh pr merge --squash --delete-branch          # or --merge for a true merge
+```
+
+### Commit message convention
+
+Emoji-prefixed conventional commits, single-line summary that fits `git log --oneline`:
+
+```
+<emoji> <type>(<scope>): <short summary>
+```
+
+Common emoji choices: ✨ feat · 🐛 fix · 🔨 fix(refactor) · 🔒 security · 📝 docs · ⚡ perf · 🧪 test · 🚀 release · ⬆️ deps. Use the body to explain the **why**; the diff already shows the **what**.
+
+### Release tags
+
+Versioning is per-surface, not unified:
+
+- **CLI**: `cli-vMAJOR.MINOR.PATCH` (e.g., `cli-v0.1.0`)
+- **Web**: `web-vMAJOR.MINOR.PATCH` (e.g., `web-v0.1.0`) — serves as a deployment marker for the Azure App Service rollout
+
+Create with `git tag -a <tag> -m "..." && git push origin <tag>` then `gh release create <tag> --generate-notes`. CLI installer signing is local-only today (`npm run release` on Windows); automated CI build + upload is on the roadmap.
+
+### GitHub Actions versioning
+
+Every action reference in `.github/workflows/` must be **SHA-pinned** with a trailing version comment. Mutable tags (`@v6`, `@v3`) are not allowed because they can be silently re-pointed by upstream:
+
+```yaml
+# ✅ Correct
+- uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+# ❌ Never
+- uses: actions/checkout@v6
+```
+
+To resolve a tag to its commit SHA:
+
+```bash
+gh api repos/{owner}/{repo}/git/refs/tags/{tag} --jq '.object.sha'
+# If the result is a tag object (not commit), dereference:
+gh api repos/{owner}/{repo}/git/tags/{returned-sha} --jq '.object.sha'
+```
+
+### Security review
+
+Changes that touch security-sensitive files trigger CODEOWNERS suggestions and warrant extra care:
+
+- `/web/lib/auth.ts`, `/web/lib/auth-helpers.ts`, `/web/lib/permissions.ts`
+- `/web/lib/api-key-store.ts`, `/web/lib/api-key-crypto.ts`, `/web/lib/secrets.ts`
+- `/web/lib/injection-guard.ts`, `/web/lib/ai-search-auth.ts`
+- `/web/lib/agent.ts`, `/web/lib/executors.ts`
+- `/web/lib/conversation-store*.ts`, `/web/lib/session-factory.ts`, `/web/lib/logger.ts`
+- `/.github/`
+
+For new external HTTP calls in executors or routes, follow the existing pattern: validate any host-bearing inputs against a strict allowlist (see `TL_INSTANCE_RE` in `executors.ts`) and pass `redirect: "error"` to `fetch()` so credentials cannot leak via 3xx forwarding.
+
 ## Architecture
 
 ### CLI (`cli/src/`)
