@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { resolveAuth } from "@/lib/auth-helpers";
 import { getIntegration } from "@/lib/integration-registry";
 import { getAzureToken, getMSGraphToken } from "@/lib/auth";
+import { TL_INSTANCE_RE } from "@/lib/executors";
 import { getToolSecret } from "@/lib/secrets";
 
 const PROBES: Record<string, () => Promise<void>> = {
@@ -19,12 +20,12 @@ const PROBES: Record<string, () => Promise<void>> = {
     const instance = await getToolSecret("THREATLOCKER_INSTANCE");
     const orgId = await getToolSecret("THREATLOCKER_ORG_ID");
     if (!apiKey || !instance || !orgId) throw new Error("Missing ThreatLocker credentials");
-    // SECURITY: Instance is interpolated into the request HOST below
-    // (`portalapi.${instance}.threatlocker.com`). Without this guard, an
-    // admin who sets THREATLOCKER_INSTANCE to a value containing `/`, `?`,
-    // or `#` could redirect the probe — and the API key in the headers —
-    // to an attacker-controlled host. Mirrors TL_INSTANCE_RE in executors.ts.
-    if (!/^[a-z0-9]{1,32}$/.test(instance)) {
+    // SECURITY: `instance` is interpolated directly into the request hostname
+    // below. Enforce the strict allowlist defined by TL_INSTANCE_RE so the
+    // value can only ever be a plain subdomain label, never a string that
+    // could redirect the request — and the API key in the headers — to an
+    // attacker-controlled host.
+    if (!TL_INSTANCE_RE.test(instance)) {
       throw new Error("Invalid THREATLOCKER_INSTANCE format — expected a short lowercase subdomain label (e.g., 'us' or 'g').");
     }
     const res = await fetch(

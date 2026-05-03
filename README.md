@@ -12,9 +12,9 @@
 
 [![CI](https://github.com/pkeenan87/Neo/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/pkeenan87/Neo/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![CodeQL](https://img.shields.io/badge/CodeQL-security--extended-blue)](.github/workflows/ci.yml)
-[![Status](https://img.shields.io/badge/status-active%20development-brightgreen)](#)
-[![Node](https://img.shields.io/badge/node-%E2%89%A520-339933?logo=node.js&logoColor=white)](#)
+[![CodeQL: security-extended](https://img.shields.io/badge/CodeQL-security--extended-blue)](.github/workflows/ci.yml)
+[![Status: active development](https://img.shields.io/badge/status-active%20development-brightgreen)](https://github.com/pkeenan87/Neo/releases)
+[![Node >=20](https://img.shields.io/badge/node-%E2%89%A520-339933?logo=node.js&logoColor=white)](https://nodejs.org/en/about/previous-releases)
 
 A Claude-powered SOC analyst agent that investigates security incidents via Microsoft Sentinel, Defender XDR, and Entra ID. It can execute containment actions (password reset, machine isolation) with human confirmation gates.
 
@@ -238,8 +238,8 @@ The CLI is a thin client. All agent logic, tool execution, and credential manage
 
 Releases are tagged independently per surface:
 
-- **CLI** releases use the `cli-vMAJOR.MINOR.PATCH` tag prefix and ship signed Windows installers as release assets.
-- **Web** releases use the `web-vMAJOR.MINOR.PATCH` tag prefix and serve as deployment markers for the Azure App Service deploy.
+- **CLI** releases will use the `cli-vMAJOR.MINOR.PATCH` tag prefix. Signed Windows installers are produced today by running `npm run release` locally on Windows (see [CLAUDE.md](CLAUDE.md#commands)); automated build + upload to GitHub Releases is planned.
+- **Web** releases will use the `web-vMAJOR.MINOR.PATCH` tag prefix and serve as deployment markers for the Azure App Service deploy.
 
 See the [Releases page](https://github.com/pkeenan87/Neo/releases) for changelogs and downloads.
 

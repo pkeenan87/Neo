@@ -886,7 +886,9 @@ async function report_message_as_phishing({
 
 // SECURITY: Instance must be a simple subdomain label — no dots, slashes, or
 // special characters that could redirect fetches to an unintended host (SSRF).
-const TL_INSTANCE_RE = /^[a-z0-9]{1,32}$/;
+// Exported so the integration test probe (route.ts) can apply the identical
+// guard without drift.
+export const TL_INSTANCE_RE = /^[a-z0-9]{1,32}$/;
 
 const TL_STATUS_MAP: Record<string, number> = {
   pending: 1,
