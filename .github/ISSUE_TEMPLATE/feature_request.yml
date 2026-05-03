@@ -1,0 +1,69 @@
+name: Feature request
+description: Suggest a new tool, integration, or behaviour.
+title: "[feature] "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for proposing a feature. The clearer the use case, the faster it can be evaluated.
+
+  - type: textarea
+    id: what
+    attributes:
+      label: What you want
+      description: Describe the feature in plain language. What should Neo be able to do that it cannot today?
+    validations:
+      required: true
+
+  - type: textarea
+    id: why
+    attributes:
+      label: Why it matters
+      description: What problem does this solve? Who benefits? How often would this be used? Any concrete incident or workflow that prompted the request?
+    validations:
+      required: true
+
+  - type: dropdown
+    id: surface
+    attributes:
+      label: Where it fits
+      options:
+        - CLI
+        - Web server
+        - New tool / executor
+        - New integration (Sentinel / XDR / Entra / ThreatLocker / Lansweeper / Abnormal / AppOmni / other)
+        - Documentation
+        - Other
+    validations:
+      required: true
+
+  - type: dropdown
+    id: confirmation
+    attributes:
+      label: Tool classification (if proposing a new tool)
+      description: Read-only tools execute autonomously. Destructive tools require human confirmation.
+      options:
+        - Read-only
+        - Destructive (requires confirmation gate)
+        - Not applicable
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Other approaches you thought about, and why this one is preferred.
+
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional context
+      description: Links, screenshots, vendor API docs, related issues — anything that helps shape the design.
+
+  - type: checkboxes
+    id: confirmations
+    attributes:
+      label: Pre-flight checks
+      options:
+        - label: I have searched existing issues and this feature has not already been requested.
+          required: true

@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Security vulnerability
+    url: https://github.com/pkeenan87/Neo/security/policy
+    about: Please report security issues privately via the policy in SECURITY.md, not as a public GitHub issue.
+  - name: Documentation
+    url: https://github.com/pkeenan87/Neo/blob/main/docs/user-guide.md
+    about: User and admin guide — start here for setup and troubleshooting questions.

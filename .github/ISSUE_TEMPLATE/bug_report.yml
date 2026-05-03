@@ -1,0 +1,108 @@
+name: Bug report
+description: Report something that does not work as documented.
+title: "[bug] "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for filing a bug report. Please complete the fields below so we can reproduce and triage quickly.
+
+        > **Security issues do not belong here.** Please follow [SECURITY.md](../blob/main/SECURITY.md) instead — public disclosure of an exploitable vulnerability puts users at risk.
+
+  - type: textarea
+    id: description
+    attributes:
+      label: What happened
+      description: A clear, concise description of the bug.
+      placeholder: When I run `neo auth login --api-key …`, the CLI prints "TypeError" instead of saving the key.
+    validations:
+      required: true
+
+  - type: dropdown
+    id: surface
+    attributes:
+      label: Affected surface
+      options:
+        - CLI
+        - Web server
+        - Both / unsure
+    validations:
+      required: true
+
+  - type: dropdown
+    id: mode
+    attributes:
+      label: Run mode
+      description: Was the web server in mock or live mode when the bug occurred?
+      options:
+        - MOCK_MODE=true (mock executors)
+        - MOCK_MODE=false (real Azure / vendor APIs)
+        - Not applicable (CLI-only bug)
+    validations:
+      required: true
+
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      description: Minimum steps for someone else to hit the same bug. Include the exact prompt, command, or HTTP request.
+      placeholder: |
+        1. Set MOCK_MODE=true
+        2. Run `npm start` from `web/`
+        3. From CLI, send the prompt "Investigate user@example.com"
+        4. …
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behaviour
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behaviour
+      description: Include any error message, stack trace, or relevant log lines. Use a code block.
+      render: shell
+    validations:
+      required: true
+
+  - type: input
+    id: cli-version
+    attributes:
+      label: CLI version
+      description: Output of `neo --version` (or the git SHA if you're running from source).
+      placeholder: cli-v0.1.0 or 8704797
+
+  - type: input
+    id: web-version
+    attributes:
+      label: Web server version
+      description: Tag/SHA of the running deployment.
+      placeholder: web-v0.1.0 or d25da3d
+
+  - type: input
+    id: node-version
+    attributes:
+      label: Node.js version
+      placeholder: v20.18.0
+
+  - type: input
+    id: os
+    attributes:
+      label: Operating system
+      placeholder: macOS 15.2 / Windows 11 24H2 / Ubuntu 24.04
+
+  - type: checkboxes
+    id: confirmations
+    attributes:
+      label: Pre-flight checks
+      options:
+        - label: I have searched existing issues and this bug has not already been reported.
+          required: true
+        - label: I have confirmed this is not a security vulnerability (which would go to SECURITY.md).
+          required: true
