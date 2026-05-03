@@ -66,54 +66,77 @@ export function SkillsSection() {
 
   const showCacheHint = cacheHintUntil !== null && cacheHintUntil > Date.now()
 
+  // Stable callback identities so child components' useEffect / memo
+  // dependencies don't re-fire on every parent render.
+  const goToList = useCallback(() => setView({ kind: 'list' }), [])
+  const goToCreate = useCallback(() => setView({ kind: 'create' }), [])
+  const dismissDelete = useCallback(() => setConfirmDelete(null), [])
+  const handleEditFromDetail = useCallback(
+    (id: string) => setView({ kind: 'edit', id }),
+    [],
+  )
+  const handleRequestDelete = useCallback(
+    (skill: SkillMeta) => setConfirmDelete(skill),
+    [],
+  )
+  const handleCreated = useCallback(() => {
+    toast({ intent: 'success', title: 'Skill created' })
+    setView({ kind: 'list' })
+    onMutated()
+  }, [toast, onMutated])
+  const handleEditCancel = useCallback(
+    (id: string) => setView({ kind: 'detail', id }),
+    [],
+  )
+  const handleEditSaved = useCallback(
+    (id: string) => {
+      toast({ intent: 'success', title: 'Skill updated' })
+      setView({ kind: 'detail', id })
+      onMutated()
+    },
+    [toast, onMutated],
+  )
+  const handleDeleted = useCallback(() => {
+    toast({ intent: 'success', title: 'Skill deleted' })
+    const wasViewingDeleted =
+      confirmDelete !== null &&
+      (view.kind === 'detail' || view.kind === 'edit') &&
+      view.id === confirmDelete.id
+    setConfirmDelete(null)
+    if (wasViewingDeleted) {
+      setView({ kind: 'list' })
+    }
+    onMutated()
+  }, [toast, onMutated, confirmDelete, view])
+
   // The modal is rendered as a sibling so it overlays regardless of
   // which view is currently active. position: fixed; inset: 0 in CSS.
   const modal = confirmDelete ? (
     <SkillDeleteConfirmModal
       skill={confirmDelete}
-      onCancel={() => setConfirmDelete(null)}
-      onDeleted={() => {
-        toast({ intent: 'success', title: 'Skill deleted' })
-        const wasViewingDeleted =
-          (view.kind === 'detail' || view.kind === 'edit') && view.id === confirmDelete.id
-        setConfirmDelete(null)
-        if (wasViewingDeleted) {
-          setView({ kind: 'list' })
-        }
-        onMutated()
-      }}
+      onCancel={dismissDelete}
+      onDeleted={handleDeleted}
     />
   ) : null
 
   if (view.kind === 'create') {
     return (
       <>
-        <SkillEditor
-          mode="create"
-          onCancel={() => setView({ kind: 'list' })}
-          onSaved={() => {
-            toast({ intent: 'success', title: 'Skill created' })
-            setView({ kind: 'list' })
-            onMutated()
-          }}
-        />
+        <SkillEditor mode="create" onCancel={goToList} onSaved={handleCreated} />
         {modal}
       </>
     )
   }
 
   if (view.kind === 'edit') {
+    const editId = view.id
     return (
       <>
         <SkillEditor
           mode="edit"
-          skillId={view.id}
-          onCancel={() => setView({ kind: 'detail', id: view.id })}
-          onSaved={() => {
-            toast({ intent: 'success', title: 'Skill updated' })
-            setView({ kind: 'detail', id: view.id })
-            onMutated()
-          }}
+          skillId={editId}
+          onCancel={() => handleEditCancel(editId)}
+          onSaved={() => handleEditSaved(editId)}
         />
         {modal}
       </>
@@ -121,13 +144,14 @@ export function SkillsSection() {
   }
 
   if (view.kind === 'detail') {
+    const detailId = view.id
     return (
       <>
         <SkillDetailView
-          skillId={view.id}
-          onBack={() => setView({ kind: 'list' })}
-          onEdit={() => setView({ kind: 'edit', id: view.id })}
-          onDelete={(skill) => setConfirmDelete(skill)}
+          skillId={detailId}
+          onBack={goToList}
+          onEdit={() => handleEditFromDetail(detailId)}
+          onDelete={handleRequestDelete}
         />
         {modal}
       </>
@@ -153,7 +177,7 @@ export function SkillsSection() {
         <button
           type="button"
           className={styles.newButton}
-          onClick={() => setView({ kind: 'create' })}
+          onClick={goToCreate}
         >
           <Plus className="w-4 h-4" aria-hidden="true" />
           New skill

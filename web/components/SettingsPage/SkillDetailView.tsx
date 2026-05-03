@@ -53,10 +53,14 @@ export function SkillDetailView({ skillId, onBack, onEdit, onDelete }: SkillDeta
   if (!skill) {
     return (
       <section className={sharedStyles.section}>
-        <button type="button" className={styles.editorBack} onClick={onBack}>
-          <ArrowLeft className="w-4 h-4" aria-hidden="true" />
-          Back
-        </button>
+        <div className={styles.detailHeader}>
+          <div className={styles.detailTitleGroup}>
+            <button type="button" className={styles.editorBack} onClick={onBack}>
+              <ArrowLeft className="w-4 h-4" aria-hidden="true" />
+              Back to skills
+            </button>
+          </div>
+        </div>
         <p className={sharedStyles.keyStatusText}>Skill not found.</p>
       </section>
     )

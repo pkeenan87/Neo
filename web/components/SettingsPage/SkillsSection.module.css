@@ -41,8 +41,7 @@
 }
 
 .tableHeader {
-  @apply text-left text-sm font-bold text-brand-600 pb-2 border-b border-border-default;
-  padding-right: 1rem;
+  @apply text-left text-sm font-bold text-brand-600 pb-2 pr-4 border-b border-border-default;
 }
 
 .tableRow {
