@@ -32,6 +32,9 @@ const PROBES: Record<string, () => Promise<void>> = {
       `https://portalapi.${instance}.threatlocker.com/portalapi/ApprovalRequest/ApprovalRequestGetByParameters`,
       {
         method: "POST",
+        // SECURITY: refuse to follow redirects so a 3xx from a CDN/edge can never
+        // forward `authorization` or `managedOrganizationId` to a redirect target.
+        redirect: "error",
         headers: { authorization: apiKey, "Content-Type": "application/json", managedOrganizationId: orgId },
         body: JSON.stringify({ pageSize: 1, statusIds: [1] }),
       },
@@ -46,6 +49,8 @@ const PROBES: Record<string, () => Promise<void>> = {
     if (!/^[a-zA-Z0-9_-]{1,128}$/.test(siteId)) throw new Error("Invalid LANSWEEPER_SITE_ID format");
     const res = await fetch("https://api.lansweeper.com/api/v2/graphql", {
       method: "POST",
+      // SECURITY: refuse to follow redirects so a 3xx can never forward the PAT.
+      redirect: "error",
       // Lansweeper PATs use "Token" scheme, not "Bearer" (which is for OAuth JWTs)
       headers: { Authorization: `Token ${apiToken}`, "Content-Type": "application/json" },
       // SECURITY: siteId passed as a GraphQL variable, not interpolated into the query string
@@ -63,6 +68,8 @@ const PROBES: Record<string, () => Promise<void>> = {
     if (!apiToken) throw new Error("Missing Abnormal Security credentials");
     // Use a lightweight GET endpoint to verify credentials
     const res = await fetch("https://api.abnormalplatform.com/v1/threats?pageSize=1&pageNumber=1", {
+      // SECURITY: refuse to follow redirects so a 3xx can never forward the bearer token.
+      redirect: "error",
       headers: { Authorization: `Bearer ${apiToken}` },
     });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
