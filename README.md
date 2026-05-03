@@ -10,7 +10,15 @@
 
 # Neo — AI Security Operations Agent
 
+[![CI](https://github.com/pkeenan87/Neo/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/pkeenan87/Neo/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![CodeQL](https://img.shields.io/badge/CodeQL-security--extended-blue)](.github/workflows/ci.yml)
+[![Status](https://img.shields.io/badge/status-active%20development-brightgreen)](#)
+[![Node](https://img.shields.io/badge/node-%E2%89%A520-339933?logo=node.js&logoColor=white)](#)
+
 A Claude-powered SOC analyst agent that investigates security incidents via Microsoft Sentinel, Defender XDR, and Entra ID. It can execute containment actions (password reset, machine isolation) with human confirmation gates.
+
+> **Project status:** Active development. APIs and tool schemas may change between releases. Production deployments should pin to a tagged release.
 
 Neo ships as two independent components:
 
@@ -223,6 +231,27 @@ The CLI is a thin client. All agent logic, tool execution, and credential manage
 
 - [Configuration Guide](docs/configuration.md) — Environment variables, API keys, Entra ID setup, CLI config
 - [User Guide](docs/user-guide.md) — Step-by-step instructions for users and admins
+- [Architecture](ARCHITECTURE.md) — System design and component responsibilities
+- [Security Policy](SECURITY.md) — How to report vulnerabilities
+
+## Releases
+
+Releases are tagged independently per surface:
+
+- **CLI** releases use the `cli-vMAJOR.MINOR.PATCH` tag prefix and ship signed Windows installers as release assets.
+- **Web** releases use the `web-vMAJOR.MINOR.PATCH` tag prefix and serve as deployment markers for the Azure App Service deploy.
+
+See the [Releases page](https://github.com/pkeenan87/Neo/releases) for changelogs and downloads.
+
+## Contributing
+
+Issues and pull requests are welcome. Before opening a PR:
+
+1. Run `MOCK_MODE=true` and verify your change works against the mock executors.
+2. For new tools, follow the pattern in [CLAUDE.md](CLAUDE.md#adding-a-new-tool-cli) — add the schema, mark destructive tools, and provide both mock and real implementations.
+3. CI will run typecheck, lint, tests, `npm audit`, CodeQL (security-extended), and gitleaks. Address any failures before requesting review.
+
+For security issues, **do not open a public issue** — see [SECURITY.md](SECURITY.md) for the disclosure process.
 
 ## Going Live
 

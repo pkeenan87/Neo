@@ -12,8 +12,29 @@ permissions:
   actions: read
 
 jobs:
+  changes:
+    name: Detect changed paths
+    runs-on: ubuntu-latest
+    outputs:
+      web: ${{ steps.filter.outputs.web }}
+      cli: ${{ steps.filter.outputs.cli }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            web:
+              - 'web/**'
+              - '.github/workflows/ci.yml'
+            cli:
+              - 'cli/**'
+              - '.github/workflows/ci.yml'
+
   web-checks:
     name: Web — typecheck / lint / test
+    needs: changes
+    if: needs.changes.outputs.web == 'true'
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -44,6 +65,8 @@ jobs:
 
   cli-checks:
     name: CLI — install / audit
+    needs: changes
+    if: needs.changes.outputs.cli == 'true'
     runs-on: ubuntu-latest
     defaults:
       run:
