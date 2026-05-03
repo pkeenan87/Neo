@@ -19,6 +19,14 @@ const PROBES: Record<string, () => Promise<void>> = {
     const instance = await getToolSecret("THREATLOCKER_INSTANCE");
     const orgId = await getToolSecret("THREATLOCKER_ORG_ID");
     if (!apiKey || !instance || !orgId) throw new Error("Missing ThreatLocker credentials");
+    // SECURITY: Instance is interpolated into the request HOST below
+    // (`portalapi.${instance}.threatlocker.com`). Without this guard, an
+    // admin who sets THREATLOCKER_INSTANCE to a value containing `/`, `?`,
+    // or `#` could redirect the probe — and the API key in the headers —
+    // to an attacker-controlled host. Mirrors TL_INSTANCE_RE in executors.ts.
+    if (!/^[a-z0-9]{1,32}$/.test(instance)) {
+      throw new Error("Invalid THREATLOCKER_INSTANCE format — expected a short lowercase subdomain label (e.g., 'us' or 'g').");
+    }
     const res = await fetch(
       `https://portalapi.${instance}.threatlocker.com/portalapi/ApprovalRequest/ApprovalRequestGetByParameters`,
       {
