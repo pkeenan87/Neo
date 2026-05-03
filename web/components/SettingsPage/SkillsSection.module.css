@@ -1,0 +1,567 @@
+@reference "../../app/globals.css";
+
+/* ── Toolbar ─────────────────────────────────────────────── */
+
+.toolbar {
+  @apply flex items-center justify-between mb-4 gap-4;
+}
+
+.newButton {
+  @apply px-4 py-2 rounded-lg text-sm font-bold cursor-pointer transition-colors duration-150;
+  @apply bg-brand-900 text-white;
+  border: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.newButton:hover:not(:disabled) {
+  @apply bg-brand-800;
+}
+
+.newButton:focus-visible {
+  outline: 2px solid #64748b;
+  outline-offset: 2px;
+}
+
+/* ── List ────────────────────────────────────────────────── */
+
+.empty {
+  @apply text-sm text-brand-500 py-8 text-center;
+}
+
+.tableWrapper {
+  @apply overflow-x-auto;
+}
+
+.table {
+  @apply w-full;
+  border-collapse: collapse;
+  font-size: 0.875rem;
+}
+
+.tableHeader {
+  @apply text-left text-sm font-bold text-brand-600 pb-2 border-b border-border-default;
+  padding-right: 1rem;
+}
+
+.tableRow {
+  @apply border-b border-border-default;
+}
+
+.tableRow:hover {
+  @apply bg-brand-50;
+}
+
+.tableCell {
+  @apply py-4 pr-4 text-sm text-brand-700 align-top;
+}
+
+.tableCellId {
+  font-family: monospace;
+  white-space: nowrap;
+}
+
+.tableCellDescription {
+  @apply text-brand-500;
+  max-width: 320px;
+}
+
+.tableCellActions {
+  @apply flex items-center gap-2;
+  white-space: nowrap;
+}
+
+.actionButton {
+  @apply text-sm cursor-pointer transition-colors duration-150;
+  background: none;
+  border: none;
+  padding: 0;
+  font-weight: 600;
+}
+
+.actionButton:focus-visible {
+  outline: 2px solid #64748b;
+  outline-offset: 2px;
+}
+
+.actionView {
+  @apply text-brand-700;
+}
+
+.actionView:hover {
+  @apply text-brand-900;
+}
+
+.actionEdit {
+  @apply text-brand-700;
+}
+
+.actionEdit:hover {
+  @apply text-brand-900;
+}
+
+.actionDelete {
+  @apply text-error-500;
+}
+
+.actionDelete:hover {
+  color: #dc2626;
+}
+
+.roleBadge {
+  @apply px-2 py-1 rounded-lg text-sm font-bold;
+  font-size: 0.6875rem;
+  display: inline-block;
+}
+
+.roleBadgeAdmin {
+  background-color: rgba(239, 68, 68, 0.1);
+  color: #ef4444;
+}
+
+.roleBadgeReader {
+  @apply bg-brand-100 text-brand-700;
+}
+
+.destructiveBadge {
+  @apply px-2 py-1 rounded-lg text-sm font-bold;
+  font-size: 0.6875rem;
+  display: inline-block;
+  background-color: rgba(239, 68, 68, 0.15);
+  color: #dc2626;
+  margin-left: 0.5rem;
+}
+
+/* ── Editor ──────────────────────────────────────────────── */
+
+.editorRoot {
+  @apply flex flex-col gap-4;
+}
+
+.editorHeader {
+  @apply flex items-center justify-between gap-4;
+}
+
+.editorTitle {
+  @apply text-lg font-bold text-brand-900;
+}
+
+.editorBack {
+  @apply text-sm text-brand-500 cursor-pointer transition-colors duration-150;
+  background: none;
+  border: none;
+  padding: 0;
+}
+
+.editorBack:hover {
+  @apply text-brand-700;
+}
+
+.editorBack:focus-visible {
+  outline: 2px solid #64748b;
+  outline-offset: 2px;
+}
+
+.editorGrid {
+  @apply grid gap-4;
+  grid-template-columns: 1fr 1fr;
+}
+
+.editorColumn {
+  @apply flex flex-col gap-4;
+}
+
+.idInput {
+  @apply px-4 py-2 rounded-lg border border-border-default bg-surface-sunken text-brand-900 transition-colors duration-150;
+  font-size: 0.875rem;
+  font-family: monospace;
+}
+
+.idInput:focus-visible {
+  outline: none;
+  @apply border-brand-500;
+  box-shadow: 0 0 0 3px rgba(100, 116, 139, 0.25);
+}
+
+.idInput:read-only {
+  @apply bg-surface-default cursor-default;
+}
+
+.contentTextarea {
+  @apply px-4 py-2 rounded-lg border border-border-default bg-surface-sunken text-brand-900 transition-colors duration-150;
+  font-size: 0.8125rem;
+  font-family: monospace;
+  resize: vertical;
+  min-height: 480px;
+  line-height: 1.5;
+}
+
+.contentTextarea:focus-visible {
+  outline: none;
+  @apply border-brand-500;
+  box-shadow: 0 0 0 3px rgba(100, 116, 139, 0.25);
+}
+
+.byteCount {
+  @apply text-sm text-brand-400;
+  font-size: 0.75rem;
+  text-align: right;
+}
+
+.byteCountWarn {
+  @apply text-warning-500;
+}
+
+.byteCountError {
+  @apply text-error-500;
+}
+
+.previewCard {
+  @apply rounded-lg border border-border-default p-4 bg-surface-sunken flex flex-col gap-4;
+}
+
+.previewLabel {
+  @apply text-sm font-bold text-brand-600;
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.previewValue {
+  @apply text-sm text-brand-900;
+}
+
+.previewValueMuted {
+  @apply text-sm text-brand-400;
+  font-style: italic;
+}
+
+.previewToolList {
+  @apply flex flex-col gap-2;
+}
+
+.previewToolItem {
+  @apply flex items-center gap-2 text-sm;
+  font-family: monospace;
+  font-size: 0.8125rem;
+}
+
+.previewToolOk {
+  @apply text-brand-900;
+}
+
+.previewToolUnknown {
+  @apply text-error-500;
+  text-decoration: line-through;
+}
+
+.previewIssues {
+  @apply rounded-lg p-4 flex flex-col gap-2;
+  background-color: rgba(245, 158, 11, 0.1);
+}
+
+.previewIssueItem {
+  @apply text-sm text-warning-500 flex items-start gap-2;
+}
+
+.fieldError {
+  @apply text-sm text-error-500;
+  font-size: 0.8125rem;
+}
+
+.formActions {
+  @apply flex items-center justify-end gap-4 mt-4;
+}
+
+.cancelButton {
+  @apply px-4 py-2 rounded-lg text-sm font-bold cursor-pointer transition-colors duration-150;
+  background: none;
+  border: 1px solid;
+  @apply border-border-default text-brand-700;
+}
+
+.cancelButton:hover {
+  @apply bg-brand-50;
+}
+
+.cancelButton:focus-visible {
+  outline: 2px solid #64748b;
+  outline-offset: 2px;
+}
+
+/* ── Detail view ─────────────────────────────────────────── */
+
+.detailHeader {
+  @apply flex items-start justify-between gap-4 mb-4;
+}
+
+.detailTitleGroup {
+  @apply flex flex-col gap-2;
+}
+
+.detailId {
+  @apply text-sm text-brand-400;
+  font-family: monospace;
+  font-size: 0.8125rem;
+}
+
+.detailMeta {
+  @apply grid gap-4 mb-4;
+  grid-template-columns: 1fr 1fr;
+}
+
+.detailMetaCell {
+  @apply rounded-lg border border-border-default p-4 bg-surface-sunken flex flex-col gap-2;
+}
+
+.detailContentBox {
+  @apply rounded-lg border border-border-default p-4 bg-surface-default;
+}
+
+.detailButtons {
+  @apply flex items-center gap-4;
+}
+
+/* ── Cache hint ──────────────────────────────────────────── */
+
+.cacheHint {
+  @apply rounded-lg px-4 py-2 text-sm flex items-center gap-2 mb-4;
+  background-color: rgba(99, 102, 241, 0.1);
+  color: #4338ca;
+}
+
+/* ── Confirm modal ───────────────────────────────────────── */
+
+.modalOverlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 50;
+}
+
+.modalContent {
+  @apply p-8 rounded-lg bg-surface-default shadow-modal flex flex-col gap-4;
+  max-width: 520px;
+  width: 90%;
+}
+
+.modalTitle {
+  @apply text-lg font-bold text-brand-900;
+}
+
+.modalBody {
+  @apply text-sm text-brand-700;
+}
+
+.modalCode {
+  font-family: monospace;
+  @apply px-2 py-1 rounded bg-surface-sunken;
+  font-size: 0.875rem;
+}
+
+.modalActions {
+  @apply flex items-center justify-end gap-4 mt-4;
+}
+
+.modalConfirm {
+  @apply px-4 py-2 rounded-lg text-sm font-bold cursor-pointer transition-colors duration-150;
+  background-color: #ef4444;
+  color: #fff;
+  border: none;
+}
+
+.modalConfirm:hover:not(:disabled) {
+  background-color: #dc2626;
+}
+
+.modalConfirm:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.modalConfirm:focus-visible {
+  outline: 2px solid #64748b;
+  outline-offset: 2px;
+}
+
+/* ── Responsive ──────────────────────────────────────────── */
+
+@media (max-width: 960px) {
+  .editorGrid {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 768px) {
+  .detailMeta {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* ── Dark mode ───────────────────────────────────────────── */
+
+:global(html.dark) .newButton {
+  background-color: #3ba55d;
+}
+
+:global(html.dark) .newButton:hover:not(:disabled) {
+  background-color: #4cba6e;
+}
+
+:global(html.dark) .empty {
+  color: #b9bbbe;
+}
+
+:global(html.dark) .tableHeader {
+  color: #b9bbbe;
+  border-bottom-color: rgba(255, 255, 255, 0.06);
+}
+
+:global(html.dark) .tableRow {
+  border-bottom-color: rgba(255, 255, 255, 0.04);
+}
+
+:global(html.dark) .tableRow:hover {
+  background: rgba(255, 255, 255, 0.04);
+}
+
+:global(html.dark) .tableCell {
+  color: #dbdee1;
+}
+
+:global(html.dark) .tableCellDescription {
+  color: #b9bbbe;
+}
+
+:global(html.dark) .actionView,
+:global(html.dark) .actionEdit {
+  color: #dbdee1;
+}
+
+:global(html.dark) .actionView:hover,
+:global(html.dark) .actionEdit:hover {
+  color: #fff;
+}
+
+:global(html.dark) .actionDelete {
+  color: #f87171;
+}
+
+:global(html.dark) .actionDelete:hover {
+  color: #ef4444;
+}
+
+:global(html.dark) .roleBadgeReader {
+  background: rgba(255, 255, 255, 0.06);
+  color: #dbdee1;
+}
+
+:global(html.dark) .roleBadgeAdmin {
+  background-color: rgba(239, 68, 68, 0.1);
+  color: #f87171;
+}
+
+:global(html.dark) .destructiveBadge {
+  background-color: rgba(239, 68, 68, 0.15);
+  color: #f87171;
+}
+
+:global(html.dark) .editorTitle {
+  color: #dbdee1;
+}
+
+:global(html.dark) .editorBack {
+  color: #b9bbbe;
+}
+
+:global(html.dark) .editorBack:hover {
+  color: #dbdee1;
+}
+
+:global(html.dark) .idInput,
+:global(html.dark) .contentTextarea {
+  background-color: #1e1f22;
+  border-color: rgba(255, 255, 255, 0.06);
+  color: #dbdee1;
+}
+
+:global(html.dark) .idInput:focus-visible,
+:global(html.dark) .contentTextarea:focus-visible {
+  border-color: #3ba55d;
+  box-shadow: 0 0 0 3px rgba(59, 165, 93, 0.15);
+}
+
+:global(html.dark) .previewCard,
+:global(html.dark) .detailMetaCell {
+  background: #1e1f22;
+  border-color: rgba(255, 255, 255, 0.06);
+}
+
+:global(html.dark) .previewLabel {
+  color: #b9bbbe;
+}
+
+:global(html.dark) .previewValue,
+:global(html.dark) .previewToolOk {
+  color: #dbdee1;
+}
+
+:global(html.dark) .previewValueMuted {
+  color: #72767d;
+}
+
+:global(html.dark) .previewToolUnknown {
+  color: #f87171;
+}
+
+:global(html.dark) .previewIssues {
+  background-color: rgba(245, 158, 11, 0.1);
+}
+
+:global(html.dark) .cacheHint {
+  background-color: rgba(99, 102, 241, 0.1);
+  color: #818cf8;
+}
+
+:global(html.dark) .detailContentBox {
+  background-color: #313338;
+  border-color: rgba(255, 255, 255, 0.06);
+}
+
+:global(html.dark) .detailId {
+  color: #72767d;
+}
+
+:global(html.dark) .cancelButton {
+  color: #b9bbbe;
+  border-color: rgba(255, 255, 255, 0.06);
+}
+
+:global(html.dark) .cancelButton:hover {
+  background: rgba(255, 255, 255, 0.06);
+  color: #dbdee1;
+}
+
+:global(html.dark) .modalContent {
+  background: #2b2d31;
+}
+
+:global(html.dark) .modalTitle {
+  color: #dbdee1;
+}
+
+:global(html.dark) .modalBody {
+  color: #b9bbbe;
+}
+
+:global(html.dark) .modalCode {
+  background: #1e1f22;
+}
+
+:global(html.dark) .fieldError {
+  color: #f87171;
+}

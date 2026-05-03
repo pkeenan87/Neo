@@ -1,0 +1,265 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { render as rtlRender, screen, fireEvent, cleanup, waitFor } from '@testing-library/react'
+import '@testing-library/jest-dom/vitest'
+import type { ReactElement } from 'react'
+import { ToastProvider } from '../context/ToastContext'
+import { ThemeProvider } from '../context/ThemeContext'
+
+// SkillsSection-level component tests. The route handlers are mocked
+// at the fetch boundary; the component is exercised end-to-end inside
+// the test's React tree.
+
+function render(ui: ReactElement) {
+  return rtlRender(
+    <ThemeProvider>
+      <ToastProvider>{ui}</ToastProvider>
+    </ThemeProvider>,
+  )
+}
+
+interface MockResponse {
+  status: number
+  body: unknown
+}
+
+const fetchMock = vi.fn<(input: RequestInfo | URL, init?: RequestInit) => Promise<Response>>()
+let responseQueue: Map<string, MockResponse[]> = new Map()
+
+function queueResponse(method: string, url: string, body: unknown, status = 200) {
+  const key = `${method.toUpperCase()} ${url}`
+  if (!responseQueue.has(key)) responseQueue.set(key, [])
+  responseQueue.get(key)!.push({ status, body })
+}
+
+function makeJsonResponse({ status, body }: MockResponse): Response {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { 'Content-Type': 'application/json' },
+  })
+}
+
+// jsdom doesn't ship matchMedia; ThemeProvider needs it.
+if (typeof window !== 'undefined' && typeof window.matchMedia !== 'function') {
+  Object.defineProperty(window, 'matchMedia', {
+    writable: true,
+    value: (query: string) => ({
+      matches: false,
+      media: query,
+      onchange: null,
+      addListener: () => {},
+      removeListener: () => {},
+      addEventListener: () => {},
+      removeEventListener: () => {},
+      dispatchEvent: () => false,
+    }),
+  })
+}
+
+beforeEach(() => {
+  responseQueue = new Map()
+  fetchMock.mockReset()
+  fetchMock.mockImplementation(async (input, init) => {
+    const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url
+    const method = (init?.method ?? 'GET').toUpperCase()
+    const key = `${method} ${url}`
+    const queue = responseQueue.get(key) ?? []
+    const next = queue.shift()
+    if (next) return makeJsonResponse(next)
+    return makeJsonResponse({ status: 500, body: { error: `unhandled ${key}` } })
+  })
+  vi.stubGlobal('fetch', fetchMock)
+})
+
+afterEach(() => {
+  vi.unstubAllGlobals()
+  cleanup()
+})
+
+import { SettingsPage } from '../components/SettingsPage/SettingsPage'
+
+describe('SettingsPage — Skills tab visibility', () => {
+  it('does NOT render the Skills tab when userRole is reader', () => {
+    queueResponse('GET', '/api/skills', { skills: [] }) // not actually called
+    render(<SettingsPage userName="Alice" userRole="reader" />)
+    expect(screen.queryByRole('tab', { name: /skills/i })).toBeNull()
+  })
+
+  it('does NOT render the Skills tab when userRole is triage', () => {
+    render(<SettingsPage userName="Alice" userRole="triage" />)
+    expect(screen.queryByRole('tab', { name: /skills/i })).toBeNull()
+  })
+
+  it('renders the Skills tab when userRole is admin', () => {
+    render(<SettingsPage userName="Alice" userRole="admin" />)
+    expect(screen.getByRole('tab', { name: /skills/i })).toBeInTheDocument()
+  })
+})
+
+describe('SkillsSection — list view', () => {
+  it('fetches /api/skills on mount and renders rows', async () => {
+    queueResponse('GET', '/api/skills', {
+      skills: [
+        {
+          id: 'tor-login-investigation',
+          name: 'TOR Login Investigation',
+          description: 'Triage a TOR sign-in alert.',
+          requiredTools: ['run_sentinel_kql', 'get_user_info'],
+          requiredRole: 'reader',
+          parameters: ['upn', 'timeframe'],
+        },
+      ],
+    })
+
+    render(<SettingsPage userName="Alice" userRole="admin" />)
+    fireEvent.click(screen.getByRole('tab', { name: /skills/i }))
+
+    await waitFor(() => expect(screen.getByText('tor-login-investigation')).toBeInTheDocument())
+    expect(screen.getByText('TOR Login Investigation')).toBeInTheDocument()
+    expect(screen.getByText('Triage a TOR sign-in alert.')).toBeInTheDocument()
+  })
+
+  it('renders the empty state when no skills exist', async () => {
+    queueResponse('GET', '/api/skills', { skills: [] })
+
+    render(<SettingsPage userName="Alice" userRole="admin" />)
+    fireEvent.click(screen.getByRole('tab', { name: /skills/i }))
+
+    await waitFor(() => expect(screen.getByText(/no skills yet/i)).toBeInTheDocument())
+  })
+})
+
+import { SkillEditor } from '../components/SettingsPage/SkillEditor'
+
+describe('SkillEditor — live parser preview', () => {
+  it('reflects parsed name + role + tools as the user edits the markdown', () => {
+    render(<SkillEditor mode="create" onCancel={() => {}} onSaved={() => {}} />)
+
+    const textarea = screen.getByLabelText(/markdown content/i) as HTMLTextAreaElement
+    fireEvent.change(textarea, {
+      target: {
+        value: [
+          '# Skill: My Test Skill',
+          '',
+          '## Description',
+          'A demo.',
+          '',
+          '## Required Tools',
+          '- run_sentinel_kql',
+          '',
+          '## Required Role',
+          'reader',
+          '',
+          '## Parameters',
+          '- upn',
+          '',
+          '## Steps',
+          'Do the thing.',
+        ].join('\n'),
+      },
+    })
+
+    expect(screen.getByText('My Test Skill')).toBeInTheDocument()
+    expect(screen.getByText('A demo.')).toBeInTheDocument()
+    expect(screen.getByText('run_sentinel_kql')).toBeInTheDocument()
+    expect(screen.getByText('upn')).toBeInTheDocument()
+  })
+
+  it('flags unknown tool names with a strike-through indicator', () => {
+    render(<SkillEditor mode="create" onCancel={() => {}} onSaved={() => {}} />)
+
+    const textarea = screen.getByLabelText(/markdown content/i) as HTMLTextAreaElement
+    fireEvent.change(textarea, {
+      target: {
+        value: [
+          '# Skill: Bogus',
+          '## Description',
+          'x',
+          '## Required Tools',
+          '- not_a_real_tool',
+          '## Required Role',
+          'reader',
+        ].join('\n'),
+      },
+    })
+
+    const tool = screen.getByText('not_a_real_tool')
+    expect(tool.className).toMatch(/previewToolUnknown/)
+    expect(screen.getByText(/not a registered tool name/i)).toBeInTheDocument()
+  })
+
+  it('flags destructive-tool + reader-role mismatch in the issues list', () => {
+    render(<SkillEditor mode="create" onCancel={() => {}} onSaved={() => {}} />)
+
+    const textarea = screen.getByLabelText(/markdown content/i) as HTMLTextAreaElement
+    fireEvent.change(textarea, {
+      target: {
+        value: [
+          '# Skill: Reset Skill',
+          '## Description',
+          'x',
+          '## Required Tools',
+          '- reset_user_password',
+          '## Required Role',
+          'reader',
+        ].join('\n'),
+      },
+    })
+
+    expect(screen.getByText(/uses destructive tools but Required Role is "reader"/i)).toBeInTheDocument()
+  })
+
+  it('does NOT call POST /api/skills when the id fails client-side validation', () => {
+    render(<SkillEditor mode="create" onCancel={() => {}} onSaved={() => {}} />)
+
+    const idInput = screen.getByLabelText(/^id/i) as HTMLInputElement
+    // Uppercase letters fail VALID_ID
+    fireEvent.change(idInput, { target: { value: 'BadID' } })
+
+    fireEvent.click(screen.getByRole('button', { name: /create skill/i }))
+
+    expect(fetchMock).not.toHaveBeenCalled()
+    expect(screen.getByText(/lowercase alphanumeric characters and hyphens/i)).toBeInTheDocument()
+  })
+})
+
+import { SkillDeleteConfirmModal } from '../components/SettingsPage/SkillDeleteConfirmModal'
+
+describe('SkillDeleteConfirmModal', () => {
+  const skill = {
+    id: 'demo-skill',
+    name: 'Demo',
+    description: 'd',
+    requiredTools: [],
+    requiredRole: 'reader' as const,
+    parameters: [],
+  }
+
+  it('disables Delete until the typed id matches', () => {
+    render(<SkillDeleteConfirmModal skill={skill} onCancel={() => {}} onDeleted={() => {}} />)
+
+    const button = screen.getByRole('button', { name: /^delete$/i })
+    expect(button).toBeDisabled()
+
+    const input = screen.getByLabelText(/type demo-skill/i)
+    fireEvent.change(input, { target: { value: 'demo-skil' } })
+    expect(button).toBeDisabled()
+
+    fireEvent.change(input, { target: { value: 'demo-skill' } })
+    expect(button).not.toBeDisabled()
+  })
+
+  it('calls DELETE /api/skills/[id] once and invokes onDeleted on 200', async () => {
+    queueResponse('DELETE', '/api/skills/demo-skill', { deleted: true })
+    const onDeleted = vi.fn()
+
+    render(<SkillDeleteConfirmModal skill={skill} onCancel={() => {}} onDeleted={onDeleted} />)
+    fireEvent.change(screen.getByLabelText(/type demo-skill/i), { target: { value: 'demo-skill' } })
+    fireEvent.click(screen.getByRole('button', { name: /^delete$/i }))
+
+    await waitFor(() => expect(onDeleted).toHaveBeenCalledOnce())
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/skills/demo-skill',
+      expect.objectContaining({ method: 'DELETE' }),
+    )
+  })
+})

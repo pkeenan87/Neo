@@ -169,7 +169,8 @@ export type LogEventType =
   | "conversation_store_mode_override"
   | "conversation_dual_write_divergence"
   | "context_engineering"
-  | "legal_hold_violation";
+  | "legal_hold_violation"
+  | "skill_modified";
 
 export interface LogIdentityContext {
   userName: string;

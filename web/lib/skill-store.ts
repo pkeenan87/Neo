@@ -1,6 +1,5 @@
 import { readFileSync, readdirSync, writeFileSync, unlinkSync, watch, mkdirSync, existsSync } from "fs";
 import { resolve, basename } from "path";
-import { TOOLS, DESTRUCTIVE_TOOLS } from "./tools";
 import { logger } from "./logger";
 import {
   listSkillsFromCosmos,
@@ -11,6 +10,21 @@ import {
 } from "./skill-store-cosmos";
 import type { Role } from "./permissions";
 import type { Skill, SkillMeta } from "./types";
+import {
+  parseSkillMarkdown,
+  validateSkillId,
+  validateSkillContent,
+  inspectSkill,
+} from "./skill-parser";
+
+// Re-export the browser-safe parser + validators so existing callers
+// (route handlers, migration script, agent loop) keep one import path.
+export {
+  parseSkillMarkdown,
+  validateSkillId,
+  validateSkillContent,
+  inspectSkill,
+};
 
 // NOTE: skill-store cannot import from `./config` because config imports
 // getSkillsForRole back from this module — that would be a circular
@@ -38,11 +52,6 @@ import type { Skill, SkillMeta } from "./types";
 // ─────────────────────────────────────────────────────────────
 
 const SKILLS_DIR = resolve(process.cwd(), "skills");
-
-const VALID_ID = /^[a-z0-9][a-z0-9-]*[a-z0-9]$/;
-const MAX_ID_LENGTH = 60;
-const MAX_CONTENT_BYTES = 32_000;
-const TOOL_NAMES = new Set(TOOLS.map((t) => t.name));
 
 // 15s read-through cache for the Cosmos backend. Skill updates take
 // effect on every instance within one cache window without restart.
@@ -96,99 +105,21 @@ async function getCosmosCache(): Promise<CosmosCache> {
 }
 
 // ─────────────────────────────────────────────────────────────
-//  Markdown Parsing
-// ─────────────────────────────────────────────────────────────
-
-function extractSection(raw: string, heading: string): string {
-  const pattern = new RegExp(
-    `^##\\s+${heading}\\s*$`,
-    "im"
-  );
-  const match = pattern.exec(raw);
-  if (!match) return "";
-
-  const start = match.index + match[0].length;
-  const nextHeading = raw.indexOf("\n## ", start);
-  const section = nextHeading === -1
-    ? raw.slice(start)
-    : raw.slice(start, nextHeading);
-
-  return section.trim();
-}
-
-function extractName(raw: string): string {
-  const match = /^#\s+Skill:\s*(.+)$/im.exec(raw);
-  return match ? match[1].trim() : "";
-}
-
-export function parseSkillMarkdown(id: string, raw: string): Skill {
-  const name = extractName(raw);
-  const description = extractSection(raw, "Description");
-  const instructions = extractSection(raw, "Steps");
-
-  const toolsRaw = extractSection(raw, "Required Tools");
-  const requiredTools = toolsRaw
-    ? toolsRaw.split("\n").map((l) => l.replace(/^-\s*`?/, "").replace(/`?\s*$/, "")).filter(Boolean)
-    : [];
-
-  const roleRaw = extractSection(raw, "Required Role");
-  const requiredRole: Role = roleRaw.trim().toLowerCase() === "admin" ? "admin" : "reader";
-
-  const paramsRaw = extractSection(raw, "Parameters");
-  const parameters = paramsRaw
-    ? paramsRaw.split("\n").map((l) => l.replace(/^-\s*`?/, "").replace(/`?\s*$/, "")).filter(Boolean)
-    : [];
-
-  return { id, name, description, instructions, requiredTools, requiredRole, parameters };
-}
-
-// ─────────────────────────────────────────────────────────────
-//  Validation
+//  Server-side validation (logs + returns boolean)
+//
+//  The pure-data check is `inspectSkill` (in ./skill-parser); this
+//  wrapper logs the same findings via the project's logger so the
+//  file-loader and Cosmos refresh paths leave a trail when a skill
+//  is rejected.
 // ─────────────────────────────────────────────────────────────
 
 export function validateSkill(skill: Skill): boolean {
-  if (!skill.name) {
-    logger.warn(`Skill "${skill.id}" is missing a name — skipped`, "skill-store");
-    return false;
+  const result = inspectSkill(skill);
+  if (result.ok) return true;
+  for (const issue of result.issues) {
+    logger.warn(`Skill "${skill.id}" — ${issue} (skipped)`, "skill-store");
   }
-  if (!skill.description) {
-    logger.warn(`Skill "${skill.id}" is missing a description — skipped`, "skill-store");
-    return false;
-  }
-
-  for (const tool of skill.requiredTools) {
-    if (!TOOL_NAMES.has(tool)) {
-      logger.warn(`Skill "${skill.id}" references unknown tool "${tool}" — skipped`, "skill-store");
-      return false;
-    }
-  }
-
-  const usesDestructiveTool = skill.requiredTools.some((t) => DESTRUCTIVE_TOOLS.has(t));
-  if (usesDestructiveTool && skill.requiredRole !== "admin") {
-    logger.warn(
-      `Skill "${skill.id}" uses destructive tools but has role "${skill.requiredRole}" — skipped (must be "admin")`,
-      "skill-store",
-    );
-    return false;
-  }
-
-  return true;
-}
-
-export function validateSkillId(id: string): string | null {
-  if (!id) return "ID is required";
-  if (id.length > MAX_ID_LENGTH) return `ID must be ${MAX_ID_LENGTH} characters or fewer`;
-  if (!VALID_ID.test(id)) {
-    return "ID must be 2+ lowercase alphanumeric characters and hyphens, not starting or ending with a hyphen";
-  }
-  return null;
-}
-
-export function validateSkillContent(content: string): string | null {
-  if (Buffer.byteLength(content, "utf-8") > MAX_CONTENT_BYTES) {
-    return `Skill content exceeds maximum size of ${MAX_CONTENT_BYTES} bytes`;
-  }
-  return null;
+  return false;
 }
 
 // ─────────────────────────────────────────────────────────────

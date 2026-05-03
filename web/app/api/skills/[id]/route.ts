@@ -8,6 +8,8 @@ import {
   validateSkillContent,
   toSkillMeta,
 } from "@/lib/skill-store";
+import { scanUserInput, shouldBlock } from "@/lib/injection-guard";
+import { logger, hashPii } from "@/lib/logger";
 
 interface RouteParams {
   params: Promise<{ id: string }>;
@@ -74,11 +76,34 @@ export async function PUT(request: NextRequest, { params }: RouteParams) {
     return NextResponse.json({ error: contentError }, { status: 400 });
   }
 
+  // See POST /api/skills for the rationale on the write-time scan.
+  const scan = scanUserInput(body.content, {
+    sessionId: "skill-write",
+    userId: identity.ownerId,
+    role: identity.role,
+  });
+  if (shouldBlock(scan)) {
+    return NextResponse.json(
+      { error: "Skill content tripped the prompt-injection guard. Rephrase and retry." },
+      { status: 400 },
+    );
+  }
+
   try {
     const skill = await updateSkill(id, body.content);
+    logger.emitEvent("skill_modified", "Skill updated", "api/skills", {
+      skillId: id,
+      action: "update",
+      ownerIdHash: hashPii(identity.ownerId),
+      role: identity.role,
+    });
     return NextResponse.json({ skill: toSkillMeta(skill) });
   } catch (err) {
-    console.error(`[skills] PUT /api/skills/${id} failed:`, err);
+    logger.error("Skill update failed", "api/skills", {
+      skillId: id,
+      action: "update",
+      errorMessage: err instanceof Error ? err.message : String(err),
+    });
     return NextResponse.json({ error: "Failed to update skill" }, { status: 400 });
   }
 }
@@ -105,9 +130,19 @@ export async function DELETE(request: NextRequest, { params }: RouteParams) {
 
   try {
     await deleteSkill(id);
+    logger.emitEvent("skill_modified", "Skill deleted", "api/skills", {
+      skillId: id,
+      action: "delete",
+      ownerIdHash: hashPii(identity.ownerId),
+      role: identity.role,
+    });
     return NextResponse.json({ deleted: true });
   } catch (err) {
-    console.error(`[skills] DELETE /api/skills/${id} failed:`, err);
+    logger.error("Skill delete failed", "api/skills", {
+      skillId: id,
+      action: "delete",
+      errorMessage: err instanceof Error ? err.message : String(err),
+    });
     return NextResponse.json({ error: "Failed to delete skill" }, { status: 500 });
   }
 }
