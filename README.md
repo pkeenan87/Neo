@@ -214,18 +214,16 @@ See [docs/configuration.md](docs/configuration.md) for setup instructions.
 
 ## Architecture
 
-```
-┌──────────┐     NDJSON/HTTPS      ┌──────────────┐      ┌─────────────────┐
-│  CLI     │ ──────────────────→  │  Web Server  │ ───→ │  Claude API     │
-│  (REPL)  │ ←────────────────── │  (Next.js)   │ ←─── │  (Opus 4.5)     │
-└──────────┘  streaming events    │              │      └─────────────────┘
-                                  │              │ ───→ Microsoft Sentinel
-                                  │              │ ───→ Defender XDR
-                                  │              │ ───→ Entra ID / Graph
-                                  └──────────────┘
-```
+![Neo architecture: a User Interface layer (CLI client and web dashboard) talks NDJSON over HTTPS to a Core Agent Backend on Next.js App Router (agent loop, context manager, tool execution engine, integration registry) that persists conversation state, custom skills, and usage telemetry to Azure Cosmos DB and dispatches to Microsoft Sentinel, Defender XDR, Entra ID, Abnormal Security, Lansweeper, ThreatLocker, and AppOmni — with the agent loop calling the Anthropic Claude API for inference](docs/images/architecture.png)
 
-The CLI is a thin client. All agent logic, tool execution, and credential management for Azure APIs happens on the server.
+Neo is organised into four layers:
+
+- **User interface** — a Node.js CLI client (Entra ID auth, terminal streaming) and a Next.js admin dashboard (admin tasks, session management). Both speak HTTPS + NDJSON to the backend.
+- **Core agent backend** — Next.js App Router hosting the iterative reasoning API: the **agent loop** (Claude orchestrator that determines intent), the **context manager** (rolling history compression + token-window optimisation), the **tool execution engine** (translates agent intents into KQL / REST / Graph calls), and the **integration registry** (API keys and secrets for multi-platform support).
+- **Persistence** — Azure Cosmos DB stores conversation state (v2 schema), custom skills, and per-user usage telemetry. Pessimistic budget reservations enforce 2-hour and weekly token windows before each agent loop runs.
+- **Integrations** — the Microsoft stack (Sentinel SIEM/KQL, Defender XDR, Entra ID / Graph) plus security vendors (Abnormal Security email, Lansweeper assets, ThreatLocker zero-trust, AppOmni SaaS). The agent loop calls the Anthropic Claude API directly for inference.
+
+The CLI is a thin client. All agent logic, tool execution, credential management, and prompt-injection guarding happen server-side.
 
 ## Documentation
 
