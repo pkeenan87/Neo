@@ -210,7 +210,9 @@ export function SkillsSection() {
                   <td className={`${styles.tableCell} ${styles.tableCellId}`}>{skill.id}</td>
                   <td className={styles.tableCell}>{skill.name || '—'}</td>
                   <td className={`${styles.tableCell} ${styles.tableCellDescription}`}>
-                    {skill.description || '—'}
+                    <div className={styles.descriptionClamp}>
+                      {skill.description || '—'}
+                    </div>
                   </td>
                   <td className={styles.tableCell}>
                     <span

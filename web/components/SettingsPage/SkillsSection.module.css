@@ -64,8 +64,16 @@
 .tableCellDescription {
   @apply text-brand-500;
   max-width: 480px;
-  /* Clamp to 2 lines so a long description doesn't blow up row height.
-     Full text remains available in the detail view. */
+}
+
+/* Line-clamp lives on an inner div, not the <td>: applying
+   `display: -webkit-box` to a table cell either breaks table layout
+   or is silently ignored, which is why the previous version showed
+   text bleeding past the clamp and getting cut mid-letter by
+   `overflow: hidden`. The wrapper div is a regular block element so
+   the -webkit-box flow works as intended. Full text remains
+   available in the detail view. */
+.descriptionClamp {
   display: -webkit-box;
   -webkit-line-clamp: 2;
   -webkit-box-orient: vertical;
