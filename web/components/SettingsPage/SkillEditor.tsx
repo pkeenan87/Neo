@@ -1,14 +1,9 @@
 'use client'
 
 import { useEffect, useMemo, useState } from 'react'
-import { Check, X, AlertTriangle } from 'lucide-react'
 import {
-  parseSkillMarkdown,
   validateSkillId,
-  inspectSkill,
   skillContentByteLength,
-  TOOL_NAMES,
-  DESTRUCTIVE_TOOLS,
   MAX_SKILL_CONTENT_BYTES,
 } from '@/lib/skill-parser'
 import sharedStyles from './SettingsPage.module.css'
@@ -97,14 +92,6 @@ export function SkillEditor(props: SkillEditorProps) {
     }
   }, [isEdit, props])
 
-  // Live parser + inspector preview.
-  const preview = useMemo(() => {
-    const previewId = id || 'preview'
-    const skill = parseSkillMarkdown(previewId, content)
-    const issues = inspectSkill(skill).issues
-    return { skill, issues }
-  }, [id, content])
-
   const byteLength = useMemo(() => skillContentByteLength(content), [content])
   const overByteCap = byteLength > MAX_SKILL_CONTENT_BYTES
   const nearByteCap = byteLength > MAX_SKILL_CONTENT_BYTES * 0.8
@@ -174,155 +161,55 @@ export function SkillEditor(props: SkillEditorProps) {
         <h2 className={styles.editorTitle}>
           {isEdit ? `Edit skill: ${props.skillId}` : 'New skill'}
         </h2>
-        <button type="button" className={styles.editorBack} onClick={props.onCancel}>
-          ← Cancel
-        </button>
       </div>
 
       <div className={styles.editorRoot}>
-        <div className={styles.editorGrid}>
-          {/* Left column — inputs */}
-          <div className={styles.editorColumn}>
-            <div className={sharedStyles.profileField}>
-              <label htmlFor="skill-id" className={sharedStyles.fieldLabel}>
-                ID {isEdit && <span className={sharedStyles.keyFieldHint}>(immutable)</span>}
-              </label>
-              <input
-                id="skill-id"
-                type="text"
-                className={styles.idInput}
-                value={id}
-                readOnly={isEdit}
-                onChange={(e) => setId(e.target.value)}
-                placeholder="kebab-case-id"
-                aria-invalid={idError !== null}
-                aria-describedby={idError ? 'skill-id-error' : undefined}
-              />
-              {idError && (
-                <p id="skill-id-error" className={styles.fieldError} role="alert">
-                  {idError}
-                </p>
-              )}
-            </div>
+        <div className={sharedStyles.profileField}>
+          <label htmlFor="skill-id" className={sharedStyles.fieldLabel}>
+            ID {isEdit && <span className={sharedStyles.keyFieldHint}>(immutable)</span>}
+          </label>
+          <input
+            id="skill-id"
+            type="text"
+            className={styles.idInput}
+            value={id}
+            readOnly={isEdit}
+            onChange={(e) => setId(e.target.value)}
+            placeholder="kebab-case-id"
+            aria-invalid={idError !== null}
+            aria-describedby={idError ? 'skill-id-error' : undefined}
+          />
+          {idError && (
+            <p id="skill-id-error" className={styles.fieldError} role="alert">
+              {idError}
+            </p>
+          )}
+        </div>
 
-            <div className={sharedStyles.profileField}>
-              <label htmlFor="skill-content" className={sharedStyles.fieldLabel}>
-                Markdown content
-              </label>
-              <textarea
-                id="skill-content"
-                className={styles.contentTextarea}
-                value={content}
-                onChange={(e) => setContent(e.target.value)}
-                spellCheck={false}
-                aria-invalid={contentError !== null}
-                aria-describedby={contentError ? 'skill-content-error' : undefined}
-              />
-              <p
-                className={`${styles.byteCount} ${overByteCap ? styles.byteCountError : nearByteCap ? styles.byteCountWarn : ''}`}
-                aria-live="polite"
-              >
-                {byteLength.toLocaleString()} / {MAX_SKILL_CONTENT_BYTES.toLocaleString()} bytes
-              </p>
-              {contentError && (
-                <p id="skill-content-error" className={styles.fieldError} role="alert">
-                  {contentError}
-                </p>
-              )}
-            </div>
-          </div>
-
-          {/* Right column — preview */}
-          <div className={styles.editorColumn}>
-            <div className={styles.previewCard} aria-label="Parsed skill preview">
-              <div>
-                <div className={styles.previewLabel}>Name</div>
-                <div className={preview.skill.name ? styles.previewValue : styles.previewValueMuted}>
-                  {preview.skill.name || '(missing — add a `# Skill: <Title>` heading)'}
-                </div>
-              </div>
-
-              <div>
-                <div className={styles.previewLabel}>Description</div>
-                <div className={preview.skill.description ? styles.previewValue : styles.previewValueMuted}>
-                  {preview.skill.description || '(missing — add a `## Description` section)'}
-                </div>
-              </div>
-
-              <div>
-                <div className={styles.previewLabel}>Required role</div>
-                <div className={styles.previewValue}>
-                  <span
-                    className={`${styles.roleBadge} ${
-                      preview.skill.requiredRole === 'admin'
-                        ? styles.roleBadgeAdmin
-                        : styles.roleBadgeReader
-                    }`}
-                  >
-                    {preview.skill.requiredRole}
-                  </span>
-                </div>
-              </div>
-
-              <div>
-                <div className={styles.previewLabel}>
-                  Required tools ({preview.skill.requiredTools.length})
-                </div>
-                {preview.skill.requiredTools.length === 0 ? (
-                  <div className={styles.previewValueMuted}>(none listed)</div>
-                ) : (
-                  <ul className={styles.previewToolList}>
-                    {preview.skill.requiredTools.map((tool) => {
-                      const known = TOOL_NAMES.has(tool)
-                      const destructive = DESTRUCTIVE_TOOLS.has(tool)
-                      return (
-                        <li
-                          key={tool}
-                          className={`${styles.previewToolItem} ${
-                            known ? styles.previewToolOk : styles.previewToolUnknown
-                          }`}
-                        >
-                          {known ? (
-                            <Check className="w-4 h-4" aria-hidden="true" />
-                          ) : (
-                            <X className="w-4 h-4" aria-hidden="true" />
-                          )}
-                          {tool}
-                          {destructive && (
-                            <span className={styles.destructiveBadge}>destructive</span>
-                          )}
-                        </li>
-                      )
-                    })}
-                  </ul>
-                )}
-              </div>
-
-              <div>
-                <div className={styles.previewLabel}>
-                  Parameters ({preview.skill.parameters.length})
-                </div>
-                {preview.skill.parameters.length === 0 ? (
-                  <div className={styles.previewValueMuted}>(none listed)</div>
-                ) : (
-                  <div className={styles.previewValue}>
-                    {preview.skill.parameters.join(', ')}
-                  </div>
-                )}
-              </div>
-
-              {preview.issues.length > 0 && (
-                <div className={styles.previewIssues} role="alert">
-                  {preview.issues.map((issue, i) => (
-                    <div key={i} className={styles.previewIssueItem}>
-                      <AlertTriangle className="w-4 h-4 shrink-0" aria-hidden="true" />
-                      <span>{issue}</span>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-          </div>
+        <div className={sharedStyles.profileField}>
+          <label htmlFor="skill-content" className={sharedStyles.fieldLabel}>
+            Markdown content
+          </label>
+          <textarea
+            id="skill-content"
+            className={styles.contentTextarea}
+            value={content}
+            onChange={(e) => setContent(e.target.value)}
+            spellCheck={false}
+            aria-invalid={contentError !== null}
+            aria-describedby={contentError ? 'skill-content-error' : undefined}
+          />
+          <p
+            className={`${styles.byteCount} ${overByteCap ? styles.byteCountError : nearByteCap ? styles.byteCountWarn : ''}`}
+            aria-live="polite"
+          >
+            {byteLength.toLocaleString()} / {MAX_SKILL_CONTENT_BYTES.toLocaleString()} bytes
+          </p>
+          {contentError && (
+            <p id="skill-content-error" className={styles.fieldError} role="alert">
+              {contentError}
+            </p>
+          )}
         </div>
 
         {serverError && (

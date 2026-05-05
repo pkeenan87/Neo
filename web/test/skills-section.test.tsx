@@ -130,84 +130,12 @@ describe('SkillsSection — list view', () => {
 
 import { SkillEditor } from '../components/SettingsPage/SkillEditor'
 
-describe('SkillEditor — live parser preview', () => {
-  it('reflects parsed name + role + tools as the user edits the markdown', () => {
-    render(<SkillEditor mode="create" onCancel={() => {}} onSaved={() => {}} />)
-
-    const textarea = screen.getByLabelText(/markdown content/i) as HTMLTextAreaElement
-    fireEvent.change(textarea, {
-      target: {
-        value: [
-          '# Skill: My Test Skill',
-          '',
-          '## Description',
-          'A demo.',
-          '',
-          '## Required Tools',
-          '- run_sentinel_kql',
-          '',
-          '## Required Role',
-          'reader',
-          '',
-          '## Parameters',
-          '- upn',
-          '',
-          '## Steps',
-          'Do the thing.',
-        ].join('\n'),
-      },
-    })
-
-    expect(screen.getByText('My Test Skill')).toBeInTheDocument()
-    expect(screen.getByText('A demo.')).toBeInTheDocument()
-    expect(screen.getByText('run_sentinel_kql')).toBeInTheDocument()
-    expect(screen.getByText('upn')).toBeInTheDocument()
-  })
-
-  it('flags unknown tool names with a strike-through indicator', () => {
-    render(<SkillEditor mode="create" onCancel={() => {}} onSaved={() => {}} />)
-
-    const textarea = screen.getByLabelText(/markdown content/i) as HTMLTextAreaElement
-    fireEvent.change(textarea, {
-      target: {
-        value: [
-          '# Skill: Bogus',
-          '## Description',
-          'x',
-          '## Required Tools',
-          '- not_a_real_tool',
-          '## Required Role',
-          'reader',
-        ].join('\n'),
-      },
-    })
-
-    const tool = screen.getByText('not_a_real_tool')
-    expect(tool.className).toMatch(/previewToolUnknown/)
-    expect(screen.getByText(/not a registered tool name/i)).toBeInTheDocument()
-  })
-
-  it('flags destructive-tool + reader-role mismatch in the issues list', () => {
-    render(<SkillEditor mode="create" onCancel={() => {}} onSaved={() => {}} />)
-
-    const textarea = screen.getByLabelText(/markdown content/i) as HTMLTextAreaElement
-    fireEvent.change(textarea, {
-      target: {
-        value: [
-          '# Skill: Reset Skill',
-          '## Description',
-          'x',
-          '## Required Tools',
-          '- reset_user_password',
-          '## Required Role',
-          'reader',
-        ].join('\n'),
-      },
-    })
-
-    expect(screen.getByText(/uses destructive tools but Required Role is "reader"/i)).toBeInTheDocument()
-  })
-
+describe('SkillEditor', () => {
+  // The previous "live parser preview" tests were retired with the
+  // right-column preview card itself. The server-side validators in
+  // skill-parser.ts still enforce identical rules (unknown tools,
+  // destructive-tool + reader-role mismatch, missing description) on
+  // POST/PUT — see the route handler tests for that coverage.
   it('does NOT call POST /api/skills when the id fails client-side validation', () => {
     render(<SkillEditor mode="create" onCancel={() => {}} onSaved={() => {}} />)
 
