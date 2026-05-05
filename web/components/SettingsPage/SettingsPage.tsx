@@ -66,7 +66,7 @@ export function SettingsPage({ userName, userImage, userRole, className }: Setti
       </aside>
 
       <main
-        className={styles.content}
+        className={`${styles.content}${activeTab === 'skills' ? ` ${styles.contentWide}` : ''}`}
         role="tabpanel"
         id={`panel-${activeTab}`}
         aria-labelledby={`tab-${activeTab}`}

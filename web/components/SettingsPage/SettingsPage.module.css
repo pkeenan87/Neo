@@ -55,6 +55,13 @@
   max-width: 720px;
 }
 
+/* Wider variant for tabs that render data tables / multi-column views
+   (e.g. Skills). 1280px keeps it readable on ultra-wide monitors while
+   giving the 7-column table room to breathe without horizontal scroll. */
+.contentWide {
+  max-width: 1280px;
+}
+
 /* ── Sections ─────────────────────────────────────────────── */
 
 .section {

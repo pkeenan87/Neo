@@ -174,9 +174,6 @@ export function SkillEditor(props: SkillEditorProps) {
         <h2 className={styles.editorTitle}>
           {isEdit ? `Edit skill: ${props.skillId}` : 'New skill'}
         </h2>
-        <button type="button" className={styles.editorBack} onClick={props.onCancel}>
-          ← Cancel
-        </button>
       </div>
 
       <div className={styles.editorRoot}>
