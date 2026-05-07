@@ -1,32 +1,69 @@
 import { getSkill } from "./skill-store";
+import { getMapping } from "./triage-mapping-store";
 import { env } from "./config";
+import { logger } from "./logger";
 import type { Skill } from "./types";
 import type { TriageSource } from "./types";
 
-// ── Skill lookup table ───────────────────────────────────────
-// Maps "product:alertType" → skill ID. Phase 1 ships with one
-// specific mapping. Extend this table as new triage skills are added.
-
-const TRIAGE_SKILL_MAP: Record<string, string> = {
-  "DefenderXDR:DefenderEndpoint.SuspiciousProcess": "defender-endpoint-triage",
-};
+// ── Skill lookup ─────────────────────────────────────────────
+// The previously-hardcoded TRIAGE_SKILL_MAP constant is gone; the
+// "<product>:<alertType>" → skill ID lookup now lives in the Cosmos-
+// backed `triage-mappings` container, fronted by a 15s read-through
+// cache in triage-mapping-store.ts. See _specs/admin-ui-alert-triage-
+// mapping.md for the full design.
 
 const GENERIC_SKILL_ID = "generic-alert-triage";
 
 /**
  * Resolve the triage skill for an alert. Falls back to the generic
- * catch-all skill if no specific mapping exists. Returns null only if
- * neither the mapped skill nor the catch-all is registered.
+ * catch-all skill if no specific mapping exists, the mapped skill
+ * has been deleted (orphaned mapping), or the mapping store is
+ * unavailable. Returns null only if neither the mapped skill nor
+ * the catch-all is registered.
+ *
+ * The store-error path is a deliberate no-fail: triage requests
+ * must always produce a verdict — losing the mapping table to a
+ * Cosmos hiccup should not take the endpoint down. We log a warning
+ * and continue to the generic skill, mirroring the dedup-cache
+ * behaviour described in _specs/alert-triage-api.md.
  */
 export async function resolveTriageSkill(
   source: TriageSource,
 ): Promise<{ skillId: string; skill: Skill } | null> {
   const key = `${source.product}:${source.alertType}`;
-  const mappedId = TRIAGE_SKILL_MAP[key];
+
+  let mappedId: string | undefined;
+  try {
+    const mapping = await getMapping(key);
+    mappedId = mapping?.skillId;
+  } catch (err) {
+    // Cosmos unavailable / network blip / cache refresh failure —
+    // log and fall through to the generic catch-all rather than
+    // failing the triage request.
+    logger.warn(
+      "triage-dispatch: mapping store error — falling back to generic",
+      "triage-dispatch",
+      {
+        key,
+        errorMessage: err instanceof Error ? err.message : String(err),
+      },
+    );
+  }
 
   if (mappedId) {
     const skill = await getSkill(mappedId);
     if (skill) return { skillId: mappedId, skill };
+    // Mapping points at a skill that no longer exists. Treat as a
+    // miss and let an operator notice via the warning so they can
+    // either re-create the skill or delete the orphan mapping.
+    logger.warn(
+      "triage-dispatch: mapped skill not found — falling back to generic",
+      "triage-dispatch",
+      {
+        key,
+        mappedSkillId: mappedId,
+      },
+    );
   }
 
   // Fall back to generic catch-all

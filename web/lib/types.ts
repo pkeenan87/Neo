@@ -170,7 +170,8 @@ export type LogEventType =
   | "conversation_dual_write_divergence"
   | "context_engineering"
   | "legal_hold_violation"
-  | "skill_modified";
+  | "skill_modified"
+  | "triage_mapping_modified";
 
 export interface LogIdentityContext {
   userName: string;
@@ -1168,6 +1169,29 @@ export interface TriageResponse {
   /** Reason code when the response is a fail-safe or system-generated verdict. */
   reason?: string;
 }
+
+/**
+ * Admin-managed entry in the triage skill lookup table. The id is the
+ * source key in the form `<product>:<alertType>` (case-sensitive, matches
+ * what the triage source emits on the wire). One mapping = one alert
+ * type pinned to one skill. Replaces the legacy hardcoded
+ * TRIAGE_SKILL_MAP constant in triage-dispatch.ts.
+ */
+export interface TriageMapping {
+  /** The source key — `<product>:<alertType>`. Immutable after create. */
+  id: string;
+  /** Skill id (from /api/skills) the agent loop should use for this key. */
+  skillId: string;
+  /** ISO-8601 timestamp of last write. */
+  updatedAt: string;
+  /** Hashed ownerId of the admin who last wrote this mapping. */
+  updatedBy: string;
+}
+
+/** Wire DTO for the admin list response. Matches TriageMapping today;
+ *  separate type so future internal-only fields (e.g. version) don't
+ *  leak through the API. */
+export type TriageMappingMeta = TriageMapping;
 
 export interface TriageRun {
   id: string;
