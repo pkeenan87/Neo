@@ -266,7 +266,7 @@ export function TriageMappingsSection() {
           disabled={creating}
         >
           <Plus className="w-4 h-4" aria-hidden="true" />
-          New mapping
+          New
         </button>
       </div>
 
@@ -333,7 +333,7 @@ export function TriageMappingsSection() {
         <p className={sharedStyles.keyStatusText}>Loading mappings…</p>
       ) : mappings.length === 0 ? (
         <p className={skillsStyles.empty}>
-          No triage mappings yet. Click <strong>New mapping</strong> to add one.
+          No triage mappings yet. Click <strong>New</strong> to add one.
         </p>
       ) : (
         <div className={skillsStyles.tableWrapper}>
