@@ -12,10 +12,13 @@
     "lint": "eslint .",
     "build:migrate": "esbuild scripts/migrate-cosmos-v1-to-v2.ts --bundle --platform=node --format=esm --target=node20 --outfile=dist/migrate.mjs --external:@azure/cosmos --external:@azure/identity --external:@azure/storage-blob --banner:js=\"import { createRequire } from 'module'; const require = createRequire(import.meta.url);\"",
     "build:migrate-skills": "esbuild scripts/migrate-skills-to-cosmos.ts --bundle --platform=node --format=esm --target=node20 --outfile=dist/migrate-skills.mjs --external:@azure/cosmos --external:@azure/identity --external:@azure/storage-blob --external:@anthropic-ai/sdk --banner:js=\"import { createRequire } from 'module'; const require = createRequire(import.meta.url);\"",
+    "build:seed-triage-mappings": "esbuild scripts/seed-triage-mappings.ts --bundle --platform=node --format=esm --target=node20 --outfile=dist/seed-triage-mappings.mjs --external:@azure/cosmos --external:@azure/identity --banner:js=\"import { createRequire } from 'module'; const require = createRequire(import.meta.url);\"",
     "migrate:conversations": "tsx scripts/migrate-cosmos-v1-to-v2.ts",
     "migrate:conversations:prod": "node dist/migrate.mjs",
     "migrate:skills": "tsx scripts/migrate-skills-to-cosmos.ts",
-    "migrate:skills:prod": "node dist/migrate-skills.mjs"
+    "migrate:skills:prod": "node dist/migrate-skills.mjs",
+    "seed:triage-mappings": "tsx scripts/seed-triage-mappings.ts",
+    "seed:triage-mappings:prod": "node dist/seed-triage-mappings.mjs"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "0.30.1",

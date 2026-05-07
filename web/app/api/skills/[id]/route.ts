@@ -8,6 +8,7 @@ import {
   validateSkillContent,
   toSkillMeta,
 } from "@/lib/skill-store";
+import { getMappingsForSkill } from "@/lib/triage-mapping-store";
 import { scanUserInput, shouldBlock } from "@/lib/injection-guard";
 import { logger, hashPii } from "@/lib/logger";
 
@@ -126,6 +127,45 @@ export async function DELETE(request: NextRequest, { params }: RouteParams) {
 
   if (!(await getSkill(id))) {
     return NextResponse.json({ error: "Skill not found" }, { status: 404 });
+  }
+
+  // Block deletion if any triage mappings reference this skill —
+  // orphaning a mapping would silently route the affected alert
+  // type to the generic fallback. Return the list of blocking
+  // mapping keys so the admin UI can guide the operator to
+  // reassign or delete them first.
+  //
+  // getMappingsForSkill propagates Cosmos errors (it goes through the
+  // strict lister) so a transient outage surfaces as a thrown
+  // exception here. Fail-closed: better to make the admin retry than
+  // to silently allow a destructive delete on a false-empty result.
+  let blockingMappings: Awaited<ReturnType<typeof getMappingsForSkill>>;
+  try {
+    blockingMappings = await getMappingsForSkill(id);
+  } catch (err) {
+    logger.warn("Skill delete blocked — mapping store unavailable", "api/skills", {
+      skillId: id,
+      ownerIdHash: hashPii(identity.ownerId),
+      errorMessage: err instanceof Error ? err.message : String(err),
+    });
+    return NextResponse.json(
+      { error: "Could not verify triage mapping references — please retry in a moment." },
+      { status: 503 },
+    );
+  }
+  if (blockingMappings.length > 0) {
+    logger.warn("Skill delete blocked — triage mappings reference it", "api/skills", {
+      skillId: id,
+      blockingMappingCount: blockingMappings.length,
+      ownerIdHash: hashPii(identity.ownerId),
+    });
+    return NextResponse.json(
+      {
+        error: "Skill is referenced by triage mappings — reassign or remove them first.",
+        blockingMappings: blockingMappings.map((m) => m.id),
+      },
+      { status: 409 },
+    );
   }
 
   try {

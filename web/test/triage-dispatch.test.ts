@@ -22,6 +22,18 @@ vi.mock("../lib/skill-store", () => {
   };
 });
 
+// Mockable mapping table — tests mutate `mappingState` to reshape
+// what `getMapping(key)` returns. `mappingThrows` simulates a Cosmos
+// outage so the dispatch fallback path can be exercised.
+let mappingThrows = false;
+let mappingState: Record<string, { id: string; skillId: string; updatedAt: string; updatedBy: string } | undefined> = {};
+vi.mock("../lib/triage-mapping-store", () => ({
+  getMapping: async (key: string) => {
+    if (mappingThrows) throw new Error("simulated Cosmos failure");
+    return mappingState[key];
+  },
+}));
+
 let callerAllowlistValue = "";
 vi.mock("../lib/config", async () => {
   const actual = await vi.importActual<Record<string, unknown>>("../lib/config");
@@ -52,6 +64,18 @@ function makeSource(overrides: Partial<TriageSource> = {}): TriageSource {
 }
 
 describe("resolveTriageSkill", () => {
+  beforeEach(() => {
+    mappingThrows = false;
+    mappingState = {
+      "DefenderXDR:DefenderEndpoint.SuspiciousProcess": {
+        id: "DefenderXDR:DefenderEndpoint.SuspiciousProcess",
+        skillId: "defender-endpoint-triage",
+        updatedAt: "2026-05-07T00:00:00.000Z",
+        updatedBy: "test",
+      },
+    };
+  });
+
   it("resolves a mapped product:alertType to the correct skill", async () => {
     const result = await resolveTriageSkill(makeSource());
     expect(result).not.toBeNull();
@@ -69,10 +93,25 @@ describe("resolveTriageSkill", () => {
   });
 
   it("falls back to catch-all when the mapped skill ID is not registered", async () => {
-    // DefenderXDR:SomeOtherType is not in TRIAGE_SKILL_MAP
-    const result = await resolveTriageSkill(makeSource({
-      alertType: "SomeOtherType",
-    }));
+    // Mapping points at a skill that no longer exists in the skill
+    // store — the orphan path. Should treat as a miss + warn + use
+    // the generic skill.
+    mappingState = {
+      "DefenderXDR:DefenderEndpoint.SuspiciousProcess": {
+        id: "DefenderXDR:DefenderEndpoint.SuspiciousProcess",
+        skillId: "deleted-skill-id",
+        updatedAt: "2026-05-07T00:00:00.000Z",
+        updatedBy: "test",
+      },
+    };
+    const result = await resolveTriageSkill(makeSource());
+    expect(result).not.toBeNull();
+    expect(result!.skillId).toBe("generic-alert-triage");
+  });
+
+  it("falls back to the generic skill when the mapping store throws (Cosmos outage)", async () => {
+    mappingThrows = true;
+    const result = await resolveTriageSkill(makeSource());
     expect(result).not.toBeNull();
     expect(result!.skillId).toBe("generic-alert-triage");
   });

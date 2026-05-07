@@ -202,6 +202,14 @@ def build(web_dir: Path, standalone_dir: Path, skip_build: bool) -> None:
         fail(f"npm run build:migrate failed with exit code {e.returncode}")
     ok("Migration script bundled.")
 
+    print()
+    info("Bundling triage-mappings seed script...")
+    try:
+        run(["npm", "run", "build:seed-triage-mappings"], cwd=web_dir)
+    except subprocess.CalledProcessError as e:
+        fail(f"npm run build:seed-triage-mappings failed with exit code {e.returncode}")
+    ok("Seed script bundled.")
+
     if not standalone_dir.is_dir():
         fail(
             ".next/standalone/ not found after build.",
@@ -240,6 +248,7 @@ def stage(
     static_src = web_dir / ".next" / "static"
     skills_src = web_dir / "skills"
     migrate_src = web_dir / "dist" / "migrate.mjs"
+    seed_triage_src = web_dir / "dist" / "seed-triage-mappings.mjs"
 
     def copy_dir(src: Path, dst: Path) -> Optional[Path]:
         if src.is_dir():
@@ -272,6 +281,17 @@ def stage(
         ok("Copied migration bundle.")
     else:
         warn("dist/migrate.mjs not found — migration bundle missing from deploy.")
+
+    # The triage-mappings seed bundle. Operators run this once per
+    # environment via `node dist/seed-triage-mappings.mjs` to populate
+    # the new container with the legacy default mapping. Idempotent.
+    if seed_triage_src.is_file():
+        dist_dst = staging_dir / "dist"
+        dist_dst.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(seed_triage_src, dist_dst / "seed-triage-mappings.mjs")
+        ok("Copied triage-mappings seed bundle.")
+    else:
+        warn("dist/seed-triage-mappings.mjs not found — seed bundle missing from deploy.")
 
     # If the standalone output is nested, Next.js hoists shared
     # dependencies to the top-level standalone/node_modules. Mirror

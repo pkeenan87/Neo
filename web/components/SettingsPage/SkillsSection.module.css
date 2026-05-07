@@ -407,6 +407,18 @@
   outline-offset: 2px;
 }
 
+/* Inline list of blocking triage-mapping keys shown when a skill
+   delete is rejected with HTTP 409. Tight vertical rhythm so a
+   handful of keys read as a list rather than dominating the modal. */
+.modalBlockingList {
+  @apply flex flex-col gap-2 m-0 p-0;
+  list-style: none;
+}
+
+.modalBlockingList > li {
+  @apply text-sm;
+}
+
 /* ── Responsive ──────────────────────────────────────────── */
 
 @media (max-width: 960px) {
