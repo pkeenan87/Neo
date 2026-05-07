@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { Plus } from 'lucide-react'
 import type { SkillMeta, TriageMapping } from '@/lib/types'
 import { useToast } from '@/context/ToastContext'
@@ -34,6 +34,13 @@ export function TriageMappingsSection() {
   const [editingId, setEditingId] = useState<string | null>(null)
   const [editSkillId, setEditSkillId] = useState('')
   const [editSubmitting, setEditSubmitting] = useState(false)
+  // Auto-focus the inline-edit dropdown when a row enters edit mode
+  // so keyboard users don't have to tab from Edit → over the row's
+  // other cells → into the select.
+  const editSelectRef = useRef<HTMLSelectElement>(null)
+  useEffect(() => {
+    if (editingId !== null) editSelectRef.current?.focus()
+  }, [editingId])
 
   const [confirmDelete, setConfirmDelete] = useState<TriageMapping | null>(null)
 
@@ -359,6 +366,7 @@ export function TriageMappingsSection() {
                       {isEditing ? (
                         <div className={styles.editCell}>
                           <select
+                            ref={editSelectRef}
                             className={styles.editSelect}
                             value={editSkillId}
                             onChange={(e) => setEditSkillId(e.target.value)}
