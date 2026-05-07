@@ -10,9 +10,21 @@ import { ApiKeysSection } from './ApiKeysSection'
 import { AdminUsageSection } from './AdminUsageSection'
 import { OrgContextSection } from './OrgContextSection'
 import { SkillsSection } from './SkillsSection'
+import { TriageMappingsSection } from './TriageMappingsSection'
 import styles from './SettingsPage.module.css'
 
-type Tab = 'general' | 'usage' | 'api-keys' | 'admin-usage' | 'org-context' | 'skills'
+type Tab =
+  | 'general'
+  | 'usage'
+  | 'api-keys'
+  | 'admin-usage'
+  | 'org-context'
+  | 'skills'
+  | 'triage-mappings'
+
+// Tabs that render multi-column / wide-data views and opt in to the
+// 1280px content variant. Form-style tabs stay at the default 720px.
+const WIDE_TABS = new Set<Tab>(['skills', 'triage-mappings'])
 
 const BASE_TABS: { value: Tab; label: string }[] = [
   { value: 'general', label: 'General' },
@@ -34,6 +46,7 @@ export function SettingsPage({ userName, userImage, userRole, className }: Setti
         ...BASE_TABS,
         { value: 'org-context' as Tab, label: 'Organization' },
         { value: 'skills' as Tab, label: 'Skills' },
+        { value: 'triage-mappings' as Tab, label: 'Triage Mappings' },
         { value: 'admin-usage' as Tab, label: 'Usage Limits' },
         { value: 'api-keys' as Tab, label: 'API Keys' },
       ]
@@ -66,7 +79,7 @@ export function SettingsPage({ userName, userImage, userRole, className }: Setti
       </aside>
 
       <main
-        className={`${styles.content}${activeTab === 'skills' ? ` ${styles.contentWide}` : ''}`}
+        className={`${styles.content}${WIDE_TABS.has(activeTab) ? ` ${styles.contentWide}` : ''}`}
         role="tabpanel"
         id={`panel-${activeTab}`}
         aria-labelledby={`tab-${activeTab}`}
@@ -80,6 +93,7 @@ export function SettingsPage({ userName, userImage, userRole, className }: Setti
         {activeTab === 'usage' && <UsageSection />}
         {activeTab === 'org-context' && <OrgContextSection />}
         {activeTab === 'skills' && <SkillsSection />}
+        {activeTab === 'triage-mappings' && <TriageMappingsSection />}
         {activeTab === 'admin-usage' && <AdminUsageSection />}
         {activeTab === 'api-keys' && <ApiKeysSection />}
       </main>

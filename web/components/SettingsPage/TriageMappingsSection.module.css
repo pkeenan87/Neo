@@ -1,0 +1,189 @@
+@reference "../../app/globals.css";
+
+/* ── Layout ──────────────────────────────────────────────────
+   The list/table primitives live in SkillsSection.module.css and
+   are imported into the TSX. This file only carries the rules that
+   are unique to triage mappings (inline create form, edit-in-place
+   cell, the test-mapping panel below the table). */
+
+.inlineForm {
+  @apply rounded-lg border border-border-default bg-surface-sunken p-4 mb-4;
+  display: grid;
+  grid-template-columns: minmax(0, 2fr) minmax(0, 1fr) auto;
+  gap: 1rem;
+  align-items: end;
+}
+
+.inlineFormField {
+  @apply flex flex-col gap-2;
+  min-width: 0;
+}
+
+.inlineFormActions {
+  @apply flex items-center gap-2;
+}
+
+.editCell {
+  @apply flex items-center gap-2;
+}
+
+.editSelect {
+  @apply px-2 py-1 rounded-lg border border-border-default bg-surface-default text-brand-900;
+  font-size: 0.875rem;
+  min-width: 200px;
+}
+
+.editSelect:focus-visible {
+  outline: none;
+  @apply border-brand-500;
+  box-shadow: 0 0 0 3px rgba(100, 116, 139, 0.25);
+}
+
+.editSaveButton {
+  @apply text-sm cursor-pointer transition-colors duration-150 text-brand-900;
+  background: none;
+  border: none;
+  padding: 0;
+  font-weight: 600;
+}
+
+.editSaveButton:hover:not(:disabled) {
+  @apply text-brand-700;
+}
+
+.editSaveButton:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.editSaveButton:focus-visible {
+  outline: 2px solid #64748b;
+  outline-offset: 2px;
+}
+
+/* ── Test mapping panel ──────────────────────────────────── */
+
+.testPanel {
+  @apply rounded-lg border border-border-default p-4 mt-8 flex flex-col gap-4;
+  background-color: rgba(99, 102, 241, 0.04);
+}
+
+.testHeading {
+  @apply text-sm font-bold text-brand-900;
+  font-size: 0.8125rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.testHelp {
+  @apply text-sm text-brand-500;
+  font-size: 0.8125rem;
+}
+
+.testInputs {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 2fr) auto;
+  gap: 1rem;
+  align-items: end;
+}
+
+.testResult {
+  @apply rounded-lg border border-border-default bg-surface-default p-4 text-sm flex items-center gap-4 flex-wrap;
+}
+
+.testResultSkillId {
+  font-family: monospace;
+  @apply text-brand-900 font-bold;
+}
+
+.testResultTagMapped {
+  @apply px-2 py-1 rounded-lg text-sm font-bold;
+  font-size: 0.6875rem;
+  background-color: rgba(34, 197, 94, 0.15);
+  color: #16a34a;
+}
+
+.testResultTagGeneric {
+  @apply px-2 py-1 rounded-lg text-sm font-bold;
+  font-size: 0.6875rem;
+  @apply bg-brand-100 text-brand-700;
+}
+
+.testResultTagNone {
+  @apply px-2 py-1 rounded-lg text-sm font-bold;
+  font-size: 0.6875rem;
+  background-color: rgba(239, 68, 68, 0.1);
+  color: #ef4444;
+}
+
+/* ── Responsive ──────────────────────────────────────────── */
+
+@media (max-width: 960px) {
+  .inlineForm,
+  .testInputs {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* ── Dark mode ───────────────────────────────────────────── */
+
+:global(html.dark) .inlineForm {
+  background-color: #1e1f22;
+  border-color: rgba(255, 255, 255, 0.06);
+}
+
+:global(html.dark) .editSelect {
+  background-color: #1e1f22;
+  border-color: rgba(255, 255, 255, 0.06);
+  color: #dbdee1;
+}
+
+:global(html.dark) .editSelect:focus-visible {
+  border-color: #3ba55d;
+  box-shadow: 0 0 0 3px rgba(59, 165, 93, 0.15);
+}
+
+:global(html.dark) .editSaveButton {
+  color: #dbdee1;
+}
+
+:global(html.dark) .editSaveButton:hover:not(:disabled) {
+  color: #fff;
+}
+
+:global(html.dark) .testPanel {
+  background-color: rgba(99, 102, 241, 0.06);
+  border-color: rgba(255, 255, 255, 0.06);
+}
+
+:global(html.dark) .testHeading {
+  color: #dbdee1;
+}
+
+:global(html.dark) .testHelp {
+  color: #b9bbbe;
+}
+
+:global(html.dark) .testResult {
+  background-color: #2b2d31;
+  border-color: rgba(255, 255, 255, 0.06);
+}
+
+:global(html.dark) .testResultSkillId {
+  color: #dbdee1;
+}
+
+:global(html.dark) .testResultTagMapped {
+  background-color: rgba(59, 165, 93, 0.15);
+  color: #4ade80;
+}
+
+:global(html.dark) .testResultTagGeneric {
+  background: rgba(255, 255, 255, 0.06);
+  color: #dbdee1;
+}
+
+:global(html.dark) .testResultTagNone {
+  background-color: rgba(239, 68, 68, 0.1);
+  color: #f87171;
+}

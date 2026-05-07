@@ -24,6 +24,11 @@ export function SkillDeleteConfirmModal({ skill, onCancel, onDeleted }: Props) {
   const { toast } = useToast()
   const [typed, setTyped] = useState('')
   const [submitting, setSubmitting] = useState(false)
+  // Populated when the server returns 409 — the skill is referenced
+  // by one or more triage mappings. While set, the Delete button is
+  // hard-blocked: the operator must remove or reassign the mappings
+  // in the Triage Mappings tab before the skill can be deleted.
+  const [blockingMappings, setBlockingMappings] = useState<string[] | null>(null)
   const inputRef = useRef<HTMLInputElement>(null)
   const dialogRef = useRef<HTMLDivElement>(null)
 
@@ -62,7 +67,7 @@ export function SkillDeleteConfirmModal({ skill, onCancel, onDeleted }: Props) {
     return () => document.removeEventListener('keydown', handleKeyDown)
   }, [onCancel, submitting])
 
-  const canConfirm = typed === skill.id && !submitting
+  const canConfirm = typed === skill.id && !submitting && !blockingMappings
 
   const handleDelete = async () => {
     setSubmitting(true)
@@ -73,6 +78,17 @@ export function SkillDeleteConfirmModal({ skill, onCancel, onDeleted }: Props) {
         return
       }
       const data = await res.json().catch(() => ({}))
+      // 409 with blockingMappings — the skill is referenced by
+      // triage mappings. Show the list inline and lock the Delete
+      // button until the operator removes the references.
+      if (
+        res.status === 409 &&
+        Array.isArray(data.blockingMappings) &&
+        data.blockingMappings.every((k: unknown) => typeof k === 'string')
+      ) {
+        setBlockingMappings(data.blockingMappings)
+        return
+      }
       toast({
         intent: 'error',
         title: 'Failed to delete skill',
@@ -103,23 +119,43 @@ export function SkillDeleteConfirmModal({ skill, onCancel, onDeleted }: Props) {
         <h3 id="skill-delete-title" className={styles.modalTitle}>
           Delete skill
         </h3>
-        <p className={styles.modalBody}>
-          This permanently removes the skill <span className={styles.modalCode}>{skill.id}</span>.
-          The agent loop will lose access to it within 15 seconds across all instances.
-        </p>
-        <p className={styles.modalBody}>
-          Type <span className={styles.modalCode}>{skill.id}</span> to confirm.
-        </p>
-        <input
-          ref={inputRef}
-          type="text"
-          className={styles.idInput}
-          value={typed}
-          onChange={(e) => setTyped(e.target.value)}
-          aria-label={`Type ${skill.id} to confirm deletion`}
-          autoComplete="off"
-          spellCheck={false}
-        />
+        {blockingMappings ? (
+          <>
+            <p className={styles.modalBody} role="alert">
+              Cannot delete <span className={styles.modalCode}>{skill.id}</span> — it is
+              referenced by {blockingMappings.length} triage mapping
+              {blockingMappings.length === 1 ? '' : 's'}. Remove or reassign them in the
+              Triage Mappings tab first, then try deleting the skill again.
+            </p>
+            <ul className={styles.modalBlockingList}>
+              {blockingMappings.map((key) => (
+                <li key={key} className={styles.modalCode}>{key}</li>
+              ))}
+            </ul>
+          </>
+        ) : (
+          <>
+            <p className={styles.modalBody}>
+              This permanently removes the skill <span className={styles.modalCode}>{skill.id}</span>.
+              The agent loop will lose access to it within 15 seconds across all instances.
+            </p>
+            <p className={styles.modalBody}>
+              Type <span className={styles.modalCode}>{skill.id}</span> to confirm.
+            </p>
+          </>
+        )}
+        {!blockingMappings && (
+          <input
+            ref={inputRef}
+            type="text"
+            className={styles.idInput}
+            value={typed}
+            onChange={(e) => setTyped(e.target.value)}
+            aria-label={`Type ${skill.id} to confirm deletion`}
+            autoComplete="off"
+            spellCheck={false}
+          />
+        )}
         <div className={styles.modalActions}>
           <button
             type="button"
@@ -127,16 +163,18 @@ export function SkillDeleteConfirmModal({ skill, onCancel, onDeleted }: Props) {
             onClick={onCancel}
             disabled={submitting}
           >
-            Cancel
+            {blockingMappings ? 'Close' : 'Cancel'}
           </button>
-          <button
-            type="button"
-            className={styles.modalConfirm}
-            onClick={handleDelete}
-            disabled={!canConfirm}
-          >
-            {submitting ? 'Deleting…' : 'Delete'}
-          </button>
+          {!blockingMappings && (
+            <button
+              type="button"
+              className={styles.modalConfirm}
+              onClick={handleDelete}
+              disabled={!canConfirm}
+            >
+              {submitting ? 'Deleting…' : 'Delete'}
+            </button>
+          )}
         </div>
       </div>
     </div>
