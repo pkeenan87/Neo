@@ -372,6 +372,39 @@ When the allowlist is empty (default), all authenticated service principals can 
 
 **Monitoring**: All triage runs are logged to the same Event Hub pipeline as interactive conversations. Filter by `channel: "triage"` in your dashboards. Each run includes: alert ID, product, alert type, verdict, confidence, skill used, and duration.
 
+<a id="triage-skill-mappings"></a>
+### Triage Skill Mappings
+
+The triage dispatcher resolves an inbound alert source (`<product>:<alertType>`) to a specific skill via a Cosmos-backed lookup table. Admins manage the table from **Settings → Triage Mappings**; there is no static config file or environment variable.
+
+**Source of truth**: the `triage-mappings` Cosmos container (one document per mapping, partition key `/id`). `scripts/provision-cosmos-db.ps1` provisions it idempotently alongside the other containers.
+
+**Cache**: each App Service instance fronts the container with a 15-second read-through cache. Admin writes propagate to every instance within one cache window — the same TTL contract as the skill store, so operators have one mental model for "how long until my change shows up everywhere".
+
+**Mock mode**: when `MOCK_MODE=true` (the default for dev) the dispatcher uses an in-memory map seeded with the legacy `DefenderXDR:DefenderEndpoint.SuspiciousProcess → defender-endpoint-triage` mapping. No Cosmos required.
+
+**Seeding**: after fresh Cosmos provisioning, run the seed script once to populate the legacy default mapping:
+
+```bash
+# From an SSH session on the App Service
+node dist/seed-triage-mappings.mjs            # real run
+node dist/seed-triage-mappings.mjs --dry-run  # report what would change
+```
+
+The seed script is idempotent — re-running is safe and won't clobber admin edits.
+
+**Admin workflow** (Settings → Triage Mappings, admin role only):
+
+1. **List** all current mappings, each row showing source key, mapped skill, last updated time and last-updater hash.
+2. **Create** a mapping with a free-form key (e.g. `Sentinel:HighSeverity.AnomalousLogin`) and a skill picked from the dropdown of registered skills. The key is case-sensitive — match the wire format exactly (`DefenderXDR`, not `defenderxdr`).
+3. **Edit** an existing mapping's skill in place. The source key itself is immutable; to change a key you delete the mapping and create a new one.
+4. **Delete** removes the mapping; alerts of that type fall through to the generic skill within 15 seconds.
+5. **Test mapping** panel: paste a `product` + `alertType` and click Resolve. Returns the skill that would run, tagged `mapped`, `generic fallback`, or `none`. Side-effect free — no triage run is recorded.
+
+**Skill deletion guard**: `DELETE /api/skills/[id]` returns HTTP 409 with a `blockingMappings` array when one or more triage mappings reference the skill. The Skills delete modal surfaces the blocking keys so the operator knows where to look. Reassign or remove those mappings first, then retry the skill delete.
+
+**Failure mode**: if Cosmos is unavailable when a triage request arrives, `resolveTriageSkill` logs a warning and falls through to the generic skill rather than failing the request. Same fail-open posture as the dedup cache.
+
 ### Token Usage Budgets
 
 Neo enforces per-user token budgets to control API costs. Two rolling windows are checked before each agent loop call:

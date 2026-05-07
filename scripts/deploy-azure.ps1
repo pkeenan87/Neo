@@ -139,6 +139,13 @@ if ($SkipBuild) {
             throw "npm run build:migrate failed with exit code $LASTEXITCODE"
         }
         Write-Host "  Migration script bundled." -ForegroundColor Green
+
+        Write-Host "`n  Bundling triage-mappings seed script..." -ForegroundColor Cyan
+        npm run build:seed-triage-mappings
+        if ($LASTEXITCODE -ne 0) {
+            throw "npm run build:seed-triage-mappings failed with exit code $LASTEXITCODE"
+        }
+        Write-Host "  Seed script bundled." -ForegroundColor Green
     } finally {
         Pop-Location
     }
@@ -215,6 +222,20 @@ try {
         Write-Host "  Copied migration bundle." -ForegroundColor Green
     } else {
         Write-Host "  WARN: dist/migrate.mjs not found — migration bundle missing from deploy." -ForegroundColor Yellow
+    }
+
+    # Copy dist/seed-triage-mappings.mjs. Operators run this once per
+    # environment after provision-cosmos-db.ps1 creates the new
+    # triage-mappings container, via `node dist/seed-triage-mappings.mjs`.
+    # Idempotent — re-running is safe and won't clobber admin edits.
+    $SeedTriageBundle = Join-Path $WebDir "dist" "seed-triage-mappings.mjs"
+    if (Test-Path $SeedTriageBundle) {
+        $DestDist = Join-Path $StagingDir "dist"
+        New-Item -ItemType Directory -Path $DestDist -Force | Out-Null
+        Copy-Item -Path $SeedTriageBundle -Destination $DestDist
+        Write-Host "  Copied triage-mappings seed bundle." -ForegroundColor Green
+    } else {
+        Write-Host "  WARN: dist/seed-triage-mappings.mjs not found — seed bundle missing from deploy." -ForegroundColor Yellow
     }
 
     # Also copy node_modules from the standalone root if server root is nested,

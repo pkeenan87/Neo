@@ -41,6 +41,9 @@ param(
     [string]$SkillsContainerName = "skills",
 
     [ValidateNotNullOrEmpty()]
+    [string]$TriageMappingsContainerName = "triage-mappings",
+
+    [ValidateNotNullOrEmpty()]
     [string]$InstanceSharedContainerName = "instance-shared",
 
     [ValidateNotNullOrEmpty()]
@@ -232,6 +235,27 @@ if ($existingSkills) {
         --partition-key-path "/id" `
         --output none
     Write-Host "     Container '$SkillsContainerName' created with /id partition key (no TTL)."
+}
+
+# ── Triage Mappings Container (alert source → skill lookup) ────
+
+Write-Host "8.5/11 Creating triage-mappings container..." -ForegroundColor Green
+$existingTriageMappings = az cosmosdb sql container show `
+    --account-name $AccountName `
+    --resource-group $ResourceGroupName `
+    --database-name $DatabaseName `
+    --name $TriageMappingsContainerName 2>$null | ConvertFrom-Json
+if ($existingTriageMappings) {
+    Write-Host "     Container '$TriageMappingsContainerName' already exists — skipping."
+} else {
+    az cosmosdb sql container create `
+        --account-name $AccountName `
+        --resource-group $ResourceGroupName `
+        --database-name $DatabaseName `
+        --name $TriageMappingsContainerName `
+        --partition-key-path "/id" `
+        --output none
+    Write-Host "     Container '$TriageMappingsContainerName' created with /id partition key (no TTL)."
 }
 
 # ── Instance-Shared Counter Container (rate limiter + breaker) ────
