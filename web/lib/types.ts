@@ -1176,6 +1176,11 @@ export interface TriageResponse {
  * what the triage source emits on the wire). One mapping = one alert
  * type pinned to one skill. Replaces the legacy hardcoded
  * TRIAGE_SKILL_MAP constant in triage-dispatch.ts.
+ *
+ * The wire DTO returned by /api/triage-mappings is currently identical
+ * to this interface. When we need a separate "internal vs external"
+ * shape (e.g. a future version field that shouldn't leak), we'll
+ * introduce TriageMappingMeta then — premature today.
  */
 export interface TriageMapping {
   /** The source key — `<product>:<alertType>`. Immutable after create. */
@@ -1187,11 +1192,6 @@ export interface TriageMapping {
   /** Hashed ownerId of the admin who last wrote this mapping. */
   updatedBy: string;
 }
-
-/** Wire DTO for the admin list response. Matches TriageMapping today;
- *  separate type so future internal-only fields (e.g. version) don't
- *  leak through the API. */
-export type TriageMappingMeta = TriageMapping;
 
 export interface TriageRun {
   id: string;

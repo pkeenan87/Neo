@@ -12,6 +12,15 @@ vi.mock("../lib/triage-mapping-store-cosmos", () => ({
     if (cosmosState.shouldThrow) throw new Error("simulated Cosmos failure");
     return Array.from(cosmosState.store.values());
   },
+  // Strict variant — used by getMappingsForSkill for the skill-
+  // delete guard. Same backing store as the non-strict mock; the
+  // distinction in production is that this version doesn't swallow
+  // errors. Mirror that here so a `shouldThrow` toggle reaches the
+  // guard path.
+  listMappingsFromCosmosStrict: async () => {
+    if (cosmosState.shouldThrow) throw new Error("simulated Cosmos failure");
+    return Array.from(cosmosState.store.values());
+  },
   getMappingFromCosmos: async (id: string) => {
     if (cosmosState.shouldThrow) throw new Error("simulated Cosmos failure");
     return cosmosState.store.get(id);
@@ -239,6 +248,16 @@ describe("triage-mapping-store — Cosmos mode", () => {
     await expect(
       updateMapping("Sentinel:Missing", "x", ID),
     ).rejects.toThrow(/not found/);
+  });
+
+  it("getMappingsForSkill propagates Cosmos errors instead of returning empty", async () => {
+    // The skill-delete guard relies on this: returning [] on a
+    // Cosmos outage would let the destructive delete proceed
+    // silently. The strict path must throw.
+    cosmosState.shouldThrow = true;
+    await expect(getMappingsForSkill("defender-endpoint-triage")).rejects.toThrow(
+      /simulated Cosmos failure/,
+    );
   });
 
   it("read-through cache returns the same data within the TTL window", async () => {

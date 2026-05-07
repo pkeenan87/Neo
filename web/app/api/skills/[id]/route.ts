@@ -134,7 +134,25 @@ export async function DELETE(request: NextRequest, { params }: RouteParams) {
   // type to the generic fallback. Return the list of blocking
   // mapping keys so the admin UI can guide the operator to
   // reassign or delete them first.
-  const blockingMappings = await getMappingsForSkill(id);
+  //
+  // getMappingsForSkill propagates Cosmos errors (it goes through the
+  // strict lister) so a transient outage surfaces as a thrown
+  // exception here. Fail-closed: better to make the admin retry than
+  // to silently allow a destructive delete on a false-empty result.
+  let blockingMappings: Awaited<ReturnType<typeof getMappingsForSkill>>;
+  try {
+    blockingMappings = await getMappingsForSkill(id);
+  } catch (err) {
+    logger.warn("Skill delete blocked — mapping store unavailable", "api/skills", {
+      skillId: id,
+      ownerIdHash: hashPii(identity.ownerId),
+      errorMessage: err instanceof Error ? err.message : String(err),
+    });
+    return NextResponse.json(
+      { error: "Could not verify triage mapping references — please retry in a moment." },
+      { status: 503 },
+    );
+  }
   if (blockingMappings.length > 0) {
     logger.warn("Skill delete blocked — triage mappings reference it", "api/skills", {
       skillId: id,

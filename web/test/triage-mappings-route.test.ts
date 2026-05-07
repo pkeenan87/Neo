@@ -48,9 +48,15 @@ vi.mock('../lib/auth-helpers', () => ({
   resolveAuth: () => resolveAuthMock(),
 }))
 
-vi.mock('../lib/skill-store', () => ({
-  getSkill: (...args: unknown[]) => getSkillMock(...args),
-}))
+vi.mock('../lib/skill-store', async () => {
+  const actual = await vi.importActual<typeof import('../lib/skill-store')>('../lib/skill-store')
+  return {
+    // Keep the real validateSkillId so the route's length/shape gate
+    // exercises production validation in the test path.
+    validateSkillId: actual.validateSkillId,
+    getSkill: (...args: unknown[]) => getSkillMock(...args),
+  }
+})
 
 vi.mock('../lib/triage-mapping-store', async () => {
   const actual = await vi.importActual<typeof import('../lib/triage-mapping-store')>(
@@ -237,7 +243,10 @@ describe('PUT /api/triage-mappings/[key]', () => {
       body: JSON.stringify(body),
     })
   }
-  const params = Promise.resolve({ key: encodeURIComponent(VALID_KEY) })
+  // Next.js App Router decodes path params before exposing them via
+  // `params`, so the value the route handler sees is the canonical
+  // form, not the percent-encoded URL. Mirror that contract here.
+  const params = Promise.resolve({ key: VALID_KEY })
 
   it('returns 403 for reader role', async () => {
     resolveAuthMock.mockResolvedValue({
@@ -286,7 +295,10 @@ describe('PUT /api/triage-mappings/[key]', () => {
 // ── DELETE /api/triage-mappings/[key] ────────────────────────
 
 describe('DELETE /api/triage-mappings/[key]', () => {
-  const params = Promise.resolve({ key: encodeURIComponent(VALID_KEY) })
+  // Next.js App Router decodes path params before exposing them via
+  // `params`, so the value the route handler sees is the canonical
+  // form, not the percent-encoded URL. Mirror that contract here.
+  const params = Promise.resolve({ key: VALID_KEY })
 
   it('returns 403 for reader role', async () => {
     resolveAuthMock.mockResolvedValue({

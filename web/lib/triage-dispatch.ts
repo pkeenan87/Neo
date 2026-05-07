@@ -17,29 +17,34 @@ const GENERIC_SKILL_ID = "generic-alert-triage";
 /**
  * Resolve the triage skill for an alert. Falls back to the generic
  * catch-all skill if no specific mapping exists, the mapped skill
- * has been deleted (orphaned mapping), or the mapping store is
- * unavailable. Returns null only if neither the mapped skill nor
- * the catch-all is registered.
+ * has been deleted (orphaned mapping), or any backing store throws.
+ * Returns null only if neither the mapped skill nor the catch-all
+ * is registered.
  *
  * The store-error path is a deliberate no-fail: triage requests
- * must always produce a verdict — losing the mapping table to a
- * Cosmos hiccup should not take the endpoint down. We log a warning
- * and continue to the generic skill, mirroring the dedup-cache
- * behaviour described in _specs/alert-triage-api.md.
+ * must always produce a verdict — losing the mapping table or the
+ * skill cache to a Cosmos hiccup should not take the endpoint down.
+ * We wrap the entire resolution in a single try/catch so the
+ * guarantee is structural and resilient to a future change in
+ * `getSkill`'s error-propagation behaviour. Mirrors the dedup-cache
+ * fail-open posture described in _specs/alert-triage-api.md.
  */
 export async function resolveTriageSkill(
   source: TriageSource,
 ): Promise<{ skillId: string; skill: Skill } | null> {
   const key = `${source.product}:${source.alertType}`;
 
+  // Each external call is wrapped independently so a flaky mapping
+  // store doesn't poison the generic-skill fallback (and vice
+  // versa). The structural guarantee: any thrown exception in either
+  // store degrades to the next step rather than escaping the
+  // function. This keeps the no-fail contract resilient to future
+  // changes in either helper's error-propagation behaviour.
   let mappedId: string | undefined;
   try {
     const mapping = await getMapping(key);
     mappedId = mapping?.skillId;
   } catch (err) {
-    // Cosmos unavailable / network blip / cache refresh failure —
-    // log and fall through to the generic catch-all rather than
-    // failing the triage request.
     logger.warn(
       "triage-dispatch: mapping store error — falling back to generic",
       "triage-dispatch",
@@ -51,24 +56,49 @@ export async function resolveTriageSkill(
   }
 
   if (mappedId) {
-    const skill = await getSkill(mappedId);
-    if (skill) return { skillId: mappedId, skill };
-    // Mapping points at a skill that no longer exists. Treat as a
-    // miss and let an operator notice via the warning so they can
-    // either re-create the skill or delete the orphan mapping.
+    try {
+      const skill = await getSkill(mappedId);
+      if (skill) return { skillId: mappedId, skill };
+      // Mapping points at a skill that no longer exists. Treat as a
+      // miss and let an operator notice via the warning so they can
+      // either re-create the skill or delete the orphan mapping.
+      logger.warn(
+        "triage-dispatch: mapped skill not found — falling back to generic",
+        "triage-dispatch",
+        {
+          key,
+          mappedSkillId: mappedId,
+        },
+      );
+    } catch (err) {
+      logger.warn(
+        "triage-dispatch: skill store error on mapped lookup — falling back to generic",
+        "triage-dispatch",
+        {
+          key,
+          mappedSkillId: mappedId,
+          errorMessage: err instanceof Error ? err.message : String(err),
+        },
+      );
+    }
+  }
+
+  // Fall back to generic catch-all. Independently wrapped so a
+  // skill-store outage here returns null cleanly rather than
+  // escaping as a 500.
+  try {
+    const generic = await getSkill(GENERIC_SKILL_ID);
+    if (generic) return { skillId: GENERIC_SKILL_ID, skill: generic };
+  } catch (err) {
     logger.warn(
-      "triage-dispatch: mapped skill not found — falling back to generic",
+      "triage-dispatch: skill store error on generic lookup — returning no-skill",
       "triage-dispatch",
       {
         key,
-        mappedSkillId: mappedId,
+        errorMessage: err instanceof Error ? err.message : String(err),
       },
     );
   }
-
-  // Fall back to generic catch-all
-  const generic = await getSkill(GENERIC_SKILL_ID);
-  if (generic) return { skillId: GENERIC_SKILL_ID, skill: generic };
 
   return null;
 }

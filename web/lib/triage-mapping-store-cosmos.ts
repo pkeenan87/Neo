@@ -47,7 +47,9 @@ export function __setContainerForTest(c: Container | null): void {
 /**
  * List every mapping. Used by the cache-refresh path — the table is
  * very small (typically <50 entries) so a single full-container query
- * per cache window is the right shape.
+ * per cache window is the right shape. Errors are absorbed and
+ * returned as `[]` so a Cosmos hiccup degrades the triage hot path
+ * to "no mapping found → generic skill" rather than a 500.
  */
 export async function listMappingsFromCosmos(): Promise<TriageMapping[]> {
   const container = getContainer();
@@ -65,6 +67,26 @@ export async function listMappingsFromCosmos(): Promise<TriageMapping[]> {
     });
     return [];
   }
+}
+
+/**
+ * Strict variant of listMappingsFromCosmos — propagates errors
+ * instead of swallowing them. Used by guard paths (e.g. the skill-
+ * deletion precondition in DELETE /api/skills/[id]) where a false-
+ * empty result would let a destructive action proceed silently.
+ *
+ * Cosmos outage during a skill delete must fail-closed: better to
+ * make the admin retry than to silently orphan a triage mapping.
+ */
+export async function listMappingsFromCosmosStrict(): Promise<TriageMapping[]> {
+  const container = getContainer();
+  if (!container) return [];
+  const { resources } = await container.items
+    .query<TriageMapping>({
+      query: "SELECT c.id, c.skillId, c.updatedAt, c.updatedBy FROM c",
+    })
+    .fetchAll();
+  return resources;
 }
 
 export async function getMappingFromCosmos(

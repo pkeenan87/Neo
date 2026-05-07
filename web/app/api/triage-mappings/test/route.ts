@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { resolveAuth } from "@/lib/auth-helpers";
 import { resolveTriageSkill, GENERIC_SKILL_ID } from "@/lib/triage-dispatch";
+import { validateMappingKey } from "@/lib/triage-mapping-store";
 import type { TriageSource } from "@/lib/types";
 
 /**
@@ -34,6 +35,15 @@ export async function POST(request: NextRequest) {
   }
   if (!body.alertType || typeof body.alertType !== "string") {
     return NextResponse.json({ error: "Missing 'alertType' field" }, { status: 400 });
+  }
+
+  // Apply the same key-shape rule the create/update handlers use so
+  // a sample with embedded colons or whitespace is rejected up front
+  // rather than reported as `source: "none"` (which is technically
+  // accurate but masks the real problem from the operator).
+  const keyError = validateMappingKey(`${body.product}:${body.alertType}`);
+  if (keyError) {
+    return NextResponse.json({ error: keyError }, { status: 400 });
   }
 
   // We only need product + alertType to resolve. The other TriageSource

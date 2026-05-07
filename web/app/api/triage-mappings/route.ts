@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { resolveAuth } from "@/lib/auth-helpers";
-import { getSkill } from "@/lib/skill-store";
+import { getSkill, validateSkillId } from "@/lib/skill-store";
 import {
   getAllMappings,
   createMapping,
@@ -59,6 +59,15 @@ export async function POST(request: NextRequest) {
   const keyError = validateMappingKey(body.key);
   if (keyError) {
     return NextResponse.json({ error: keyError }, { status: 400 });
+  }
+
+  // Validate skillId shape + length BEFORE echoing it back in any
+  // response body or passing it to the cache lookup — a megabyte-
+  // long string would otherwise be reflected in the JSON error and
+  // burned on a doomed Map.get.
+  const skillIdError = validateSkillId(body.skillId);
+  if (skillIdError) {
+    return NextResponse.json({ error: `skillId: ${skillIdError}` }, { status: 400 });
   }
 
   // Skill must exist on the same instance the admin is talking to.

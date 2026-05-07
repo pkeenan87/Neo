@@ -19,6 +19,7 @@
 
 import {
   listMappingsFromCosmos,
+  listMappingsFromCosmosStrict,
   getMappingFromCosmos,
   createMappingInCosmos,
   upsertMappingInCosmos,
@@ -153,10 +154,20 @@ export async function getMapping(key: string): Promise<TriageMapping | undefined
  * Mappings that point at a given skill. Used by the skill-deletion
  * guard in `DELETE /api/skills/[id]` so we can return a 409 listing
  * the blocking mappings rather than orphaning them silently.
+ *
+ * Cosmos mode reads via the **strict** lister (no error swallow) so
+ * a transient outage propagates as an exception. The guard route is
+ * expected to wrap this call in try/catch and respond 503 on failure
+ * — fail-closed is correct here because letting the destructive
+ * delete proceed on a false-empty result would silently orphan
+ * mappings. Mock mode reads from the in-memory map, which can't fail.
  */
 export async function getMappingsForSkill(skillId: string): Promise<TriageMapping[]> {
-  const all = await getAllMappings();
-  return all.filter((m) => m.skillId === skillId);
+  if (useCosmos()) {
+    const all = await listMappingsFromCosmosStrict();
+    return all.filter((m) => m.skillId === skillId);
+  }
+  return Array.from(getMockStore().values()).filter((m) => m.skillId === skillId);
 }
 
 interface WriteIdentity {

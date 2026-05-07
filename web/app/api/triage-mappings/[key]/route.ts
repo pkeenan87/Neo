@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { resolveAuth } from "@/lib/auth-helpers";
-import { getSkill } from "@/lib/skill-store";
+import { getSkill, validateSkillId } from "@/lib/skill-store";
 import {
   getMapping,
   updateMapping,
@@ -13,20 +13,12 @@ interface RouteParams {
   params: Promise<{ key: string }>;
 }
 
-/**
- * Decode the URL-encoded `[key]` segment. Next.js App Router
- * decodes path params automatically in most cases, but the colon
- * separator and the dotted alertType form trip enough URL parsers
- * that we URI-decode defensively to recover the canonical
- * `<product>:<alertType>` form before validation.
- */
-function decodeKey(raw: string): string {
-  try {
-    return decodeURIComponent(raw);
-  } catch {
-    return raw;
-  }
-}
+// Next.js App Router decodes path-segment params automatically
+// before exposing them via `params`, so the `[key]` value already
+// arrives as the canonical `<product>:<alertType>` form. No
+// additional decode is needed (and double-decoding would canonicalize
+// `%2541` to `A`, mapping percent-encoded resources to their plain
+// counterparts — undesirable for routing consistency).
 
 export async function GET(request: NextRequest, { params }: RouteParams) {
   const identity = await resolveAuth(request);
@@ -38,7 +30,7 @@ export async function GET(request: NextRequest, { params }: RouteParams) {
   }
 
   const { key: rawKey } = await params;
-  const key = decodeKey(rawKey);
+  const key = rawKey;
 
   const keyError = validateMappingKey(key);
   if (keyError) {
@@ -63,7 +55,7 @@ export async function PUT(request: NextRequest, { params }: RouteParams) {
   }
 
   const { key: rawKey } = await params;
-  const key = decodeKey(rawKey);
+  const key = rawKey;
 
   const keyError = validateMappingKey(key);
   if (keyError) {
@@ -84,6 +76,13 @@ export async function PUT(request: NextRequest, { params }: RouteParams) {
   const existing = await getMapping(key);
   if (!existing) {
     return NextResponse.json({ error: "Triage mapping not found" }, { status: 404 });
+  }
+
+  // Validate skillId shape + length BEFORE echoing it back or
+  // querying the cache — same defense-in-depth as the POST handler.
+  const skillIdError = validateSkillId(body.skillId);
+  if (skillIdError) {
+    return NextResponse.json({ error: `skillId: ${skillIdError}` }, { status: 400 });
   }
 
   const skill = await getSkill(body.skillId);
@@ -126,7 +125,7 @@ export async function DELETE(request: NextRequest, { params }: RouteParams) {
   }
 
   const { key: rawKey } = await params;
-  const key = decodeKey(rawKey);
+  const key = rawKey;
 
   const keyError = validateMappingKey(key);
   if (keyError) {

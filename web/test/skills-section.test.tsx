@@ -190,4 +190,39 @@ describe('SkillDeleteConfirmModal', () => {
       expect.objectContaining({ method: 'DELETE' }),
     )
   })
+
+  it('renders blockingMappings list and locks Delete when the server returns 409', async () => {
+    queueResponse(
+      'DELETE',
+      '/api/skills/demo-skill',
+      {
+        error: 'Skill is referenced by triage mappings — reassign or remove them first.',
+        blockingMappings: [
+          'DefenderXDR:DefenderEndpoint.SuspiciousProcess',
+          'Sentinel:HighSeverity',
+        ],
+      },
+      409,
+    )
+
+    render(<SkillDeleteConfirmModal skill={skill} onCancel={() => {}} onDeleted={() => {}} />)
+    fireEvent.change(screen.getByLabelText(/type demo-skill/i), { target: { value: 'demo-skill' } })
+    fireEvent.click(screen.getByRole('button', { name: /^delete$/i }))
+
+    // Once the 409 lands, the type-to-confirm input + Delete button
+    // unmount and the dialog swaps into the blocking-mappings state.
+    await waitFor(() =>
+      expect(
+        screen.getByText(/referenced by 2 triage mappings/i),
+      ).toBeInTheDocument(),
+    )
+    expect(screen.getByText('DefenderXDR:DefenderEndpoint.SuspiciousProcess')).toBeInTheDocument()
+    expect(screen.getByText('Sentinel:HighSeverity')).toBeInTheDocument()
+
+    // Delete button is gone; only Close remains.
+    expect(screen.queryByRole('button', { name: /^delete$/i })).toBeNull()
+    expect(screen.getByRole('button', { name: /^close$/i })).toBeInTheDocument()
+    // The type-to-confirm input is also unmounted in this state.
+    expect(screen.queryByLabelText(/type demo-skill/i)).toBeNull()
+  })
 })

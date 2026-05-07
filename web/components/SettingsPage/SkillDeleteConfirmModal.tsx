@@ -31,10 +31,26 @@ export function SkillDeleteConfirmModal({ skill, onCancel, onDeleted }: Props) {
   const [blockingMappings, setBlockingMappings] = useState<string[] | null>(null)
   const inputRef = useRef<HTMLInputElement>(null)
   const dialogRef = useRef<HTMLDivElement>(null)
+  // The Cancel/Close button — used as the focus target when the
+  // 409 path swaps the dialog out from under the user. Without this,
+  // focus would land on document.body when the input + Delete button
+  // unmount, leaving keyboard / screen-reader users stranded.
+  const closeButtonRef = useRef<HTMLButtonElement>(null)
 
   useEffect(() => {
     inputRef.current?.focus()
   }, [])
+
+  // When the server returns 409 with blockingMappings, the type-to-
+  // confirm input and the Delete button unmount. React would silently
+  // drop focus to document.body. Pull focus to the now-Close button
+  // so the user has a clear next action and the role="alert" message
+  // is announced in context.
+  useEffect(() => {
+    if (blockingMappings !== null) {
+      closeButtonRef.current?.focus()
+    }
+  }, [blockingMappings])
 
   // ESC dismiss + Tab/Shift-Tab focus trap. Cycles focus between the
   // first and last focusable element inside the dialog so a keyboard
@@ -158,6 +174,7 @@ export function SkillDeleteConfirmModal({ skill, onCancel, onDeleted }: Props) {
         )}
         <div className={styles.modalActions}>
           <button
+            ref={closeButtonRef}
             type="button"
             className={styles.cancelButton}
             onClick={onCancel}

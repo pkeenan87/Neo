@@ -370,7 +370,7 @@ export function TriageMappingsSection() {
                             className={styles.editSelect}
                             value={editSkillId}
                             onChange={(e) => setEditSkillId(e.target.value)}
-                            aria-label="Select skill"
+                            aria-label={`Select skill for ${m.id}`}
                           >
                             {skills.map((s) => (
                               <option key={s.id} value={s.id}>
@@ -421,6 +421,7 @@ export function TriageMappingsSection() {
                             type="button"
                             className={`${skillsStyles.actionButton} ${skillsStyles.actionEdit}`}
                             onClick={() => startEdit(m)}
+                            aria-label={`Edit mapping ${m.id}`}
                           >
                             Edit
                           </button>
@@ -428,6 +429,7 @@ export function TriageMappingsSection() {
                             type="button"
                             className={`${skillsStyles.actionButton} ${skillsStyles.actionDelete}`}
                             onClick={() => setConfirmDelete(m)}
+                            aria-label={`Delete mapping ${m.id}`}
                           >
                             Delete
                           </button>
@@ -491,29 +493,44 @@ export function TriageMappingsSection() {
             </button>
           </div>
         </div>
-        {testResult && (
-          <div className={styles.testResult} role="status" aria-live="polite">
-            <span>Resolves to:</span>
-            <span className={styles.testResultSkillId}>
-              {testResult.skillId ?? '(no skill registered)'}
-            </span>
-            <span
-              className={
-                testResult.source === 'mapped'
-                  ? styles.testResultTagMapped
+        {/* Live region kept permanently mounted (with content
+            conditionally rendered inside) so AT reliably re-announces
+            on each Resolve click. A conditionally-mounted live region
+            is announced inconsistently across NVDA/VoiceOver when the
+            element is replaced rather than updated in place.
+            aria-atomic="true" forces the full sentence to be read as
+            one unit instead of partial diff updates. */}
+        <div
+          className={styles.testResult}
+          role="status"
+          aria-live="polite"
+          aria-atomic="true"
+          hidden={!testResult}
+        >
+          {testResult && (
+            <>
+              <span>Resolves to:</span>
+              <span className={styles.testResultSkillId}>
+                {testResult.skillId ?? '(no skill registered)'}
+              </span>
+              <span
+                className={
+                  testResult.source === 'mapped'
+                    ? styles.testResultTagMapped
+                    : testResult.source === 'generic'
+                      ? styles.testResultTagGeneric
+                      : styles.testResultTagNone
+                }
+              >
+                {testResult.source === 'mapped'
+                  ? 'mapped'
                   : testResult.source === 'generic'
-                    ? styles.testResultTagGeneric
-                    : styles.testResultTagNone
-              }
-            >
-              {testResult.source === 'mapped'
-                ? 'mapped'
-                : testResult.source === 'generic'
-                  ? 'generic fallback'
-                  : 'none'}
-            </span>
-          </div>
-        )}
+                    ? 'generic fallback'
+                    : 'none'}
+              </span>
+            </>
+          )}
+        </div>
       </div>
 
       {modal}

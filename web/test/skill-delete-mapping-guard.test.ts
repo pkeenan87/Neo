@@ -138,4 +138,25 @@ describe('DELETE /api/skills/[id] — triage-mapping guard', () => {
     const [eventType] = loggerMocks.emitEvent.mock.calls[0]
     expect(eventType).toBe('skill_modified')
   })
+
+  it('fails closed with 503 when the mapping store throws (Cosmos outage)', async () => {
+    // The strict-list path in getMappingsForSkill propagates Cosmos
+    // errors. The route must wrap that in try/catch and return 503
+    // rather than letting the delete proceed (false-empty would
+    // orphan mappings) or letting a bare 500 reach the admin (which
+    // they might interpret as "retry the delete").
+    getMappingsForSkillMock.mockRejectedValue(new Error('Cosmos timeout'))
+
+    const { DELETE } = await import('../app/api/skills/[id]/route')
+    const req = new Request('http://localhost/api/skills/defender-endpoint-triage', {
+      method: 'DELETE',
+    })
+    const res = await DELETE(req as never, { params } as never)
+
+    expect(res.status).toBe(503)
+    const body = await res.json()
+    expect(body.error).toMatch(/please retry/i)
+    // Critically: the destructive delete must NOT have run.
+    expect(deleteSkillMock).not.toHaveBeenCalled()
+  })
 })
