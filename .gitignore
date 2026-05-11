@@ -20,6 +20,9 @@ web/next-env.d.ts
 # Claude agent memory — session-specific, not project state
 .claude/agent-memory/
 
+# Claude Code runtime — scheduled-task lock owned by the harness, not project state
+.claude/scheduled_tasks.lock
+
 # understand-anyting
 .understand-anything/
 .DS_Store
