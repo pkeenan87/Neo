@@ -210,16 +210,35 @@ function isAnalyticsEvent(eventType: LogEventType): boolean {
 //  Console sink
 // ─────────────────────────────────────────────────────────────
 
+/**
+ * Strip CR/LF from a value before splicing it into the single-line
+ * console format. The structured Event Hub sink already JSON-encodes
+ * every field, so log forgery there is impossible — but the console
+ * fallback prints raw `${entry.message}` and `${entry.identity.userName}`
+ * into a one-per-line format, where an embedded newline would let a
+ * caller manufacture a fake log entry. Replace newlines with a
+ * visible literal so the forgery attempt is preserved in the audit
+ * trail (rather than silently dropping it).
+ */
+function sanitizeForConsole(value: string): string {
+  return value.replace(/[\r\n]+/g, " \\n ");
+}
+
 function logToConsole(entry: LogEntry): void {
   // In production, only warn/error go to console (operational events always log)
   const isProduction = process.env.NODE_ENV === "production";
   if (isProduction && entry.eventType === "operational" && LEVEL_PRIORITY[entry.level] < LEVEL_PRIORITY["warn"]) return;
 
   const ts = entry.timestamp.slice(11, 23); // HH:mm:ss.SSS
+  // metadata is JSON.stringify'd so any embedded newline is already
+  // encoded as the two-character escape `\n` — safe for the line
+  // format without additional sanitization.
   const meta = entry.metadata ? ` ${JSON.stringify(entry.metadata)}` : "";
   const eventTag = entry.eventType !== "operational" ? ` [${entry.eventType}]` : "";
-  const identityTag = entry.identity ? ` user=${entry.identity.userName}` : "";
-  const line = `[${ts}] ${entry.level.toUpperCase()} [${entry.component}]${eventTag}${identityTag} ${entry.message}${meta}`;
+  const identityTag = entry.identity ? ` user=${sanitizeForConsole(entry.identity.userName)}` : "";
+  const safeComponent = sanitizeForConsole(entry.component);
+  const safeMessage = sanitizeForConsole(entry.message);
+  const line = `[${ts}] ${entry.level.toUpperCase()} [${safeComponent}]${eventTag}${identityTag} ${safeMessage}${meta}`;
 
   switch (entry.level) {
     case "error":

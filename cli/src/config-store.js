@@ -68,8 +68,19 @@ function deepGet(obj, path) {
   return current;
 }
 
+// Guard against prototype-pollution: a malicious path containing
+// `__proto__`, `constructor`, or `prototype` could otherwise let a
+// caller mutate the global object prototype. Today every caller
+// passes a constant from SENSITIVE_FIELDS so this is defence-in-
+// depth, but keeping the guard means a future refactor that exposes
+// the path to user input doesn't silently re-open the hole.
+const FORBIDDEN_KEYS = new Set(["__proto__", "constructor", "prototype"]);
+
 function deepSet(obj, path, value) {
   const keys = path.split(".");
+  if (keys.some((k) => FORBIDDEN_KEYS.has(k))) {
+    throw new Error(`deepSet: path contains a forbidden key segment: ${path}`);
+  }
   let current = obj;
   for (let i = 0; i < keys.length - 1; i++) {
     if (current[keys[i]] == null || typeof current[keys[i]] !== "object") {
