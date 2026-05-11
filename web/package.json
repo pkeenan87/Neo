@@ -30,7 +30,7 @@
     "@azure/storage-blob": "12.31.0",
     "@tailwindcss/postcss": "4.2.1",
     "@types/busboy": "1.5.4",
-    "@types/node": "25.6.0",
+    "@types/node": "25.6.2",
     "@types/react": "19.2.14",
     "agentation": "2.2.1",
     "autoprefixer": "10.4.27",
