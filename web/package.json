@@ -72,6 +72,9 @@
     "axios": "1.15.2",
     "fast-xml-parser": "5.7.0",
     "fast-xml-builder": "1.1.7",
-    "follow-redirects": "1.16.0"
+    "follow-redirects": "1.16.0",
+    "next": {
+      "postcss": "8.5.10"
+    }
   }
 }
