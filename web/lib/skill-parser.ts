@@ -33,8 +33,29 @@ function extractSection(raw: string, heading: string): string {
 }
 
 function extractName(raw: string): string {
-  const match = /^#\s+Skill:\s*(.+)$/im.exec(raw);
+  // The capture group is anchored to a non-space character (\S) so the
+  // engine can't backtrack through a long run of whitespace looking
+  // for a match that doesn't exist — closes CodeQL js/polynomial-redos
+  // alert. Behaviour is unchanged for valid input: `\s*` still consumes
+  // the optional leading whitespace, the capture starts at the first
+  // non-space char, and the subsequent trim() is a no-op now that the
+  // leading whitespace is already excluded.
+  const match = /^#\s+Skill:\s*(\S.*)$/im.exec(raw);
   return match ? match[1].trim() : "";
+}
+
+// Strip a leading "- " bullet marker and a single pair of surrounding
+// backticks from a list-item line. Replaces the previous regex-based
+// approach — the `^-\s*`?` and `` `?\s*$ `` patterns tripped CodeQL's
+// js/polynomial-redos heuristic, and deterministic string ops are both
+// faster and easier to reason about for this fixed-shape input.
+function stripBulletAndBackticks(line: string): string {
+  let s = line.trimStart();
+  if (s.startsWith("-")) s = s.slice(1).trimStart();
+  if (s.startsWith("`")) s = s.slice(1);
+  s = s.trimEnd();
+  if (s.endsWith("`")) s = s.slice(0, -1);
+  return s.trim();
 }
 
 export function parseSkillMarkdown(id: string, raw: string): Skill {
@@ -44,7 +65,7 @@ export function parseSkillMarkdown(id: string, raw: string): Skill {
 
   const toolsRaw = extractSection(raw, "Required Tools");
   const requiredTools = toolsRaw
-    ? toolsRaw.split("\n").map((l) => l.replace(/^-\s*`?/, "").replace(/`?\s*$/, "")).filter(Boolean)
+    ? toolsRaw.split("\n").map(stripBulletAndBackticks).filter(Boolean)
     : [];
 
   const roleRaw = extractSection(raw, "Required Role");
@@ -52,7 +73,7 @@ export function parseSkillMarkdown(id: string, raw: string): Skill {
 
   const paramsRaw = extractSection(raw, "Parameters");
   const parameters = paramsRaw
-    ? paramsRaw.split("\n").map((l) => l.replace(/^-\s*`?/, "").replace(/`?\s*$/, "")).filter(Boolean)
+    ? paramsRaw.split("\n").map(stripBulletAndBackticks).filter(Boolean)
     : [];
 
   return { id, name, description, instructions, requiredTools, requiredRole, parameters };
