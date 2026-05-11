@@ -13,6 +13,17 @@ updates:
         patterns:
           - "botbuilder*"
           - "botframework*"
+      # React + react-dom must travel together — React's peer-dep
+      # requires the two packages to be exact-version matched, so a
+      # solo `react-dom` bump (like PR #39 on 2026-05-11) fails npm ci
+      # with ERESOLVE. The `@types/react*` counterparts ride along so
+      # the TypeScript types don't drift behind the runtime version.
+      react:
+        patterns:
+          - "react"
+          - "react-dom"
+          - "@types/react"
+          - "@types/react-dom"
 
   - package-ecosystem: npm
     directory: /cli
