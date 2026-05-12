@@ -7,8 +7,17 @@ import { logger, hashPii } from "./logger";
 import { getToolIntegration } from "./integration-registry";
 import { wrapAndMaybeOffloadToolResult } from "./injection-guard";
 import { prepareMessages, sanitizeEmptyUserMessages, CHARS_PER_TOKEN } from "./context-manager";
+import {
+  getMcpServers,
+  enforceMcpToolAccess,
+  type McpServerConfig,
+} from "./mcp-servers";
 import { IncompleteToolUseError, MAX_PLAN_RESUMPTION_ATTEMPTS } from "./types";
 import type { Message, AgentLoopResult, AgentCallbacks, PendingTool, ModelPreference, TokenUsage, CSVReference, InProgressPlan } from "./types";
+
+// Anthropic beta-API headers required by the MCP-connector path.
+// Newer header supersedes mcp-client-2025-04-04; both still work.
+const MCP_CLIENT_BETA = "mcp-client-2025-11-20" as const;
 
 // Cheap heuristic: detect whether a turn started from a skill invocation
 // so we can pick the larger MAX_TOKENS_SKILL budget. The skill handler in
@@ -95,6 +104,174 @@ async function createWithRetry(
   }
   // Unreachable, but satisfies TypeScript
   throw new Error("Retry loop exited unexpectedly");
+}
+
+// ─────────────────────────────────────────────────────────────
+//  Beta-API retry shim — used when the call carries MCP servers
+//
+//  Anthropic's MCP-connector parameter lives on `beta.messages`
+//  behind a `betas: ['mcp-client-2025-11-20']` header. The
+//  beta response shape (BetaMessage) is structurally a superset
+//  of the stable Message for every field the agent loop reads
+//  (id, type, role, model, stop_reason, stop_sequence, usage,
+//  content) — extra content-block types like `mcp_tool_use`
+//  arrive runtime-only and are picked up by `auditMcpInvocations`.
+//  We cast back to the stable type at the boundary so the rest
+//  of the loop stays uniform.
+// ─────────────────────────────────────────────────────────────
+
+async function createBetaWithRetry(
+  params: Anthropic.Beta.Messages.MessageCreateParamsNonStreaming,
+  signal?: AbortSignal,
+): Promise<Anthropic.Messages.Message> {
+  for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+    try {
+      const resp = await client.beta.messages.create(params, { signal });
+      return resp as unknown as Anthropic.Messages.Message;
+    } catch (err: unknown) {
+      if ((err as Error).name === "AbortError") throw err;
+      const status = (err as { status?: number }).status;
+
+      if (status === 400) {
+        const msg = (err as { message?: string }).message ?? "";
+        if (msg.includes("prompt is too long")) {
+          logger.warn("Prompt exceeded token limit despite context management", "agent", { message: msg });
+          throw new Error(
+            "The conversation has grown too large for the model's context window. Please start a new session.",
+          );
+        }
+        throw new Error(`Request error: ${msg || "invalid request"}`);
+      }
+
+      const isRetryable = status !== undefined && RETRYABLE_STATUS.has(status);
+      if (!isRetryable || attempt === MAX_RETRIES) {
+        if (status === 529) throw new Error("Claude is temporarily overloaded. Please try again in a moment.");
+        if (status === 429) throw new Error("Rate limit reached. Please wait a moment before sending another message.");
+        throw err;
+      }
+      const delay = Math.min(1000 * 2 ** attempt, 8000);
+      logger.warn(
+        `Beta API call failed (${status}), retrying in ${delay}ms (attempt ${attempt + 1}/${MAX_RETRIES})`,
+        "agent",
+      );
+      await new Promise((r) => setTimeout(r, delay));
+    }
+  }
+  throw new Error("Retry loop exited unexpectedly");
+}
+
+/**
+ * Fetch the role-scoped MCP server list, swallowing any backing-store
+ * error so a Cosmos / Key Vault blip never crashes the agent loop.
+ * Empty array = no MCP, take the stable-API path.
+ */
+async function getMcpServersSafely(role: Role): Promise<McpServerConfig[]> {
+  try {
+    return await getMcpServers(role);
+  } catch (err) {
+    logger.warn(
+      "agent: MCP server lookup failed — continuing without MCP for this turn",
+      "agent",
+      { role, errorMessage: err instanceof Error ? err.message : String(err) },
+    );
+    return [];
+  }
+}
+
+/**
+ * Single entry-point the agent loop uses. Routes through the
+ * beta API only when MCP servers are configured for the role,
+ * keeping the existing stable-API call surface untouched for
+ * every turn that doesn't need MCP.
+ */
+async function createWithOptionalMcp(
+  params: Anthropic.Messages.MessageCreateParamsNonStreaming,
+  mcpServers: McpServerConfig[],
+  signal?: AbortSignal,
+): Promise<Anthropic.Messages.Message> {
+  if (mcpServers.length === 0) {
+    return createWithRetry(params, signal);
+  }
+  const betaParams = {
+    ...params,
+    mcp_servers: mcpServers,
+    betas: [MCP_CLIENT_BETA],
+  } as Anthropic.Beta.Messages.MessageCreateParamsNonStreaming;
+  return createBetaWithRetry(betaParams, signal);
+}
+
+/**
+ * Walk the response's content blocks for `mcp_tool_use` entries
+ * and emit one `mcp_invocation` audit event per invocation. The
+ * paired `mcp_tool_result` block (matched by tool_use_id) tells
+ * us success vs error. Per-tool defense-in-depth enforcement
+ * via `enforceMcpToolAccess` flags any tool call that slipped
+ * past Anthropic's server-side allow-list — should never happen
+ * in practice, but a `result: "blocked"` audit entry will scream
+ * if it does.
+ */
+function auditMcpInvocations(
+  contentBlocks: unknown[],
+  role: Role,
+  sessionId: string,
+  ownerIdHash: string | undefined,
+): void {
+  const resultsByToolUseId = new Map<string, { is_error: boolean }>();
+  for (const block of contentBlocks) {
+    if (!isMcpToolResult(block)) continue;
+    resultsByToolUseId.set(block.tool_use_id, {
+      is_error: Boolean(block.is_error),
+    });
+  }
+  for (const block of contentBlocks) {
+    if (!isMcpToolUse(block)) continue;
+    const result = resultsByToolUseId.get(block.id);
+    const allowed = enforceMcpToolAccess(role, block.server_name, block.name);
+    let auditResult: "success" | "blocked" | "error";
+    if (!allowed) auditResult = "blocked";
+    else if (result?.is_error) auditResult = "error";
+    else auditResult = "success";
+
+    logger.emitEvent("mcp_invocation", "MCP tool invoked", "agent", {
+      mcpServer: block.server_name,
+      toolName: block.name,
+      role,
+      sessionId,
+      result: auditResult,
+      ownerIdHash,
+    });
+  }
+}
+
+interface McpToolUseBlock {
+  type: "mcp_tool_use";
+  id: string;
+  server_name: string;
+  name: string;
+}
+interface McpToolResultBlock {
+  type: "mcp_tool_result";
+  tool_use_id: string;
+  is_error?: boolean;
+}
+
+function isMcpToolUse(block: unknown): block is McpToolUseBlock {
+  return (
+    typeof block === "object" &&
+    block !== null &&
+    (block as { type?: unknown }).type === "mcp_tool_use" &&
+    typeof (block as { id?: unknown }).id === "string" &&
+    typeof (block as { server_name?: unknown }).server_name === "string" &&
+    typeof (block as { name?: unknown }).name === "string"
+  );
+}
+function isMcpToolResult(block: unknown): block is McpToolResultBlock {
+  return (
+    typeof block === "object" &&
+    block !== null &&
+    (block as { type?: unknown }).type === "mcp_tool_result" &&
+    typeof (block as { tool_use_id?: unknown }).tool_use_id === "string"
+  );
 }
 
 export interface RunAgentLoopOptions {
@@ -364,8 +541,22 @@ export async function runAgentLoop(
     if (options.ownerId) {
       apiParams.metadata = { user_id: hashPii(options.ownerId) };
     }
-    const response = await createWithRetry(apiParams, signal);
+    // Resolve role-scoped MCP servers for this turn. Empty array
+    // ⇒ stable-API path. Non-empty ⇒ beta API + mcp_servers param.
+    // Fetched per-iteration so a token-cache refresh between turns
+    // is picked up without a process restart.
+    const mcpServers = await getMcpServersSafely(role);
+    const response = await createWithOptionalMcp(apiParams, mcpServers, signal);
     iterationCount += 1;
+
+    if (mcpServers.length > 0) {
+      auditMcpInvocations(
+        response.content as unknown[],
+        role,
+        sessionId,
+        options.ownerId ? hashPii(options.ownerId) : undefined,
+      );
+    }
 
     lastInputTokens = response.usage.input_tokens;
 
