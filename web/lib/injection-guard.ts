@@ -214,6 +214,79 @@ export function wrapToolResult(
 }
 
 /**
+ * Scan + wrap content from an Anthropic `mcp_tool_result` content block.
+ *
+ * Anthropic's MCP connector executes tools server-side, then returns
+ * `mcp_tool_use` and `mcp_tool_result` blocks inline in the assistant
+ * response. The result content reaches Neo's history without ever
+ * passing through {@link wrapToolResult} — which is the seam where
+ * other tool results get injection-scanned. Without this helper, an
+ * adversarial Wiz payload would be appended to history and re-sent to
+ * the model on every subsequent turn.
+ *
+ * The MCP result content field accepts either a string OR an array of
+ * `{ type: "text", text }` blocks per the SDK spec. We extract the
+ * scannable text from both shapes, run the same TOOL_RESULT_PATTERNS
+ * scan that local tool results get, and return a string envelope with
+ * the trust-boundary marker so downstream consumers (the model on the
+ * next turn, the context-manager, the persistence path) can tell this
+ * came from an external MCP server.
+ *
+ * The returned string is intended to replace the original `content`
+ * field of the mcp_tool_result block before history-persistence.
+ */
+export function wrapMcpToolResultContent(
+  rawContent: string | unknown[] | undefined,
+  context: {
+    sessionId: string;
+    serverName: string;
+    toolName: string;
+  }
+): string {
+  let textToScan = "";
+  if (typeof rawContent === "string") {
+    textToScan = rawContent;
+  } else if (Array.isArray(rawContent)) {
+    textToScan = rawContent
+      .filter(
+        (b): b is { type: "text"; text: string } =>
+          typeof b === "object" &&
+          b !== null &&
+          (b as { type?: unknown }).type === "text" &&
+          typeof (b as { text?: unknown }).text === "string"
+      )
+      .map((b) => b.text)
+      .join("\n");
+  }
+
+  const scanResult = scan(textToScan, TOOL_RESULT_PATTERNS);
+
+  if (scanResult.flagged) {
+    logger.warn("Prompt injection detected in MCP tool result", "injection-guard", {
+      sessionId: context.sessionId,
+      mcpServer: context.serverName,
+      toolName: context.toolName,
+      label: scanResult.label,
+      matchCount: scanResult.matchCount,
+    });
+  }
+
+  return JSON.stringify(
+    {
+      _neo_trust_boundary: {
+        source: "mcp_external",
+        server: context.serverName,
+        tool: context.toolName,
+        injection_detected: scanResult.flagged,
+      },
+      data: rawContent ?? "",
+    },
+    null,
+    2
+  );
+}
+
+/**
  * Async wrapper around {@link wrapToolResult} that, after injection
  * scanning + envelope wrapping, offloads oversized payloads to Azure
  * Blob Storage via the tool-result blob store (phase 3). Returns the

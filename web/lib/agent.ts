@@ -5,7 +5,7 @@ import { executeTool } from "./executors";
 import { getToolsForRole, type Role } from "./permissions";
 import { logger, hashPii } from "./logger";
 import { getToolIntegration } from "./integration-registry";
-import { wrapAndMaybeOffloadToolResult } from "./injection-guard";
+import { wrapAndMaybeOffloadToolResult, wrapMcpToolResultContent } from "./injection-guard";
 import { prepareMessages, sanitizeEmptyUserMessages, CHARS_PER_TOKEN } from "./context-manager";
 import {
   getMcpServers,
@@ -301,6 +301,58 @@ interface McpToolResultBlock {
   type: "mcp_tool_result";
   tool_use_id: string;
   is_error?: boolean;
+  content?: string | unknown[];
+}
+
+/**
+ * Wrap every `mcp_tool_result` block's `content` field in a
+ * trust-marked envelope before the assistant message is appended to
+ * conversation history. This is the seam where MCP results — which
+ * Anthropic executes server-side and returns inline — get scanned for
+ * prompt-injection patterns and tagged with `_neo_trust_boundary` so
+ * downstream readers (model on next turn, context-manager, persistence
+ * layer) treat them the same way local tool results are treated.
+ *
+ * Always returns a new content array when MCP results are present so
+ * the caller can push the rewritten version to history without
+ * mutating Anthropic's response object. Non-MCP blocks pass through
+ * unchanged.
+ *
+ * The replacement is intentionally lossless from an API perspective:
+ * the block keeps `type: "mcp_tool_result"`, `tool_use_id`, and
+ * `is_error`, so subsequent turns can echo it back to Anthropic
+ * without API rejection.
+ */
+function sanitizeMcpResultsForHistory(
+  content: unknown[],
+  sessionId: string,
+): unknown[] {
+  // Map tool_use_id → { server, tool } so each mcp_tool_result knows
+  // which MCP server/tool it came from for logging.
+  const toolUseById = new Map<string, { server: string; tool: string }>();
+  for (const block of content) {
+    if (isMcpToolUse(block)) {
+      toolUseById.set(block.id, { server: block.server_name, tool: block.name });
+    }
+  }
+
+  let mutated = false;
+  const out = content.map((block) => {
+    if (!isMcpToolResult(block)) return block;
+    const meta = toolUseById.get(block.tool_use_id);
+    const wrapped = wrapMcpToolResultContent(block.content, {
+      sessionId,
+      serverName: meta?.server ?? "unknown",
+      toolName: meta?.tool ?? "unknown",
+    });
+    mutated = true;
+    return {
+      ...block,
+      content: wrapped,
+    };
+  });
+
+  return mutated ? out : content;
 }
 
 function isMcpToolUse(block: unknown): block is McpToolUseBlock {
@@ -608,6 +660,20 @@ export async function runAgentLoop(
       );
     }
 
+    // Scan + wrap any mcp_tool_result content before the assistant
+    // message hits history. This is the only seam where MCP results
+    // pass through Neo's injection guard — Anthropic executes MCP
+    // tools server-side and returns the result inline, bypassing the
+    // local-tool wrapAndMaybeOffloadToolResult path. No-op when the
+    // response contains no MCP blocks (e.g. stable-API path).
+    const sanitizedAssistantContent =
+      mcpServers.length > 0
+        ? sanitizeMcpResultsForHistory(
+            response.content as unknown[],
+            sessionId,
+          )
+        : (response.content as unknown[]);
+
     lastInputTokens = response.usage.input_tokens;
 
     // Track usage
@@ -627,7 +693,10 @@ export async function runAgentLoop(
     });
     if (callbacks.onUsage) callbacks.onUsage(usage, model);
 
-    localMessages.push({ role: "assistant", content: response.content });
+    localMessages.push({
+      role: "assistant",
+      content: sanitizedAssistantContent as Message["content"],
+    });
 
     // Done — Claude has a final response
     if (response.stop_reason === "end_turn") {

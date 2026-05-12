@@ -176,6 +176,73 @@ describe("offloadLargeToolResultsInPrompt", () => {
     expect(lastResult.content).toBe(oversized);
   });
 
+  it("offloads oversized mcp_tool_result content with a mcp_offload_inflight envelope", async () => {
+    const oversized = "x".repeat(5000);
+    const messages: Message[] = [
+      userMsg("hi"),
+      // Older turn: assistant message carrying an MCP pair inline.
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "mcp_tool_use",
+            id: "mu_1",
+            server_name: "wiz",
+            name: "wiz_get_issues",
+            input: {},
+          },
+          {
+            type: "mcp_tool_result",
+            tool_use_id: "mu_1",
+            content: oversized,
+          },
+        ] as unknown as Message["content"],
+      },
+      assistantMsg("ok, here's what wiz says"),
+      // Current turn — must NOT be offloaded.
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "mcp_tool_use",
+            id: "mu_2",
+            server_name: "wiz",
+            name: "wiz_get_issues",
+            input: {},
+          },
+          {
+            type: "mcp_tool_result",
+            tool_use_id: "mu_2",
+            content: oversized,
+          },
+        ] as unknown as Message["content"],
+      },
+    ];
+
+    const result = await offloadLargeToolResultsInPrompt(messages, {
+      conversationId: "conv_x",
+      skipLastTurn: true,
+      thresholdTokens: 1,
+    });
+
+    expect(result.offloadedCount).toBe(1);
+
+    // The older MCP result block is offloaded — its content is now an
+    // envelope tagged `mcp_offload_inflight`, but the block type stays
+    // mcp_tool_result so the next turn's API call is valid.
+    const olderBlocks = result.messages[1].content as unknown as Array<Record<string, unknown>>;
+    const olderResult = olderBlocks.find((b) => b.type === "mcp_tool_result")!;
+    expect(typeof olderResult.content).toBe("string");
+    expect(olderResult.content).toContain("_neo_trust_boundary");
+    expect(olderResult.content).toContain("mcp_offload_inflight");
+    expect(olderResult.type).toBe("mcp_tool_result");
+
+    // Current turn MCP result is untouched.
+    const currentBlocks = result.messages[3].content as unknown as Array<Record<string, unknown>>;
+    const currentResult = currentBlocks.find((b) => b.type === "mcp_tool_result")!;
+    expect(currentResult.content).toBe(oversized);
+  });
+
   it("is idempotent — already-enveloped content is skipped", async () => {
     const envelope = JSON.stringify({
       _neo_trust_boundary: { source: "tool_offload_inflight", tool: "t", injection_detected: false },

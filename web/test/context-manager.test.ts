@@ -58,6 +58,61 @@ describe("estimateTokens", () => {
   it("returns 0 for empty messages", () => {
     expect(estimateTokens([])).toBe(0);
   });
+
+  it("counts mcp_tool_use input length", () => {
+    const input = { query: "alerts" };
+    const messages: Message[] = [
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "mcp_tool_use",
+            id: "mu_1",
+            server_name: "wiz",
+            name: "wiz_get_issues",
+            input,
+          },
+        ] as unknown as Message["content"],
+      },
+    ];
+    const estimate = estimateTokens(messages);
+    expect(estimate).toBe(Math.ceil(JSON.stringify(input).length / 3.5));
+  });
+
+  it("counts mcp_tool_result string content the same as tool_result", () => {
+    const big = "y".repeat(3500); // 1000 tokens at 3.5 chars/token
+    const messages: Message[] = [
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "mcp_tool_result",
+            tool_use_id: "mu_1",
+            content: big,
+          },
+        ] as unknown as Message["content"],
+      },
+    ];
+    expect(estimateTokens(messages)).toBe(1000);
+  });
+
+  it("counts mcp_tool_result array content (text blocks)", () => {
+    const inner = [{ type: "text", text: "z".repeat(3500) }];
+    const messages: Message[] = [
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "mcp_tool_result",
+            tool_use_id: "mu_1",
+            content: inner,
+          },
+        ] as unknown as Message["content"],
+      },
+    ];
+    const expected = Math.ceil(JSON.stringify(inner).length / 3.5);
+    expect(estimateTokens(messages)).toBe(expected);
+  });
 });
 
 // ── truncateToolResult ───────────────────────────────────────
@@ -428,5 +483,50 @@ describe("truncateToolResults with custom cap", () => {
     const block = (truncated[0].content as { type: string; content?: string }[])[0];
     expect(block.content!.length).toBeLessThan(100_000);
     expect(block.content).toContain("[Result truncated");
+  });
+
+  it("truncates mcp_tool_result string content above the cap", () => {
+    const messages: Message[] = [
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "mcp_tool_result",
+            tool_use_id: "mu_1",
+            content: "z".repeat(100_000),
+          },
+        ] as unknown as Message["content"],
+      },
+    ];
+
+    const { messages: truncated, anyTruncated } = truncateToolResults(messages, 10_000);
+    expect(anyTruncated).toBe(true);
+
+    const block = (truncated[0].content as { type: string; content?: string }[])[0];
+    expect(block.content!.length).toBeLessThan(100_000);
+    expect(block.content).toContain("[Result truncated");
+    // The block must keep its mcp_tool_result type so the next turn's
+    // API call remains valid.
+    expect(block.type).toBe("mcp_tool_result");
+  });
+
+  it("leaves mcp_tool_result with array content untouched (no string-cap path)", () => {
+    const messages: Message[] = [
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "mcp_tool_result",
+            tool_use_id: "mu_1",
+            content: [{ type: "text", text: "z".repeat(100_000) }],
+          },
+        ] as unknown as Message["content"],
+      },
+    ];
+    const { anyTruncated } = truncateToolResults(messages, 10_000);
+    // Array-shaped content is not truncated by this pass — agent.ts
+    // sanitize step coerces to string before history-append. This is
+    // a tested defense to make the contract explicit.
+    expect(anyTruncated).toBe(false);
   });
 });

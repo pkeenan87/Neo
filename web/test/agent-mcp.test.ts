@@ -308,3 +308,90 @@ describe("agent loop — MCP audit emission", () => {
     expect(mcpEvents[0].metadata?.ownerIdHash).toBeDefined();
   });
 });
+
+// ── Sanitize: mcp_tool_result content goes through injection guard ──
+
+describe("agent loop — MCP sanitize on history-append", () => {
+  it("wraps mcp_tool_result content in a trust-marked envelope before persisting", async () => {
+    mcpServersReturn.current = [
+      { type: "url", name: "wiz", url: "https://wiz.example.com/mcp", authorization_token: "tok" },
+    ];
+    // Response with one MCP pair — content is plain (no injection
+    // markers); envelope should still wrap it because the trust
+    // boundary tag is informational, not gated on `flagged`.
+    betaCreateMock.mockImplementationOnce(async (params: { model: string }) => ({
+      id: "msg_01",
+      type: "message" as const,
+      role: "assistant" as const,
+      model: params.model,
+      content: [
+        {
+          type: "mcp_tool_use",
+          id: "tu_sanitize_1",
+          server_name: "wiz",
+          name: "wiz_get_issues",
+          input: {},
+        },
+        {
+          type: "mcp_tool_result",
+          tool_use_id: "tu_sanitize_1",
+          is_error: false,
+          content: "A benign Wiz issue summary",
+        },
+      ],
+      stop_reason: "end_turn" as const,
+      stop_sequence: null,
+      usage: { input_tokens: 10, output_tokens: 2 },
+    }));
+
+    const result = await runAgentLoop(
+      [{ role: "user", content: "hi" }],
+      {},
+      "admin",
+      "session-sanitize-1",
+    );
+    if (result.type !== "response") throw new Error("expected response");
+
+    const lastAssistant = [...result.messages].reverse().find((m) => m.role === "assistant")!;
+    const content = lastAssistant.content as unknown as Array<Record<string, unknown>>;
+    const mcpResult = content.find((b) => b.type === "mcp_tool_result")!;
+    // Block type stays mcp_tool_result so future-turn round-trips
+    // back to Anthropic remain API-valid.
+    expect(mcpResult.type).toBe("mcp_tool_result");
+    expect(typeof mcpResult.content).toBe("string");
+    expect(mcpResult.content).toContain("_neo_trust_boundary");
+    expect(mcpResult.content).toContain("mcp_external");
+    expect(mcpResult.content).toContain("wiz");
+    expect(mcpResult.content).toContain("wiz_get_issues");
+    // The original data is preserved inside the envelope.
+    expect(mcpResult.content).toContain("A benign Wiz issue summary");
+  });
+
+  it("does not wrap the response when no MCP servers are configured (stable-API path)", async () => {
+    mcpServersReturn.current = [];
+    stableCreateMock.mockImplementationOnce(async (params: Anthropic.Messages.MessageCreateParamsNonStreaming) => ({
+      id: "msg_01",
+      type: "message" as const,
+      role: "assistant" as const,
+      model: params.model,
+      content: [{ type: "text", text: "hi back" }],
+      stop_reason: "end_turn" as const,
+      stop_sequence: null,
+      usage: { input_tokens: 10, output_tokens: 2 },
+    }));
+
+    const result = await runAgentLoop(
+      [{ role: "user", content: "hi" }],
+      {},
+      "admin",
+      "session-sanitize-2",
+    );
+    if (result.type !== "response") throw new Error("expected response");
+
+    const lastAssistant = [...result.messages].reverse().find((m) => m.role === "assistant")!;
+    const content = lastAssistant.content as unknown as Array<Record<string, unknown>>;
+    // Pure text response — no MCP blocks, no envelopes, no rewrite.
+    expect(content[0].type).toBe("text");
+    expect(JSON.stringify(content)).not.toContain("_neo_trust_boundary");
+  });
+});

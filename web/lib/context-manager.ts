@@ -52,6 +52,25 @@ function contentCharCount(content: Message["content"]): number {
       } else if (Array.isArray(c)) {
         total += JSON.stringify(c).length;
       }
+    } else if ((block as { type: string }).type === "mcp_tool_use") {
+      // MCP tool calls returned inline from Anthropic's beta API.
+      // Without this branch the ~200K context budget would not see
+      // the input payload, and very-large MCP calls (e.g. queries
+      // with long parameter lists) would silently bypass trim.
+      total += JSON.stringify((block as { input?: unknown }).input ?? null).length;
+    } else if ((block as { type: string }).type === "mcp_tool_result") {
+      // MCP tool results live inline in the assistant message; the
+      // content field can be a string OR an array of content blocks
+      // per the MCP-connector spec. Both shapes must be counted or
+      // a single oversized Wiz response will overflow the prompt
+      // and hit a hard 400 from the API instead of triggering
+      // graceful truncation / offload.
+      const c = (block as { content?: string | unknown[] }).content;
+      if (typeof c === "string") {
+        total += c.length;
+      } else if (Array.isArray(c)) {
+        total += JSON.stringify(c).length;
+      }
     } else if (block.type === "image") {
       total += IMAGE_CHAR_ESTIMATE;
     } else if ((block as { type: string }).type === "document") {
@@ -95,15 +114,23 @@ export function truncateToolResults(
     if (!Array.isArray(msg.content)) return { ...msg };
 
     const newContent = msg.content.map((block) => {
-      if (block.type !== "tool_result") return block;
+      const blockType = (block as { type: string }).type;
+      // Local tool_result and inline mcp_tool_result are both
+      // truncated against the same per-result cap. The sanitize
+      // step in agent.ts coerces mcp_tool_result content to a
+      // string envelope before history-append, so the string-only
+      // path below handles both consistently.
+      if (blockType !== "tool_result" && blockType !== "mcp_tool_result") {
+        return block;
+      }
 
-      const tr = block as Anthropic.Messages.ToolResultBlockParam;
+      const tr = block as { content?: unknown };
       if (typeof tr.content !== "string") return block;
 
       const truncated = truncateToolResult(tr.content, capTokens);
       if (truncated !== tr.content) {
         anyTruncated = true;
-        return { ...tr, content: truncated };
+        return { ...block, content: truncated } as typeof block;
       }
       return block;
     });
@@ -132,6 +159,27 @@ function hasToolUseBlocks(msg: Message): boolean {
 function hasToolResultBlocks(msg: Message): boolean {
   if (!Array.isArray(msg.content)) return false;
   return msg.content.some((b) => b.type === "tool_result");
+}
+
+/**
+ * Check if a message contains mcp_tool_result blocks (assistant
+ * message — MCP results from Anthropic's beta connector live inline
+ * with the assistant message, not in a following user message).
+ */
+function hasMcpToolResultBlocks(msg: Message): boolean {
+  if (!Array.isArray(msg.content)) return false;
+  return msg.content.some((b) => (b as { type: string }).type === "mcp_tool_result");
+}
+
+/**
+ * Check if a message contains mcp_tool_use blocks. Used by the
+ * orphan-strip pass in {@link validateAndRepairConversationShape}
+ * so that an mcp_tool_use without its paired mcp_tool_result in the
+ * same message doesn't cause an API 400 on the next turn.
+ */
+function hasMcpToolUseBlocks(msg: Message): boolean {
+  if (!Array.isArray(msg.content)) return false;
+  return msg.content.some((b) => (b as { type: string }).type === "mcp_tool_use");
 }
 
 /**
@@ -174,15 +222,68 @@ function findSafeSliceStart(messages: Message[], targetIndex: number): number {
  */
 export function validateAndRepairConversationShape(messages: Message[]): Message[] {
   let repaired = false;
+
+  // Pre-pass: within each assistant message, strip orphan mcp_tool_use
+  // or mcp_tool_result blocks (their paired counterpart is missing in
+  // the same message). MCP pairs live inline in a single assistant
+  // message; our own truncation / offload paths preserve pairs, but
+  // this defends against any future code path that could split them.
+  const mcpRepaired: Message[] = messages.map((msg, idx) => {
+    if (msg.role !== "assistant" || !Array.isArray(msg.content)) return msg;
+    if (!hasMcpToolUseBlocks(msg) && !hasMcpToolResultBlocks(msg)) return msg;
+
+    const mcpUseIds = new Set<string>();
+    const mcpResultUseIds = new Set<string>();
+    for (const b of msg.content) {
+      const t = (b as { type: string }).type;
+      if (t === "mcp_tool_use") {
+        mcpUseIds.add((b as { id: string }).id);
+      } else if (t === "mcp_tool_result") {
+        mcpResultUseIds.add((b as { tool_use_id: string }).tool_use_id);
+      }
+    }
+
+    const filtered = msg.content.filter((b) => {
+      const t = (b as { type: string }).type;
+      if (t === "mcp_tool_use") {
+        const id = (b as { id: string }).id;
+        if (mcpResultUseIds.has(id)) return true;
+        repaired = true;
+        logger.warn("Removed orphaned mcp_tool_use block", "context-manager", {
+          toolUseId: id,
+          messageIndex: idx,
+        });
+        return false;
+      }
+      if (t === "mcp_tool_result") {
+        const id = (b as { tool_use_id: string }).tool_use_id;
+        if (mcpUseIds.has(id)) return true;
+        repaired = true;
+        logger.warn("Removed orphaned mcp_tool_result block", "context-manager", {
+          toolUseId: id,
+          messageIndex: idx,
+        });
+        return false;
+      }
+      return true;
+    });
+
+    if (filtered.length === msg.content.length) return msg;
+    if (filtered.length === 0) {
+      return { ...msg, content: "[MCP tool calls removed during context compression]" };
+    }
+    return { ...msg, content: filtered };
+  });
+
   const result: Message[] = [];
 
-  for (let i = 0; i < messages.length; i++) {
-    const msg = messages[i];
+  for (let i = 0; i < mcpRepaired.length; i++) {
+    const msg = mcpRepaired[i];
 
     // Repair assistant messages: remove tool_use blocks whose IDs don't
     // appear as tool_result in the next user message.
     if (msg.role === "assistant" && Array.isArray(msg.content) && hasToolUseBlocks(msg)) {
-      const nextMsg = messages[i + 1];
+      const nextMsg = mcpRepaired[i + 1];
       const nextToolResultIds = new Set<string>();
       if (nextMsg?.role === "user" && Array.isArray(nextMsg.content)) {
         for (const b of nextMsg.content) {
@@ -217,7 +318,7 @@ export function validateAndRepairConversationShape(messages: Message[]): Message
     // Repair user messages: remove tool_result blocks whose IDs don't
     // appear as tool_use in the previous assistant message.
     if (msg.role === "user" && Array.isArray(msg.content) && hasToolResultBlocks(msg)) {
-      const prevMsg = messages[i - 1];
+      const prevMsg = mcpRepaired[i - 1];
       const prevToolUseIds = new Set<string>();
       if (prevMsg?.role === "assistant" && Array.isArray(prevMsg.content)) {
         for (const b of prevMsg.content) {
@@ -262,6 +363,53 @@ export function validateAndRepairConversationShape(messages: Message[]): Message
 }
 
 // ── Conversation compression ─────────────────────────────────
+
+/**
+ * Replace mcp_tool_use / mcp_tool_result blocks with plain text
+ * blocks describing their content. The stable messages.create API
+ * (used for Haiku-powered compression) does not recognise the
+ * MCP-connector block types and would reject the request; Haiku
+ * only needs readable text to write a summary, so a lossy stub is
+ * acceptable here.
+ */
+function materializeMcpBlocksAsText(messages: Message[]): Message[] {
+  return messages.map((msg) => {
+    if (!Array.isArray(msg.content)) return msg;
+    let mutated = false;
+    const newContent = msg.content.map((block) => {
+      const t = (block as { type: string }).type;
+      if (t === "mcp_tool_use") {
+        mutated = true;
+        const b = block as {
+          server_name?: string;
+          name?: string;
+          input?: unknown;
+        };
+        const inputJson = JSON.stringify(b.input ?? {});
+        return {
+          type: "text" as const,
+          text: `[MCP tool call ${b.server_name ?? "?"}.${b.name ?? "?"} input=${inputJson}]`,
+        };
+      }
+      if (t === "mcp_tool_result") {
+        mutated = true;
+        const b = block as { content?: string | unknown[]; is_error?: boolean };
+        const text =
+          typeof b.content === "string"
+            ? b.content
+            : Array.isArray(b.content)
+              ? JSON.stringify(b.content)
+              : "";
+        return {
+          type: "text" as const,
+          text: `[MCP tool result${b.is_error ? " (error)" : ""}: ${text}]`,
+        };
+      }
+      return block;
+    });
+    return mutated ? { ...msg, content: newContent } : msg;
+  });
+}
 
 async function compressOlderMessages(
   messages: Message[],
@@ -343,6 +491,12 @@ async function compressOlderMessages(
   try {
     // Validate cappedMiddle shape before sending to Haiku
     const validatedMiddle = validateAndRepairConversationShape(cappedMiddle);
+    // The stable messages.create endpoint rejects mcp_tool_use /
+    // mcp_tool_result blocks (those are part of the MCP-connector
+    // beta). Replace them with text stubs so Haiku can still
+    // summarise the conversation. Lossy but safer than 400-ing the
+    // entire compression call.
+    const haikuReady = materializeMcpBlocksAsText(validatedMiddle);
 
     const response = await anthropicClient.messages.create({
       model: HAIKU_MODEL,
@@ -353,7 +507,7 @@ async function compressOlderMessages(
         "tools that were used, and any actions taken or recommended. Be concise and factual. " +
         "Output only the bullet points.",
       messages: [
-        ...validatedMiddle,
+        ...haikuReady,
         { role: "user", content: "Please summarize the conversation above." },
       ],
       ...(ownerId ? { metadata: { user_id: hashPii(ownerId) } } : {}),
@@ -512,16 +666,27 @@ export async function offloadLargeToolResultsInPrompt(
   const skipLastTurn = ctx.skipLastTurn ?? true;
 
   // Identify the end of the region we're allowed to rewrite. The
-  // "last turn" is the last assistant + user tool_result pair; we
-  // want to keep it intact when skipLastTurn is true.
+  // "last turn" is either:
+  //   - the last assistant + user tool_result pair (local tools), or
+  //   - the last assistant message containing mcp_tool_result blocks
+  //     (MCP tools execute server-side and the result lives inline
+  //     in the same assistant message).
+  // Walk back from the end and use whichever appears first. When
+  // skipLastTurn is true, we keep the matched region intact.
   let cutoffIndex = messages.length;
   if (skipLastTurn) {
-    // Walk back until we pass one user-with-tool-result message AND
-    // its preceding assistant-with-tool-use message.
     for (let i = messages.length - 1; i >= 0; i--) {
       const m = messages[i];
       if (m.role === "user" && hasToolResultBlocks(m)) {
+        // Local pair: protect both the user-result and its preceding
+        // assistant-tool-use message.
         cutoffIndex = Math.max(0, i - 1);
+        break;
+      }
+      if (m.role === "assistant" && hasMcpToolResultBlocks(m)) {
+        // MCP pair lives entirely inside this assistant message; just
+        // protect this single message.
+        cutoffIndex = i;
         break;
       }
     }
@@ -541,11 +706,14 @@ export async function offloadLargeToolResultsInPrompt(
     let mutated = false;
     const newContent: typeof msg.content = [];
     for (const block of msg.content) {
-      if (block.type !== "tool_result") {
+      const blockType = (block as { type: string }).type;
+      const isLocal = blockType === "tool_result";
+      const isMcp = blockType === "mcp_tool_result";
+      if (!isLocal && !isMcp) {
         newContent.push(block);
         continue;
       }
-      const tr = block as Anthropic.Messages.ToolResultBlockParam;
+      const tr = block as { content?: unknown; tool_use_id?: string };
       const content = tr.content;
       if (typeof content !== "string" || content.length <= charThreshold) {
         newContent.push(block);
@@ -594,11 +762,13 @@ export async function offloadLargeToolResultsInPrompt(
         }
         // Above threshold — wrap in the trust-marked envelope. Same
         // shape as wrapAndMaybeOffloadToolResult so downstream
-        // resolvers treat it identically.
+        // resolvers treat it identically. MCP-sourced blocks tag
+        // `source: "mcp_offload_inflight"` so audit / debug can
+        // distinguish them from local tool offloads.
         const envelope = JSON.stringify(
           {
             _neo_trust_boundary: {
-              source: "tool_offload_inflight",
+              source: isMcp ? "mcp_offload_inflight" : "tool_offload_inflight",
               tool: tr.tool_use_id ?? "unknown",
               injection_detected: false,
             },
@@ -607,7 +777,7 @@ export async function offloadLargeToolResultsInPrompt(
           null,
           2,
         );
-        newContent.push({ ...tr, content: envelope });
+        newContent.push({ ...block, content: envelope } as typeof block);
         offloadedCount += 1;
         mutated = true;
       } catch (err) {
