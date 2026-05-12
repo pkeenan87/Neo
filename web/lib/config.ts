@@ -283,6 +283,12 @@ export const env: EnvConfig = {
   AI_SEARCH_API_VERSION:                process.env.AI_SEARCH_API_VERSION || "2024-07-01",
   AI_SEARCH_RERANKER_THRESHOLD:         Number(process.env.AI_SEARCH_RERANKER_THRESHOLD ?? "1.5"),
   AI_SEARCH_ALLOW_DISABLE_THRESHOLD:    process.env.AI_SEARCH_ALLOW_DISABLE_THRESHOLD === "true",
+  // Wiz MCP Server (preview). Both required to enable the
+  // server in `getMcpServers`; either missing → Wiz is silently
+  // omitted from the per-role MCP server array. Production
+  // should pull these from Key Vault via getToolSecret.
+  WIZ_MCP_URL:                          process.env.WIZ_MCP_URL,
+  WIZ_MCP_TOKEN:                        process.env.WIZ_MCP_TOKEN,
 };
 
 // Note: validateConfig uses console.warn directly (not logger) because

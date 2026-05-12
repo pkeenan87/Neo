@@ -242,6 +242,44 @@ export const INTEGRATIONS: IntegrationInfo[] = [
       },
     ],
   },
+  {
+    slug: "wiz",
+    name: "Wiz Cloud Security Platform",
+    iconName: "Cloud",
+    imageSrc: "/wiz-logo.png",
+    description:
+      "Cloud security posture and Security Graph. The agent reaches Wiz via the Wiz MCP server, scoped per role (admin: full read + write; reader/triage: read-only).",
+    capabilities: [
+      // These are MCP tool names, not Neo executor names — the agent
+      // loop sees them as `mcp_tool_use` blocks in the Anthropic
+      // response, not as locally-dispatched tools. Listed here so the
+      // Settings UI shows operators which Wiz capabilities the
+      // integration exposes.
+      "wiz_get_issues",
+      "wiz_get_vulnerabilities",
+      "wiz_get_compliance",
+      "wiz_list_cloud_resources",
+      "wiz_search_security_graph",
+      "wiz_get_defend_threat",
+      "wiz_get_blast_radius",
+    ],
+    secrets: [
+      {
+        key: "WIZ_MCP_URL",
+        label: "MCP server URL",
+        description:
+          "HTTPS URL of the Wiz MCP server (streamable HTTP transport).",
+        required: true,
+      },
+      {
+        key: "WIZ_MCP_TOKEN",
+        label: "Bearer token",
+        description:
+          "Bearer token for authenticating to the Wiz MCP server. Prefer Key Vault in production (secret name `wiz-mcp-token`).",
+        required: true,
+      },
+    ],
+  },
 ];
 
 export function getIntegration(slug: string): IntegrationInfo | undefined {

@@ -405,6 +405,38 @@ The seed script is idempotent — re-running is safe and won't clobber admin edi
 
 **Failure mode**: if Cosmos is unavailable when a triage request arrives, `resolveTriageSkill` logs a warning and falls through to the generic skill rather than failing the request. Same fail-open posture as the dedup cache.
 
+<a id="wiz-mcp-server"></a>
+### Wiz MCP Server (Preview)
+
+Neo's agent loop integrates with the Wiz Cloud Security Platform via Anthropic's MCP-connector beta. When configured, every agent turn for an admin/reader/triage user includes a role-scoped `mcp_servers` array in the Anthropic API call, letting Claude pull issues, vulnerabilities, compliance posture, cloud-resource findings, Security Graph queries, and (for admins) Defend / blast-radius data inline with the existing Sentinel + Defender XDR + Entra correlation.
+
+**Credentials** (preferred order — Key Vault first, then env-var fallback):
+
+| Variable | Key Vault name | Purpose |
+|---|---|---|
+| `WIZ_MCP_URL` | `wiz-mcp-url` | HTTPS URL of the Wiz MCP server (streamable HTTP transport). |
+| `WIZ_MCP_TOKEN` | `wiz-mcp-token` | Bearer token presented to Wiz. |
+
+Both must be set to enable the integration. If either is missing, Wiz is silently omitted from the per-role MCP server array — no errors, the rest of the agent loop runs normally.
+
+**Role → Wiz tool matrix**:
+
+| Role | Wiz tools |
+|---|---|
+| `admin` | All catalogue tools, including `wiz_get_defend_threat` and `wiz_get_blast_radius`. Write tools (when Wiz publishes them) will route through Neo's existing confirmation gate. |
+| `reader` | Read-only: `wiz_get_issues`, `wiz_get_vulnerabilities`, `wiz_get_compliance`, `wiz_list_cloud_resources`, `wiz_search_security_graph`. |
+| `triage` | Same scoping as `reader`. Logic Apps acting through the triage role inherit the same allow-list. |
+
+The catalogue lives at `WIZ_TOOL_CATALOGUE` in `web/lib/mcp-servers.ts`. When Wiz publishes a new tool, extend the catalogue and (if it's a read tool) add it to the reader/triage allow-list. Glob patterns are supported in config (`wiz_get_*`) and expanded against the catalogue at request time, because Anthropic's MCP connector requires literal tool names in `tool_configuration.allowed_tools`.
+
+**Connection-test probe**: Settings → Integrations → Wiz → "Test connection" issues an `OPTIONS` request to the configured URL with the bearer token. Auth-only — no representative graph query — so the cost is one round-trip. Distinct error messages for missing credentials, non-https URL, 401/403 (token issue), 5xx (Wiz unhealthy), and network failures.
+
+**Mock mode**: `MOCK_MODE=true` does *not* auto-enable Wiz — set `WIZ_MCP_URL` to any non-empty value to opt in. When opted in, the mock-mode short-circuit returns canned fixtures (`wiz_get_issues`, `wiz_get_vulnerabilities`, `wiz_get_compliance`, `wiz_list_cloud_resources`, `wiz_search_security_graph`) and rejects the higher-privilege tools (`wiz_get_defend_threat`, `wiz_get_blast_radius`) with a "set MOCK_MODE=false" hint. Fixtures live in `web/lib/mcp-fixtures.ts`.
+
+**Audit**: every Wiz tool invocation emits an `mcp_invocation` event to the Event Hub audit trail with `{ mcpServer, toolName, role, sessionId, result: "success" | "blocked" | "error", ownerIdHash }`. The bearer token, full URL, and raw UPN are never included.
+
+**Failure mode**: if the MCP-server lookup throws (Key Vault outage, Cosmos blip), `getMcpServersSafely` swallows the error, logs a warning, and the agent loop proceeds without Wiz for that turn. Same fail-open posture as the dedup cache and triage dispatch.
+
 ### Token Usage Budgets
 
 Neo enforces per-user token budgets to control API costs. Two rolling windows are checked before each agent loop call:

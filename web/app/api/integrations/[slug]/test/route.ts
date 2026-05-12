@@ -74,6 +74,44 @@ const PROBES: Record<string, () => Promise<void>> = {
     });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
   },
+  "wiz": async () => {
+    const url = await getToolSecret("WIZ_MCP_URL");
+    const token = await getToolSecret("WIZ_MCP_TOKEN");
+    if (!url) throw new Error("Missing WIZ_MCP_URL");
+    if (!token) throw new Error("Missing WIZ_MCP_TOKEN");
+    // SECURITY: only allow https Wiz MCP URLs. Rejecting non-https
+    // up front prevents an accidentally-typed http:// URL from
+    // sending the bearer token over plaintext during the probe.
+    let parsed: URL;
+    try {
+      parsed = new URL(url);
+    } catch {
+      throw new Error("WIZ_MCP_URL is not a valid URL");
+    }
+    if (parsed.protocol !== "https:") {
+      throw new Error("WIZ_MCP_URL must use https:// (refusing to send bearer token over plaintext)");
+    }
+    // Cheapest possible auth check — the streamable HTTP MCP
+    // transport accepts an OPTIONS request to confirm the server
+    // is reachable with the supplied credentials. We deliberately
+    // do not run a representative graph query here (per the spec's
+    // open-question answer).
+    const res = await fetch(url, {
+      method: "OPTIONS",
+      // SECURITY: refuse to follow redirects so a 3xx can never forward the bearer token.
+      redirect: "error",
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    // Some MCP servers return 200, others 204 for an OPTIONS preflight.
+    // 401/403 indicates the token is wrong; 5xx indicates the server
+    // is unhealthy. Anything else is treated as unreachable.
+    if (res.status === 401 || res.status === 403) {
+      throw new Error(`Wiz authentication failed (HTTP ${res.status}) — check WIZ_MCP_TOKEN`);
+    }
+    if (!res.ok && res.status !== 204) {
+      throw new Error(`Wiz MCP server returned HTTP ${res.status}`);
+    }
+  },
 };
 
 export async function POST(
