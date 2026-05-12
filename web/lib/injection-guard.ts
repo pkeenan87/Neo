@@ -106,9 +106,13 @@ const TOOL_RESULT_PATTERNS: PatternEntry[] = [
     label: "exfiltration_attempt",
   },
   {
-    // Scoped to tool results only — too many false positives on user input
-    // (SHA256 hashes, GUIDs, machineIds all match the base64 charset).
-    pattern: /[A-Za-z0-9+/]{20,}={0,2}/,
+    // Scoped to tool results only — and tightened to require explicit
+    // base64 padding (`=` or `==`) so SHA256 hashes, GUIDs, machine
+    // IDs, and other hex/alphanumeric identifiers — all common in
+    // legitimate Wiz / Sentinel / Defender responses — don't trip
+    // the heuristic. True adversarial base64 payloads almost always
+    // have padding when not perfectly aligned (most binary data).
+    pattern: /[A-Za-z0-9+/]{20,}={1,2}/,
     label: "encoded_payload",
   },
 ];
@@ -243,20 +247,51 @@ export function wrapMcpToolResultContent(
     toolName: string;
   }
 ): string {
+  // The MCP-connector spec permits `content` to contain text,
+  // resource, and image-style blocks; we extract scannable text from
+  // every shape we know about and serialize any unfamiliar block
+  // type so an injection-bearing payload buried in a non-text block
+  // can't bypass the scanner just by living in `{type:"resource"}`
+  // instead of `{type:"text"}`. JSON.stringify on the unknown block
+  // is intentionally over-inclusive — false positives on a non-
+  // injection payload are a logging nuisance; false negatives on an
+  // injection payload reach the model unscanned.
   let textToScan = "";
   if (typeof rawContent === "string") {
     textToScan = rawContent;
   } else if (Array.isArray(rawContent)) {
-    textToScan = rawContent
-      .filter(
-        (b): b is { type: "text"; text: string } =>
-          typeof b === "object" &&
-          b !== null &&
-          (b as { type?: unknown }).type === "text" &&
-          typeof (b as { text?: unknown }).text === "string"
-      )
-      .map((b) => b.text)
-      .join("\n");
+    const parts: string[] = [];
+    for (const b of rawContent) {
+      if (typeof b !== "object" || b === null) continue;
+      const block = b as {
+        type?: unknown;
+        text?: unknown;
+        resource?: { text?: unknown };
+      };
+      if (block.type === "text" && typeof block.text === "string") {
+        parts.push(block.text);
+        continue;
+      }
+      if (
+        block.type === "resource" &&
+        typeof block.resource?.text === "string"
+      ) {
+        parts.push(block.resource.text);
+        continue;
+      }
+      // Unknown block shape (image, future MCP types) — scan its
+      // serialized form so embedded text-bearing fields can't slip
+      // through. This catches the case where a future MCP block
+      // type carries injection-pattern text in some inner field
+      // we don't recognize yet.
+      try {
+        parts.push(JSON.stringify(b));
+      } catch {
+        // Circular reference or otherwise unserializable — skip;
+        // we already log the wrap event so the operator can audit.
+      }
+    }
+    textToScan = parts.join("\n");
   }
 
   const scanResult = scan(textToScan, TOOL_RESULT_PATTERNS);

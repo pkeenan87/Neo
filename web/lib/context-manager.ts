@@ -127,6 +127,20 @@ export function truncateToolResults(
       const tr = block as { content?: unknown };
       if (typeof tr.content !== "string") return block;
 
+      // Skip truncation when the content is already a
+      // _neo_trust_boundary envelope. Slicing the envelope JSON
+      // mid-stream produces a malformed string and a misleading
+      // `get_full_tool_result` hint (there's no local tool to
+      // re-fetch for an inline MCP block). The blob offload path
+      // handles oversized envelope payloads correctly; truncation
+      // here would just corrupt them. See review N4.
+      if (
+        blockType === "mcp_tool_result" &&
+        tr.content.includes("_neo_trust_boundary")
+      ) {
+        return block;
+      }
+
       const truncated = truncateToolResult(tr.content, capTokens);
       if (truncated !== tr.content) {
         anyTruncated = true;
@@ -366,13 +380,36 @@ export function validateAndRepairConversationShape(messages: Message[]): Message
 
 /**
  * Replace mcp_tool_use / mcp_tool_result blocks with plain text
- * blocks describing their content. The stable messages.create API
- * (used for Haiku-powered compression) does not recognise the
- * MCP-connector block types and would reject the request; Haiku
- * only needs readable text to write a summary, so a lossy stub is
- * acceptable here.
+ * blocks describing their content. Two callers depend on this:
+ *
+ *   1. `compressOlderMessages` — Haiku's stable-API endpoint does
+ *      not recognise MCP block types and rejects the call. Haiku
+ *      only needs readable text for the summary, so a lossy stub
+ *      is acceptable.
+ *   2. `createWithOptionalMcp` (stable-API path) — when a session
+ *      that earlier ran with MCP servers configured runs a turn
+ *      without them (secrets rotated, MOCK_MODE flipped, role
+ *      changed), persisted MCP blocks in history would otherwise
+ *      crash the stable API. Materialising them keeps the
+ *      conversation coherent without leaking the original payload
+ *      back to the model.
+ *
+ * Adversarial-payload handling: when `mcp_tool_result.content` is
+ * already a `_neo_trust_boundary` envelope (the production state
+ * after `sanitizeMcpResultsForHistory`), the envelope is parsed and
+ *
+ *   - if `injection_detected: true`, the `data` field is replaced
+ *     with a quarantine marker so Haiku (a smaller model with a
+ *     weaker injection posture) never sees the raw adversarial
+ *     content,
+ *   - if `injection_detected: false`, the `data` field is included
+ *     but truncated to a safe length.
+ *
+ * See review M4.
  */
-function materializeMcpBlocksAsText(messages: Message[]): Message[] {
+const HAIKU_MCP_DATA_PREVIEW_CHARS = 2000;
+
+export function materializeMcpBlocksAsText(messages: Message[]): Message[] {
   return messages.map((msg) => {
     if (!Array.isArray(msg.content)) return msg;
     let mutated = false;
@@ -394,12 +431,49 @@ function materializeMcpBlocksAsText(messages: Message[]): Message[] {
       if (t === "mcp_tool_result") {
         mutated = true;
         const b = block as { content?: string | unknown[]; is_error?: boolean };
-        const text =
-          typeof b.content === "string"
-            ? b.content
-            : Array.isArray(b.content)
-              ? JSON.stringify(b.content)
-              : "";
+        let text = "";
+        if (typeof b.content === "string") {
+          // If the content is an envelope, parse it and gate by
+          // injection_detected. Quarantine on positive scans,
+          // truncate-preview otherwise. Non-envelope strings (e.g.
+          // pre-sanitize content) get truncate-only treatment.
+          if (b.content.includes("_neo_trust_boundary")) {
+            try {
+              const env = JSON.parse(b.content) as {
+                _neo_trust_boundary?: { injection_detected?: unknown };
+                data?: unknown;
+              };
+              if (env?._neo_trust_boundary?.injection_detected === true) {
+                text = "[content quarantined: injection patterns detected]";
+              } else {
+                const dataStr =
+                  typeof env?.data === "string"
+                    ? env.data
+                    : JSON.stringify(env?.data ?? "");
+                text =
+                  dataStr.length > HAIKU_MCP_DATA_PREVIEW_CHARS
+                    ? dataStr.slice(0, HAIKU_MCP_DATA_PREVIEW_CHARS) +
+                      "…[truncated for compression]"
+                    : dataStr;
+              }
+            } catch {
+              text = b.content.slice(0, HAIKU_MCP_DATA_PREVIEW_CHARS);
+            }
+          } else {
+            text =
+              b.content.length > HAIKU_MCP_DATA_PREVIEW_CHARS
+                ? b.content.slice(0, HAIKU_MCP_DATA_PREVIEW_CHARS) +
+                  "…[truncated]"
+                : b.content;
+          }
+        } else if (Array.isArray(b.content)) {
+          const serialized = JSON.stringify(b.content);
+          text =
+            serialized.length > HAIKU_MCP_DATA_PREVIEW_CHARS
+              ? serialized.slice(0, HAIKU_MCP_DATA_PREVIEW_CHARS) +
+                "…[truncated]"
+              : serialized;
+        }
         return {
           type: "text" as const,
           text: `[MCP tool result${b.is_error ? " (error)" : ""}: ${text}]`,
@@ -747,6 +821,30 @@ export async function offloadLargeToolResultsInPrompt(
       }
 
       try {
+        // Before offloading, if the existing content is already a
+        // trust-boundary envelope (from a prior wrap step), preserve
+        // its `injection_detected` flag. Without this, the outer
+        // offload envelope below would hardcode `injection_detected:
+        // false` and silently launder away a `true` flag from the
+        // inner scan. See review B2.
+        let preservedInjectionFlag = false;
+        if (content.includes("_neo_trust_boundary")) {
+          try {
+            const inner = JSON.parse(content) as {
+              _neo_trust_boundary?: { injection_detected?: unknown };
+            };
+            if (
+              inner &&
+              typeof inner._neo_trust_boundary === "object" &&
+              inner._neo_trust_boundary?.injection_detected === true
+            ) {
+              preservedInjectionFlag = true;
+            }
+          } catch {
+            // Not parseable as JSON — fall through with default false.
+          }
+        }
+
         // Attempt to offload the raw payload. `maybeOffloadToolResult`
         // expects the full wrapper JSON so it can compute a stable
         // content-hash; we pass the tool_result's string content as-is
@@ -770,7 +868,7 @@ export async function offloadLargeToolResultsInPrompt(
             _neo_trust_boundary: {
               source: isMcp ? "mcp_offload_inflight" : "tool_offload_inflight",
               tool: tr.tool_use_id ?? "unknown",
-              injection_detected: false,
+              injection_detected: preservedInjectionFlag,
             },
             data: outcome,
           },

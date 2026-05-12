@@ -95,6 +95,33 @@ vi.mock("../lib/context-manager", () => ({
   })),
   sanitizeEmptyUserMessages: (messages: Message[]) => messages,
   CHARS_PER_TOKEN: 4,
+  // Lightweight materialiser used by createWithOptionalMcp's
+  // stable-API path (M1) when persisted MCP blocks are present.
+  // Mirrors the real function's contract: convert mcp_tool_use /
+  // mcp_tool_result blocks to text stubs, leave others alone.
+  materializeMcpBlocksAsText: (messages: Message[]) =>
+    messages.map((msg) => {
+      if (!Array.isArray(msg.content)) return msg;
+      const newContent = msg.content.map((block) => {
+        const t = (block as { type: string }).type;
+        if (t === "mcp_tool_use") {
+          const b = block as { server_name?: string; name?: string; input?: unknown };
+          return {
+            type: "text" as const,
+            text: `[MCP tool call ${b.server_name}.${b.name} input=${JSON.stringify(b.input ?? {})}]`,
+          };
+        }
+        if (t === "mcp_tool_result") {
+          const b = block as { content?: unknown };
+          return {
+            type: "text" as const,
+            text: `[MCP tool result: ${typeof b.content === "string" ? b.content : ""}]`,
+          };
+        }
+        return block;
+      });
+      return { ...msg, content: newContent };
+    }),
 }));
 
 vi.mock("../lib/session-factory", () => ({
@@ -223,11 +250,14 @@ describe("agent loop — MCP audit emission", () => {
       sessionId: "session-1",
       result: "success",
     });
-    // durationMs is a number that reflects the wall-clock time of
-    // the underlying createWithOptionalMcp call. We can't pin an
-    // exact value but it must be present and non-negative.
-    expect(typeof mcpEvents[0].metadata?.durationMs).toBe("number");
-    expect((mcpEvents[0].metadata?.durationMs as number) >= 0).toBe(true);
+    // turnDurationMs is the whole-turn wall-clock time of the
+    // underlying createWithOptionalMcp call (not per-tool — see
+    // review N1). The field name makes that explicit so downstream
+    // dashboards don't read it as per-tool latency. We can't pin
+    // an exact value but it must be present and non-negative.
+    expect(typeof mcpEvents[0].metadata?.turnDurationMs).toBe("number");
+    expect((mcpEvents[0].metadata?.turnDurationMs as number) >= 0).toBe(true);
+    expect(mcpEvents[0].metadata?.durationMs).toBeUndefined();
   });
 
   it("emits result=error when the paired mcp_tool_result has is_error: true", async () => {
@@ -393,5 +423,163 @@ describe("agent loop — MCP sanitize on history-append", () => {
     // Pure text response — no MCP blocks, no envelopes, no rewrite.
     expect(content[0].type).toBe("text");
     expect(JSON.stringify(content)).not.toContain("_neo_trust_boundary");
+  });
+});
+
+// ── B1: destructive-tool slice preserves sanitized envelope ──────────
+
+describe("agent loop — MCP sanitize survives destructive-tool slice (B1)", () => {
+  it("when an MCP result and a destructive tool_use both appear in one turn, the persisted assistant message keeps the wrapped MCP envelope", async () => {
+    mcpServersReturn.current = [
+      { type: "url", name: "wiz", url: "https://wiz.example.com/mcp", authorization_token: "tok" },
+    ];
+    // Response contains: mcp_tool_use, mcp_tool_result, then a
+    // destructive tool_use. The destructive-tool path rewrites
+    // localMessages with a slice up to the destructive block.
+    // Before B1, the slice was taken from raw `response.content`,
+    // throwing away the sanitized MCP envelope. After B1, it
+    // slices the sanitized content so the envelope survives.
+    betaCreateMock.mockImplementationOnce(async (params: { model: string }) => ({
+      id: "msg_01",
+      type: "message" as const,
+      role: "assistant" as const,
+      model: params.model,
+      content: [
+        {
+          type: "mcp_tool_use",
+          id: "tu_mcp_1",
+          server_name: "wiz",
+          name: "wiz_get_issues",
+          input: {},
+        },
+        {
+          type: "mcp_tool_result",
+          tool_use_id: "tu_mcp_1",
+          is_error: false,
+          content: "Wiz issue summary content",
+        },
+        {
+          type: "tool_use",
+          id: "tu_destructive",
+          name: "isolate_machine",
+          input: { machineId: "m1" },
+        },
+      ],
+      stop_reason: "tool_use" as const,
+      stop_sequence: null,
+      usage: { input_tokens: 10, output_tokens: 2 },
+    }));
+
+    const result = await runAgentLoop(
+      [{ role: "user", content: "isolate m1 using wiz context" }],
+      {},
+      "admin",
+      "session-b1-1",
+    );
+    if (result.type !== "confirmation_required") {
+      throw new Error(`expected confirmation_required (destructive gate), got ${result.type}`);
+    }
+
+    const lastAssistant = [...result.messages].reverse().find((m) => m.role === "assistant")!;
+    const content = lastAssistant.content as unknown as Array<Record<string, unknown>>;
+    // mcp_tool_result block survives the slice AND carries the
+    // trust-boundary envelope (this is the B1 regression check).
+    const mcpResult = content.find((b) => b.type === "mcp_tool_result");
+    expect(mcpResult).toBeDefined();
+    expect(typeof mcpResult!.content).toBe("string");
+    expect(mcpResult!.content).toContain("_neo_trust_boundary");
+    expect(mcpResult!.content).toContain("mcp_external");
+  });
+});
+
+// ── M1: stable-API path materializes persisted MCP blocks ────────────
+
+describe("agent loop — stable-API turn coexists with stale MCP history (M1)", () => {
+  it("converts mcp_tool_use / mcp_tool_result blocks to text when this turn has no MCP servers", async () => {
+    // First turn — MCP configured, sets the history with MCP blocks.
+    // Simulate by passing a history that already contains them.
+    mcpServersReturn.current = [];
+    stableCreateMock.mockImplementationOnce(async (params: Anthropic.Messages.MessageCreateParamsNonStreaming) => ({
+      id: "msg_01",
+      type: "message" as const,
+      role: "assistant" as const,
+      model: params.model,
+      content: [{ type: "text", text: "ok" }],
+      stop_reason: "end_turn" as const,
+      stop_sequence: null,
+      usage: { input_tokens: 10, output_tokens: 2 },
+    }));
+
+    const messages = [
+      { role: "user", content: "first message" },
+      {
+        role: "assistant",
+        content: [
+          { type: "mcp_tool_use", id: "tu_x", server_name: "wiz", name: "wiz_get_issues", input: {} },
+          { type: "mcp_tool_result", tool_use_id: "tu_x", content: "earlier wiz result" },
+        ],
+      },
+      { role: "user", content: "follow-up" },
+    ] as Message[];
+
+    await runAgentLoop(messages, {}, "admin", "session-m1");
+
+    // The stable client should have been called with messages where
+    // the MCP blocks have been materialized as text. Otherwise the
+    // stable API would 400 on unknown block types.
+    expect(stableCreateMock).toHaveBeenCalledTimes(1);
+    const calledParams = stableCreateMock.mock.calls[0][0] as Anthropic.Messages.MessageCreateParamsNonStreaming;
+    const sentAssistantMsg = calledParams.messages.find((m) => m.role === "assistant");
+    expect(sentAssistantMsg).toBeDefined();
+    const sentContent = sentAssistantMsg!.content as unknown as Array<Record<string, unknown>>;
+    // No MCP block types should reach the stable API.
+    for (const block of sentContent) {
+      expect(block.type).not.toBe("mcp_tool_use");
+      expect(block.type).not.toBe("mcp_tool_result");
+    }
+    // The text stubs should mention the MCP origin so the model
+    // still has context (lossy but coherent).
+    const allText = sentContent
+      .filter((b) => b.type === "text")
+      .map((b) => b.text as string)
+      .join("\n");
+    expect(allText).toContain("MCP tool call");
+    expect(allText).toContain("wiz_get_issues");
+  });
+});
+
+// ── M2: compaction stop_reason clears inProgressPlan ─────────────────
+
+describe("agent loop — compaction stop_reason clears inProgressPlan (M2)", () => {
+  it("calls setInProgressPlan(null) when stop_reason is compaction", async () => {
+    mcpServersReturn.current = [
+      { type: "url", name: "wiz", url: "https://wiz.example.com/mcp", authorization_token: "tok" },
+    ];
+    // sessionStore is mocked at the top of this file — re-import to
+    // grab the setInProgressPlan spy. The mock returns a Plan to
+    // simulate an active plan being present.
+    const { sessionStore } = await import("../lib/session-factory");
+    (sessionStore.getInProgressPlan as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+      planText: "step 1\nstep 2",
+      resumptionCount: 0,
+    });
+    const setSpy = sessionStore.setInProgressPlan as ReturnType<typeof vi.fn>;
+    setSpy.mockClear();
+
+    betaCreateMock.mockImplementationOnce(async (params: { model: string }) => ({
+      id: "msg_01",
+      type: "message" as const,
+      role: "assistant" as const,
+      model: params.model,
+      content: [{ type: "text", text: "compacted" }],
+      stop_reason: "compaction" as const,
+      stop_sequence: null,
+      usage: { input_tokens: 10, output_tokens: 2 },
+    }));
+
+    await runAgentLoop([{ role: "user", content: "hi" }], {}, "admin", "session-m2");
+
+    // Plan should be cleared on compaction (was previously leaked).
+    expect(setSpy).toHaveBeenCalledWith("session-m2", null);
   });
 });

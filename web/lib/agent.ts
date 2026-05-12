@@ -6,7 +6,12 @@ import { getToolsForRole, type Role } from "./permissions";
 import { logger, hashPii } from "./logger";
 import { getToolIntegration } from "./integration-registry";
 import { wrapAndMaybeOffloadToolResult, wrapMcpToolResultContent } from "./injection-guard";
-import { prepareMessages, sanitizeEmptyUserMessages, CHARS_PER_TOKEN } from "./context-manager";
+import {
+  prepareMessages,
+  sanitizeEmptyUserMessages,
+  CHARS_PER_TOKEN,
+  materializeMcpBlocksAsText,
+} from "./context-manager";
 import {
   getMcpServers,
   enforceMcpToolAccess,
@@ -197,7 +202,20 @@ async function createWithOptionalMcp(
 ): Promise<{ message: Anthropic.Messages.Message; durationMs: number }> {
   const start = Date.now();
   if (mcpServers.length === 0) {
-    const message = await createWithRetry(params, signal);
+    // History may still carry mcp_tool_use / mcp_tool_result blocks
+    // from an earlier turn when MCP was configured for this role.
+    // The stable messages.create endpoint does not recognise those
+    // block types and would 400 the entire request. Materialise the
+    // blocks as text stubs (lossy but coherent) so the conversation
+    // can continue even after secrets rotate or MOCK_MODE flips on
+    // mid-session. See review M1.
+    const safeMessages = hasAnyMcpBlocks(params.messages)
+      ? (materializeMcpBlocksAsText(params.messages as Message[]) as typeof params.messages)
+      : params.messages;
+    const safeParams = safeMessages === params.messages
+      ? params
+      : { ...params, messages: safeMessages };
+    const message = await createWithRetry(safeParams, signal);
     return { message, durationMs: Date.now() - start };
   }
   const betaParams = {
@@ -233,7 +251,14 @@ function auditMcpInvocations(
   role: Role,
   sessionId: string,
   ownerIdHash: string | undefined,
-  durationMs: number,
+  // Whole-turn wall-clock duration. Anthropic executes every MCP
+  // tool serially inside one API call, so we cannot meaningfully
+  // attribute time per individual tool from outside the SDK. The
+  // value is identical across all events emitted for the same turn
+  // — the field name `turnDurationMs` makes that explicit so
+  // downstream dashboards don't read it as per-tool latency. See
+  // review N1.
+  turnDurationMs: number,
 ): void {
   const resultsByToolUseId = new Map<string, { is_error: boolean }>();
   for (const block of contentBlocks) {
@@ -285,7 +310,7 @@ function auditMcpInvocations(
       role,
       sessionId,
       result: auditResult,
-      durationMs,
+      turnDurationMs,
       ownerIdHash,
     });
   }
@@ -353,6 +378,24 @@ function sanitizeMcpResultsForHistory(
   });
 
   return mutated ? out : content;
+}
+
+/**
+ * Quick scan over a message array to decide whether the stable-API
+ * path needs to materialise persisted MCP blocks before calling the
+ * Anthropic SDK. Most stable-API turns have no MCP blocks (the user
+ * has never used MCP, or this session has not yet), so the fast
+ * negative path keeps the cost near-zero.
+ */
+function hasAnyMcpBlocks(messages: { content: unknown }[]): boolean {
+  for (const msg of messages) {
+    if (!Array.isArray(msg.content)) continue;
+    for (const block of msg.content) {
+      const t = (block as { type?: unknown }).type;
+      if (t === "mcp_tool_use" || t === "mcp_tool_result") return true;
+    }
+  }
+  return false;
 }
 
 function isMcpToolUse(block: unknown): block is McpToolUseBlock {
@@ -776,9 +819,24 @@ export async function runAgentLoop(
             (b) => b.type === "tool_use" && b.id === id,
           );
           if (destructiveContentIdx >= 0) {
+            // CRITICAL: slice the sanitized content, not the raw
+            // response. `sanitizedAssistantContent` is the
+            // injection-guard-wrapped version of `response.content`
+            // produced by `sanitizeMcpResultsForHistory` above.
+            // `sanitizeMcpResultsForHistory` is a shape-preserving
+            // map (one input block → one output block, index-for-
+            // index), so `destructiveContentIdx` computed against
+            // `response.content` is also valid against the
+            // sanitized array. Slicing `response.content` directly
+            // here would re-introduce un-wrapped mcp_tool_result
+            // blocks into history on any turn that combines an MCP
+            // result with a destructive tool call — the exact
+            // injection-bypass surface the sanitize step exists to
+            // close. See review B1.
+            const sanitizedArray = sanitizedAssistantContent as unknown[];
             localMessages[lastAssistantIdx] = {
               role: "assistant",
-              content: response.content.slice(0, destructiveContentIdx + 1),
+              content: sanitizedArray.slice(0, destructiveContentIdx + 1) as Message["content"],
             };
 
             // Audit: surface any additional destructive tools that were
@@ -1049,6 +1107,20 @@ export async function runAgentLoop(
         .filter((b): b is Anthropic.Messages.TextBlock => (b as { type: string }).type === "text")
         .map((b) => b.text)
         .join("\n");
+      // Mirror the end_turn path: a compaction-terminated turn is
+      // also a terminal state for the in-progress plan (no further
+      // tool calls coming in this turn). Without this, the plan
+      // persists and stale-resumes on the next user message. See
+      // review M2.
+      if (inProgressPlan) {
+        const { sessionStore } = await import("./session-factory");
+        void sessionStore.setInProgressPlan(sessionId, null).catch((err) => {
+          logger.warn("clear in-progress plan failed (best-effort)", "agent", {
+            sessionId,
+            errorMessage: (err as Error).message,
+          });
+        });
+      }
       if (callbacks.onTurnComplete) callbacks.onTurnComplete(localMessages);
       return { type: "response", text, messages: localMessages };
     }

@@ -215,8 +215,62 @@ export async function getMcpServers(role: Role): Promise<McpServerConfig[]> {
       continue;
     }
 
+    // Runtime HTTPS enforcement. Without this, a misconfigured
+    // WIZ_MCP_URL of the form `http://...` would ship the bearer
+    // token in plaintext to Anthropic's MCP connector, which
+    // forwards it to the upstream server unchanged. The probe
+    // endpoint validates this up front, but the production agent
+    // path didn't until now — see security review B3.
+    let parsedUrl: URL | null = null;
+    try {
+      parsedUrl = new URL(url);
+    } catch {
+      logger.error(
+        "mcp-servers: invalid URL syntax — skipping server",
+        "mcp-servers",
+        { mcpServer: entry.name, role },
+      );
+      continue;
+    }
+    if (parsedUrl.protocol !== "https:") {
+      logger.error(
+        "mcp-servers: non-https URL — refusing to send bearer token in plaintext",
+        "mcp-servers",
+        {
+          mcpServer: entry.name,
+          role,
+          protocol: parsedUrl.protocol,
+        },
+      );
+      continue;
+    }
+
     const patterns = entry.patternsByRole[role];
     const allowed_tools = expandPatternsAgainstCatalogue(patterns, entry.catalogue);
+
+    // Defensive: if the role's pattern list was non-empty but the
+    // expansion produced no literal matches, surface that as a
+    // typo / stale catalogue rather than silently denying every
+    // tool on the next turn. Server still ships (empty allow-list
+    // is a valid "deny all" signal to Anthropic), but the warn
+    // gives operators a breadcrumb when "wiz suddenly returns
+    // nothing" reports come in. See review N2.
+    if (
+      patterns !== undefined &&
+      patterns.length > 0 &&
+      (allowed_tools === undefined || allowed_tools.length === 0)
+    ) {
+      logger.warn(
+        "mcp-servers: allow-list patterns expanded to zero catalogue tools (likely typo or stale catalogue)",
+        "mcp-servers",
+        {
+          mcpServer: entry.name,
+          role,
+          patterns,
+          catalogueSize: entry.catalogue.length,
+        },
+      );
+    }
 
     const config: McpServerConfig = {
       type: "url",
@@ -248,7 +302,14 @@ export function enforceMcpToolAccess(
   if (!entry) return false;
   if (!entry.allowedRoles.includes(role)) return false;
   const patterns = entry.patternsByRole[role];
-  if (patterns === undefined) return true; // admin: allow-all
+  if (patterns === undefined) {
+    // "allow-all" for admin is still bounded by the known catalogue.
+    // If Anthropic ever invokes a tool name that isn't catalogued
+    // (a new Wiz tool we haven't documented yet, an SDK rename, or
+    // adversarial drift), the audit pipeline records the divergence
+    // instead of waving it through silently. See review M5.
+    return entry.catalogue.includes(toolName);
+  }
   return matchesAllowedTools(toolName, patterns);
 }
 
