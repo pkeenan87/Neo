@@ -431,7 +431,7 @@ The catalogue lives at `WIZ_TOOL_CATALOGUE` in `web/lib/mcp-servers.ts`. When Wi
 
 **Connection-test probe**: Settings → Integrations → Wiz → "Test connection" issues an `OPTIONS` request to the configured URL with the bearer token. Auth-only — no representative graph query — so the cost is one round-trip. Distinct error messages for missing credentials, non-https URL, 401/403 (token issue), 5xx (Wiz unhealthy), and network failures.
 
-**Mock mode**: `MOCK_MODE=true` does *not* auto-enable Wiz — set `WIZ_MCP_URL` to any non-empty value to opt in. When opted in, the mock-mode short-circuit returns canned fixtures (`wiz_get_issues`, `wiz_get_vulnerabilities`, `wiz_get_compliance`, `wiz_list_cloud_resources`, `wiz_search_security_graph`) and rejects the higher-privilege tools (`wiz_get_defend_threat`, `wiz_get_blast_radius`) with a "set MOCK_MODE=false" hint. Fixtures live in `web/lib/mcp-fixtures.ts`.
+**Mock mode**: `MOCK_MODE=true` unconditionally disables Wiz — `getMcpServers` returns an empty array regardless of whether `WIZ_MCP_URL` / `WIZ_MCP_TOKEN` are set. The fixture short-circuit that would let contributors exercise the Wiz code path without a live tenant is deferred to a follow-up PR (an earlier review pass found the wiring was incomplete and chose to remove the partial implementation rather than ship it). To develop against Wiz locally today, set `MOCK_MODE=false` and provide real credentials.
 
 **Audit**: every Wiz tool invocation emits an `mcp_invocation` event to the Event Hub audit trail with `{ mcpServer, toolName, role, sessionId, result: "success" | "blocked" | "error", ownerIdHash }`. The bearer token, full URL, and raw UPN are never included.
 

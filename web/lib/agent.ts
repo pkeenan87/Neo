@@ -164,11 +164,15 @@ async function createBetaWithRetry(
  * Fetch the role-scoped MCP server list, swallowing any backing-store
  * error so a Cosmos / Key Vault blip never crashes the agent loop.
  * Empty array = no MCP, take the stable-API path.
+ *
+ * AbortError is re-thrown — user cancellation must propagate and
+ * not be silently degraded to "continue without MCP".
  */
 async function getMcpServersSafely(role: Role): Promise<McpServerConfig[]> {
   try {
     return await getMcpServers(role);
   } catch (err) {
+    if ((err as Error).name === "AbortError") throw err;
     logger.warn(
       "agent: MCP server lookup failed — continuing without MCP for this turn",
       "agent",
@@ -182,43 +186,68 @@ async function getMcpServersSafely(role: Role): Promise<McpServerConfig[]> {
  * Single entry-point the agent loop uses. Routes through the
  * beta API only when MCP servers are configured for the role,
  * keeping the existing stable-API call surface untouched for
- * every turn that doesn't need MCP.
+ * every turn that doesn't need MCP. Returns both the response
+ * and the wall-clock duration so the MCP audit emission can
+ * include a faithful durationMs in its metadata.
  */
 async function createWithOptionalMcp(
   params: Anthropic.Messages.MessageCreateParamsNonStreaming,
   mcpServers: McpServerConfig[],
   signal?: AbortSignal,
-): Promise<Anthropic.Messages.Message> {
+): Promise<{ message: Anthropic.Messages.Message; durationMs: number }> {
+  const start = Date.now();
   if (mcpServers.length === 0) {
-    return createWithRetry(params, signal);
+    const message = await createWithRetry(params, signal);
+    return { message, durationMs: Date.now() - start };
   }
   const betaParams = {
     ...params,
     mcp_servers: mcpServers,
     betas: [MCP_CLIENT_BETA],
   } as Anthropic.Beta.Messages.MessageCreateParamsNonStreaming;
-  return createBetaWithRetry(betaParams, signal);
+  const message = await createBetaWithRetry(betaParams, signal);
+  return { message, durationMs: Date.now() - start };
 }
 
 /**
  * Walk the response's content blocks for `mcp_tool_use` entries
- * and emit one `mcp_invocation` audit event per invocation. The
- * paired `mcp_tool_result` block (matched by tool_use_id) tells
- * us success vs error. Per-tool defense-in-depth enforcement
- * via `enforceMcpToolAccess` flags any tool call that slipped
- * past Anthropic's server-side allow-list — should never happen
- * in practice, but a `result: "blocked"` audit entry will scream
- * if it does.
+ * and emit one `mcp_invocation` audit event per invocation.
+ *
+ * IMPORTANT: this is AUDIT-ONLY, not enforcement. By the time
+ * this function runs, Anthropic has already called the upstream
+ * MCP server and the data is back in `contentBlocks`. The
+ * `result: "blocked"` discriminator means "our local allow-list
+ * says no but Anthropic let the call through anyway" — that is a
+ * divergence between Anthropic's server-side enforcement of
+ * `tool_configuration.allowed_tools` and our local mirror in
+ * `mcp-servers.ts`. The data has already flowed. The
+ * `logger.warn` below escalates that divergence above the routine
+ * audit event so ops actually sees it.
+ *
+ * Active enforcement (intercept-and-deny by injecting an error
+ * tool_result back into the next turn) is intentionally deferred
+ * to a follow-up. See _specs/wiz-mcp-server-integration.md.
  */
 function auditMcpInvocations(
   contentBlocks: unknown[],
   role: Role,
   sessionId: string,
   ownerIdHash: string | undefined,
+  durationMs: number,
 ): void {
   const resultsByToolUseId = new Map<string, { is_error: boolean }>();
   for (const block of contentBlocks) {
     if (!isMcpToolResult(block)) continue;
+    if (resultsByToolUseId.has(block.tool_use_id)) {
+      // Anthropic guarantees unique IDs in practice; if we see a
+      // duplicate, the audit picture is ambiguous. Flag rather than
+      // silently overwrite.
+      logger.warn(
+        "agent: duplicate mcp_tool_result id in response — audit may misclassify",
+        "agent",
+        { toolUseId: block.tool_use_id, sessionId },
+      );
+    }
     resultsByToolUseId.set(block.tool_use_id, {
       is_error: Boolean(block.is_error),
     });
@@ -228,9 +257,27 @@ function auditMcpInvocations(
     const result = resultsByToolUseId.get(block.id);
     const allowed = enforceMcpToolAccess(role, block.server_name, block.name);
     let auditResult: "success" | "blocked" | "error";
-    if (!allowed) auditResult = "blocked";
-    else if (result?.is_error) auditResult = "error";
-    else auditResult = "success";
+    if (!allowed) {
+      auditResult = "blocked";
+      // Allow-list divergence is operationally serious — escalate
+      // above the routine audit event. Anthropic just executed a
+      // tool we believed should be denied; either our catalogue is
+      // stale or the SDK / beta semantics shifted.
+      logger.warn(
+        "agent: MCP allow-list divergence — Anthropic invoked a tool our local mirror denies",
+        "agent",
+        {
+          mcpServer: block.server_name,
+          toolName: block.name,
+          role,
+          sessionId,
+        },
+      );
+    } else if (result?.is_error) {
+      auditResult = "error";
+    } else {
+      auditResult = "success";
+    }
 
     logger.emitEvent("mcp_invocation", "MCP tool invoked", "agent", {
       mcpServer: block.server_name,
@@ -238,6 +285,7 @@ function auditMcpInvocations(
       role,
       sessionId,
       result: auditResult,
+      durationMs,
       ownerIdHash,
     });
   }
@@ -546,7 +594,8 @@ export async function runAgentLoop(
     // Fetched per-iteration so a token-cache refresh between turns
     // is picked up without a process restart.
     const mcpServers = await getMcpServersSafely(role);
-    const response = await createWithOptionalMcp(apiParams, mcpServers, signal);
+    const { message: response, durationMs: mcpTurnDurationMs } =
+      await createWithOptionalMcp(apiParams, mcpServers, signal);
     iterationCount += 1;
 
     if (mcpServers.length > 0) {
@@ -555,6 +604,7 @@ export async function runAgentLoop(
         role,
         sessionId,
         options.ownerId ? hashPii(options.ownerId) : undefined,
+        mcpTurnDurationMs,
       );
     }
 
@@ -914,6 +964,34 @@ export async function runAgentLoop(
 
       logger.info("Agent loop completed (truncated)", "agent");
       return { type: "response", text, messages: localMessages, truncated: true };
+    }
+
+    // Beta-API-only stop reasons surfaced by the MCP-connector path
+    // (Anthropic.Beta.BetaStopReason adds these on top of the stable
+    // union). Treat them as graceful terminations instead of letting
+    // the catch-all below throw and crash the session.
+    if ((response.stop_reason as string) === "compaction") {
+      logger.warn(
+        "Beta API returned stop_reason=compaction — Anthropic compacted context server-side; treating as end_turn",
+        "agent",
+        { sessionId, model },
+      );
+      const text = response.content
+        .filter((b): b is Anthropic.Messages.TextBlock => (b as { type: string }).type === "text")
+        .map((b) => b.text)
+        .join("\n");
+      if (callbacks.onTurnComplete) callbacks.onTurnComplete(localMessages);
+      return { type: "response", text, messages: localMessages };
+    }
+    if ((response.stop_reason as string) === "model_context_window_exceeded") {
+      logger.warn(
+        "Beta API returned stop_reason=model_context_window_exceeded — context window exhausted mid-turn",
+        "agent",
+        { sessionId, model },
+      );
+      throw new Error(
+        "The conversation has grown too large for the model's context window. Please start a new session.",
+      );
     }
 
     logger.warn(`Unexpected stop_reason: ${response.stop_reason}`, "agent");

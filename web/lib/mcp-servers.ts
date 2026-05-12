@@ -33,6 +33,7 @@
 //  tools, operators extend the catalogue constant.
 // ─────────────────────────────────────────────────────────────
 
+import { env } from "./config";
 import { getToolSecret } from "./secrets";
 import { logger } from "./logger";
 import type { Role } from "./permissions";
@@ -138,13 +139,19 @@ interface McpRegistryEntry {
 
 // ─────────────────────────────────────────────────────────────
 //  Registry — currently single-entry (Wiz)
+//
+//  Mock-mode behaviour: Wiz is unconditionally skipped when
+//  `env.MOCK_MODE` is true. A previous iteration of this module
+//  generated a `localhost:65535` sentinel URL meant to be paired
+//  with an in-process fixture short-circuit (see mcp-fixtures.ts
+//  in earlier review iterations). The fixture wiring is non-
+//  trivial and has been deferred to a follow-up — until then,
+//  shipping the sentinel would just hand Anthropic an unreachable
+//  URL and produce error responses on every turn.
+//  TODO: when fixtures land, restore the WIZ_MCP_URL-opt-in path
+//  here so contributors can exercise the MCP code without a real
+//  Wiz tenant.
 // ─────────────────────────────────────────────────────────────
-
-const MOCK_WIZ_URL = "http://localhost:65535/mock-wiz-mcp";
-
-function isMockMode(): boolean {
-  return process.env.MOCK_MODE !== "false";
-}
 
 const WIZ_ENTRY: McpRegistryEntry = {
   name: "wiz",
@@ -152,25 +159,11 @@ const WIZ_ENTRY: McpRegistryEntry = {
   patternsByRole: WIZ_TOOL_PATTERNS_BY_ROLE,
   catalogue: WIZ_TOOL_CATALOGUE,
   getToken: async () => {
-    // Mock mode doesn't auto-activate Wiz — operators / contributors
-    // opt in by setting WIZ_MCP_URL even to a placeholder. Keeps the
-    // hundreds of existing agent-loop tests from accidentally taking
-    // the MCP path just because MOCK_MODE is on.
-    if (isMockMode()) {
-      const url = await getToolSecret("WIZ_MCP_URL");
-      return url ? "mock-wiz-token" : undefined;
-    }
+    if (env.MOCK_MODE) return undefined; // see TODO above
     return getToolSecret("WIZ_MCP_TOKEN");
   },
   getUrl: async () => {
-    if (isMockMode()) {
-      const url = await getToolSecret("WIZ_MCP_URL");
-      // If the operator left it unset, Wiz is silently skipped — even
-      // in mock mode. To exercise the fixture path locally, set
-      // WIZ_MCP_URL to anything non-empty (the mock URL below is used
-      // unconditionally — the operator's value is just the on/off flag).
-      return url ? MOCK_WIZ_URL : undefined;
-    }
+    if (env.MOCK_MODE) return undefined; // see TODO above
     return getToolSecret("WIZ_MCP_URL");
   },
 };
@@ -259,10 +252,3 @@ export function enforceMcpToolAccess(
   return matchesAllowedTools(toolName, patterns);
 }
 
-/**
- * Test-only — used by `web/test/mcp-servers.test.ts` to verify
- * the registry resets between cases.
- */
-export function __getRegistryForTest(): readonly { name: string }[] {
-  return REGISTRY.map((e) => ({ name: e.name }));
-}

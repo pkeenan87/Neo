@@ -330,6 +330,28 @@ export function validateConfig(): void {
     console.warn("AUTH_SECRET is not set — Auth.js requires this in production.");
   }
 
+  // Wiz MCP — fail-soft URL validation. The connection-test probe
+  // also enforces https, but it's opt-in (admin-clicked). If the
+  // operator typo'd the env var, every agent turn will hand
+  // Anthropic a bad URL until someone notices. Surface that at
+  // startup as a warning, not a hard abort, so a temporarily-broken
+  // Wiz config doesn't take the whole server down — Wiz is
+  // graceful-degradation-on-missing anyway.
+  if (env.WIZ_MCP_URL) {
+    try {
+      const parsed = new URL(env.WIZ_MCP_URL);
+      if (parsed.protocol !== "https:") {
+        console.warn(
+          `WIZ_MCP_URL must use https:// (got ${parsed.protocol}//...) — Wiz integration will fail until corrected.`,
+        );
+      }
+    } catch {
+      console.warn(
+        `WIZ_MCP_URL is not a valid URL: '${env.WIZ_MCP_URL}' — Wiz integration will fail until corrected.`,
+      );
+    }
+  }
+
   const authUrl = process.env.AUTH_URL;
   if (!authUrl && process.env.NODE_ENV !== "development") {
     console.warn(

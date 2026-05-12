@@ -102,13 +102,14 @@ const PROBES: Record<string, () => Promise<void>> = {
       redirect: "error",
       headers: { Authorization: `Bearer ${token}` },
     });
-    // Some MCP servers return 200, others 204 for an OPTIONS preflight.
-    // 401/403 indicates the token is wrong; 5xx indicates the server
-    // is unhealthy. Anything else is treated as unreachable.
+    // Some MCP servers return 200, others 204 for an OPTIONS preflight
+    // — both are covered by `res.ok` (the 200-299 range). 401/403
+    // indicates the token is wrong; 5xx indicates the server is
+    // unhealthy. Anything else is treated as unreachable.
     if (res.status === 401 || res.status === 403) {
       throw new Error(`Wiz authentication failed (HTTP ${res.status}) — check WIZ_MCP_TOKEN`);
     }
-    if (!res.ok && res.status !== 204) {
+    if (!res.ok) {
       throw new Error(`Wiz MCP server returned HTTP ${res.status}`);
     }
   },

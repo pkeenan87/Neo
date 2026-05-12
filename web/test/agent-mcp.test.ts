@@ -223,6 +223,11 @@ describe("agent loop — MCP audit emission", () => {
       sessionId: "session-1",
       result: "success",
     });
+    // durationMs is a number that reflects the wall-clock time of
+    // the underlying createWithOptionalMcp call. We can't pin an
+    // exact value but it must be present and non-negative.
+    expect(typeof mcpEvents[0].metadata?.durationMs).toBe("number");
+    expect((mcpEvents[0].metadata?.durationMs as number) >= 0).toBe(true);
   });
 
   it("emits result=error when the paired mcp_tool_result has is_error: true", async () => {

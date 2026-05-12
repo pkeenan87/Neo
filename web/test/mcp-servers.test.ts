@@ -7,6 +7,21 @@ vi.mock("../lib/secrets", () => ({
   getToolSecret: async (name: string) => secretsState[name],
 }));
 
+// Mock config.env so we can flip MOCK_MODE per test. The real `env`
+// is built at module-load time from process.env, so flipping
+// process.env.MOCK_MODE in beforeEach has no effect — we need a
+// mutable mock here for the tests that exercise the live-mode path
+// to actually take it.
+const envState = { MOCK_MODE: false as boolean };
+vi.mock("../lib/config", () => ({
+  env: new Proxy({} as Record<string, unknown>, {
+    get(_t, prop) {
+      if (prop === "MOCK_MODE") return envState.MOCK_MODE;
+      return undefined;
+    },
+  }),
+}));
+
 // Quiet logger — getMcpServers warns on credential lookup errors,
 // but we don't want test output noise.
 vi.mock("../lib/logger", () => ({
@@ -28,13 +43,8 @@ import {
 
 beforeEach(() => {
   for (const key of Object.keys(secretsState)) delete secretsState[key];
-  // Default: not in mock mode for these tests so we exercise the
-  // real Cosmos / Key Vault path through the secrets store.
-  process.env.MOCK_MODE = "false";
-});
-
-afterEach(() => {
-  process.env.MOCK_MODE = undefined;
+  // Default: not in mock mode (live-Cosmos / Key Vault path).
+  envState.MOCK_MODE = false;
 });
 
 // ── getMcpServers ────────────────────────────────────────────
@@ -112,22 +122,27 @@ describe("getMcpServers", () => {
   });
 });
 
-// ── Mock-mode opt-in ──────────────────────────────────────────
+// ── Mock-mode behaviour ──────────────────────────────────────
+// In the current iteration of the integration, mock mode disables
+// Wiz unconditionally — the fixture short-circuit it would otherwise
+// pair with is deferred to a follow-up. These tests pin the
+// "no-Wiz-in-mock" guarantee so the deferral is testable and so a
+// future contributor wiring fixtures back in updates these cases
+// in lockstep with the registry change.
 
-describe("getMcpServers — MOCK_MODE opt-in", () => {
-  it("returns empty in mock mode when WIZ_MCP_URL is unset", async () => {
-    process.env.MOCK_MODE = "true";
+describe("getMcpServers — mock mode disables Wiz", () => {
+  it("returns empty in mock mode even when both env vars are set", async () => {
+    envState.MOCK_MODE = true;
+    secretsState.WIZ_MCP_URL = "https://wiz.example.com/mcp";
+    secretsState.WIZ_MCP_TOKEN = "tok";
     const servers = await getMcpServers("admin");
     expect(servers).toEqual([]);
   });
 
-  it("activates the mock Wiz server when WIZ_MCP_URL is set in mock mode", async () => {
-    process.env.MOCK_MODE = "true";
-    secretsState.WIZ_MCP_URL = "ignored-in-mock-mode";
+  it("returns empty in mock mode when env vars are unset", async () => {
+    envState.MOCK_MODE = true;
     const servers = await getMcpServers("admin");
-    expect(servers).toHaveLength(1);
-    expect(servers[0].url).toMatch(/^http:\/\/localhost:65535/);
-    expect(servers[0].authorization_token).toBe("mock-wiz-token");
+    expect(servers).toEqual([]);
   });
 });
 
