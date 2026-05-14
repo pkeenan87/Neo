@@ -248,7 +248,7 @@ export const INTEGRATIONS: IntegrationInfo[] = [
     iconName: "Cloud",
     imageSrc: "/wiz-logo.png",
     description:
-      "Cloud security posture and Security Graph. The agent reaches Wiz via the Wiz MCP server, scoped per role (admin: full read + write; reader/triage: read-only).",
+      "Cloud security posture and Security Graph. **Currently unavailable** — Anthropic's MCP connector can't send the custom Wiz-Client-* headers Wiz requires for service-account auth. Credentials saved here will be reused when a working path lands (GraphQL pivot or header-translation proxy). See docs/configuration.md.",
     capabilities: [
       // These are MCP tool names, not Neo executor names — the agent
       // loop sees them as `mcp_tool_use` blocks in the Anthropic

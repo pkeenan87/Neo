@@ -406,7 +406,11 @@ The seed script is idempotent — re-running is safe and won't clobber admin edi
 **Failure mode**: if Cosmos is unavailable when a triage request arrives, `resolveTriageSkill` logs a warning and falls through to the generic skill rather than failing the request. Same fail-open posture as the dedup cache.
 
 <a id="wiz-mcp-server"></a>
-### Wiz MCP Server (Preview)
+### Wiz MCP Server (currently UNAVAILABLE)
+
+> **Status:** disabled in code. The agent loop returns an empty `mcp_servers` array for Wiz; the Settings → Integrations → Wiz "Test connection" probe surfaces a clear "currently unavailable" message. Confirmed via Postman on 2026-05-14: Wiz's MCP server requires three custom `Wiz-Client-Id`/`Wiz-Client-Secret`/`Wiz-DataCenter` headers for service-account auth, and Anthropic's API-side MCP connector only forwards `Authorization: Bearer <token>`. OAuth bearers minted from `auth.app.wiz.io/oauth/token` are rejected by the MCP server with `HTTP 401 "Invalid or expired token"`. The integration re-enables when one of these lands: (a) Anthropic adds custom-header support to `mcp_servers`, (b) Wiz issues OAuth bearers their MCP server will accept, (c) we build a header-translation proxy in Neo, or (d) we pivot to direct Wiz GraphQL via a normal Neo executor.
+>
+> The OAuth helper at `web/lib/wiz-auth.ts`, the credential plumbing (`WIZ_CLIENT_ID` / `WIZ_CLIENT_SECRET` / `WIZ_AUTH_URL` / `WIZ_API_URL`), and the integration registry's Wiz entry are all preserved — any creds you've stored in Key Vault will be reused when re-enabling.
 
 Neo's agent loop integrates with the Wiz Cloud Security Platform via Anthropic's MCP-connector beta. When configured, every agent turn for an admin/reader/triage user includes a role-scoped `mcp_servers` array in the Anthropic API call, letting Claude pull issues, vulnerabilities, compliance posture, cloud-resource findings, Security Graph queries, and (for admins) Defend / blast-radius data inline with the existing Sentinel + Defender XDR + Entra correlation.
 
