@@ -283,6 +283,12 @@ export const env: EnvConfig = {
   AI_SEARCH_API_VERSION:                process.env.AI_SEARCH_API_VERSION || "2024-07-01",
   AI_SEARCH_RERANKER_THRESHOLD:         Number(process.env.AI_SEARCH_RERANKER_THRESHOLD ?? "1.5"),
   AI_SEARCH_ALLOW_DISABLE_THRESHOLD:    process.env.AI_SEARCH_ALLOW_DISABLE_THRESHOLD === "true",
+  // Wiz MCP Server (preview). Both required to enable the
+  // server in `getMcpServers`; either missing → Wiz is silently
+  // omitted from the per-role MCP server array. Production
+  // should pull these from Key Vault via getToolSecret.
+  WIZ_MCP_URL:                          process.env.WIZ_MCP_URL,
+  WIZ_MCP_TOKEN:                        process.env.WIZ_MCP_TOKEN,
 };
 
 // Note: validateConfig uses console.warn directly (not logger) because
@@ -322,6 +328,32 @@ export function validateConfig(): void {
 
   if (!process.env.AUTH_SECRET) {
     console.warn("AUTH_SECRET is not set — Auth.js requires this in production.");
+  }
+
+  // Wiz MCP — fail-soft URL validation. The connection-test probe
+  // also enforces https, but it's opt-in (admin-clicked). If the
+  // operator typo'd the env var, every agent turn will hand
+  // Anthropic a bad URL until someone notices. Surface that at
+  // startup as a warning, not a hard abort, so a temporarily-broken
+  // Wiz config doesn't take the whole server down — Wiz is
+  // graceful-degradation-on-missing anyway.
+  if (env.WIZ_MCP_URL) {
+    try {
+      const parsed = new URL(env.WIZ_MCP_URL);
+      if (parsed.protocol !== "https:") {
+        console.warn(
+          `WIZ_MCP_URL must use https:// (got ${parsed.protocol}//...) — Wiz integration will fail until corrected.`,
+        );
+      }
+    } catch {
+      // Do not print the raw value — an operator who accidentally pastes
+      // a credential-bearing URL (https://user:secret@host/) would leak
+      // the secret to stdout / log aggregators. The corrective action
+      // (fix WIZ_MCP_URL) doesn't require the bad value to be quoted.
+      console.warn(
+        "WIZ_MCP_URL is not a valid URL (value redacted) — Wiz integration will fail until corrected.",
+      );
+    }
   }
 
   const authUrl = process.env.AUTH_URL;

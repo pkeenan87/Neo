@@ -35,7 +35,12 @@ describe("startup assertion — multi-instance Cosmos guard", () => {
 
   it("throws when NODE_ENV=production and COSMOS_ENDPOINT is unset", async () => {
     env().NODE_ENV = "production";
-    delete env().COSMOS_ENDPOINT;
+    // Empty string (not delete) so dotenv.config() — which runs on
+    // every config module re-import — can't repopulate COSMOS_ENDPOINT
+    // from a developer's local `.env`. dotenv refuses to override
+    // already-set vars. The validateConfig guard uses `!env.COSMOS_ENDPOINT`,
+    // which is true for "" just like undefined.
+    env().COSMOS_ENDPOINT = "";
 
     const { validateConfig } = await import("../lib/config");
     expect(() => validateConfig()).toThrow(/Multi-instance deployment requires COSMOS_ENDPOINT/);
@@ -52,7 +57,12 @@ describe("startup assertion — multi-instance Cosmos guard", () => {
 
   it("does NOT throw when NODE_ENV=development and COSMOS_ENDPOINT is unset", async () => {
     env().NODE_ENV = "development";
-    delete env().COSMOS_ENDPOINT;
+    // Empty string (not delete) so dotenv.config() — which runs on
+    // every config module re-import — can't repopulate COSMOS_ENDPOINT
+    // from a developer's local `.env`. dotenv refuses to override
+    // already-set vars. The validateConfig guard uses `!env.COSMOS_ENDPOINT`,
+    // which is true for "" just like undefined.
+    env().COSMOS_ENDPOINT = "";
 
     const { validateConfig } = await import("../lib/config");
     expect(() => validateConfig()).not.toThrow();
@@ -60,7 +70,12 @@ describe("startup assertion — multi-instance Cosmos guard", () => {
 
   it("does NOT throw when NODE_ENV is undefined (test/CI default)", async () => {
     delete env().NODE_ENV;
-    delete env().COSMOS_ENDPOINT;
+    // Empty string (not delete) so dotenv.config() — which runs on
+    // every config module re-import — can't repopulate COSMOS_ENDPOINT
+    // from a developer's local `.env`. dotenv refuses to override
+    // already-set vars. The validateConfig guard uses `!env.COSMOS_ENDPOINT`,
+    // which is true for "" just like undefined.
+    env().COSMOS_ENDPOINT = "";
 
     const { validateConfig } = await import("../lib/config");
     expect(() => validateConfig()).not.toThrow();
@@ -68,7 +83,12 @@ describe("startup assertion — multi-instance Cosmos guard", () => {
 
   it("error message points operators at the fix", async () => {
     env().NODE_ENV = "production";
-    delete env().COSMOS_ENDPOINT;
+    // Empty string (not delete) so dotenv.config() — which runs on
+    // every config module re-import — can't repopulate COSMOS_ENDPOINT
+    // from a developer's local `.env`. dotenv refuses to override
+    // already-set vars. The validateConfig guard uses `!env.COSMOS_ENDPOINT`,
+    // which is true for "" just like undefined.
+    env().COSMOS_ENDPOINT = "";
 
     const { validateConfig } = await import("../lib/config");
     try {

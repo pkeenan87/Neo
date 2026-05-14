@@ -5,10 +5,24 @@ import { executeTool } from "./executors";
 import { getToolsForRole, type Role } from "./permissions";
 import { logger, hashPii } from "./logger";
 import { getToolIntegration } from "./integration-registry";
-import { wrapAndMaybeOffloadToolResult } from "./injection-guard";
-import { prepareMessages, sanitizeEmptyUserMessages, CHARS_PER_TOKEN } from "./context-manager";
+import { wrapAndMaybeOffloadToolResult, wrapMcpToolResultContent } from "./injection-guard";
+import {
+  prepareMessages,
+  sanitizeEmptyUserMessages,
+  CHARS_PER_TOKEN,
+  materializeMcpBlocksAsText,
+} from "./context-manager";
+import {
+  getMcpServers,
+  enforceMcpToolAccess,
+  type McpServerConfig,
+} from "./mcp-servers";
 import { IncompleteToolUseError, MAX_PLAN_RESUMPTION_ATTEMPTS } from "./types";
 import type { Message, AgentLoopResult, AgentCallbacks, PendingTool, ModelPreference, TokenUsage, CSVReference, InProgressPlan } from "./types";
+
+// Anthropic beta-API headers required by the MCP-connector path.
+// Newer header supersedes mcp-client-2025-04-04; both still work.
+const MCP_CLIENT_BETA = "mcp-client-2025-11-20" as const;
 
 // Cheap heuristic: detect whether a turn started from a skill invocation
 // so we can pick the larger MAX_TOKENS_SKILL budget. The skill handler in
@@ -95,6 +109,349 @@ async function createWithRetry(
   }
   // Unreachable, but satisfies TypeScript
   throw new Error("Retry loop exited unexpectedly");
+}
+
+// ─────────────────────────────────────────────────────────────
+//  Beta-API retry shim — used when the call carries MCP servers
+//
+//  Anthropic's MCP-connector parameter lives on `beta.messages`
+//  behind a `betas: ['mcp-client-2025-11-20']` header. The
+//  beta response shape (BetaMessage) is structurally a superset
+//  of the stable Message for every field the agent loop reads
+//  (id, type, role, model, stop_reason, stop_sequence, usage,
+//  content) — extra content-block types like `mcp_tool_use`
+//  arrive runtime-only and are picked up by `auditMcpInvocations`.
+//  We cast back to the stable type at the boundary so the rest
+//  of the loop stays uniform.
+// ─────────────────────────────────────────────────────────────
+
+async function createBetaWithRetry(
+  params: Anthropic.Beta.Messages.MessageCreateParamsNonStreaming,
+  signal?: AbortSignal,
+): Promise<Anthropic.Messages.Message> {
+  for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+    try {
+      const resp = await client.beta.messages.create(params, { signal });
+      return resp as unknown as Anthropic.Messages.Message;
+    } catch (err: unknown) {
+      if ((err as Error).name === "AbortError") throw err;
+      const status = (err as { status?: number }).status;
+
+      if (status === 400) {
+        const msg = (err as { message?: string }).message ?? "";
+        if (msg.includes("prompt is too long")) {
+          logger.warn("Prompt exceeded token limit despite context management", "agent", { message: msg });
+          throw new Error(
+            "The conversation has grown too large for the model's context window. Please start a new session.",
+          );
+        }
+        throw new Error(`Request error: ${msg || "invalid request"}`);
+      }
+
+      const isRetryable = status !== undefined && RETRYABLE_STATUS.has(status);
+      if (!isRetryable || attempt === MAX_RETRIES) {
+        if (status === 529) throw new Error("Claude is temporarily overloaded. Please try again in a moment.");
+        if (status === 429) throw new Error("Rate limit reached. Please wait a moment before sending another message.");
+        throw err;
+      }
+      const delay = Math.min(1000 * 2 ** attempt, 8000);
+      logger.warn(
+        `Beta API call failed (${status}), retrying in ${delay}ms (attempt ${attempt + 1}/${MAX_RETRIES})`,
+        "agent",
+      );
+      await new Promise((r) => setTimeout(r, delay));
+    }
+  }
+  throw new Error("Retry loop exited unexpectedly");
+}
+
+/**
+ * Fetch the role-scoped MCP server list, swallowing any backing-store
+ * error so a Cosmos / Key Vault blip never crashes the agent loop.
+ * Empty array = no MCP, take the stable-API path.
+ *
+ * AbortError is re-thrown — user cancellation must propagate and
+ * not be silently degraded to "continue without MCP".
+ */
+async function getMcpServersSafely(role: Role): Promise<McpServerConfig[]> {
+  try {
+    return await getMcpServers(role);
+  } catch (err) {
+    if ((err as Error).name === "AbortError") throw err;
+    logger.warn(
+      "agent: MCP server lookup failed — continuing without MCP for this turn",
+      "agent",
+      { role, errorMessage: err instanceof Error ? err.message : String(err) },
+    );
+    return [];
+  }
+}
+
+/**
+ * Single entry-point the agent loop uses. Routes through the
+ * beta API only when MCP servers are configured for the role,
+ * keeping the existing stable-API call surface untouched for
+ * every turn that doesn't need MCP. Returns both the response
+ * and the wall-clock duration so the MCP audit emission can
+ * include a faithful durationMs in its metadata.
+ */
+async function createWithOptionalMcp(
+  params: Anthropic.Messages.MessageCreateParamsNonStreaming,
+  mcpServers: McpServerConfig[],
+  signal?: AbortSignal,
+): Promise<{ message: Anthropic.Messages.Message; durationMs: number }> {
+  const start = Date.now();
+  if (mcpServers.length === 0) {
+    // History may still carry mcp_tool_use / mcp_tool_result blocks
+    // from an earlier turn when MCP was configured for this role.
+    // The stable messages.create endpoint does not recognise those
+    // block types and would 400 the entire request. Materialise the
+    // blocks as text stubs (lossy but coherent) so the conversation
+    // can continue even after secrets rotate or MOCK_MODE flips on
+    // mid-session. See review M1.
+    const safeMessages = hasAnyMcpBlocks(params.messages)
+      ? (materializeMcpBlocksAsText(params.messages as Message[]) as typeof params.messages)
+      : params.messages;
+    const safeParams = safeMessages === params.messages
+      ? params
+      : { ...params, messages: safeMessages };
+    const message = await createWithRetry(safeParams, signal);
+    return { message, durationMs: Date.now() - start };
+  }
+  const betaParams = {
+    ...params,
+    mcp_servers: mcpServers,
+    betas: [MCP_CLIENT_BETA],
+  } as Anthropic.Beta.Messages.MessageCreateParamsNonStreaming;
+  const message = await createBetaWithRetry(betaParams, signal);
+  return { message, durationMs: Date.now() - start };
+}
+
+/**
+ * Walk the response's content blocks for `mcp_tool_use` entries
+ * and emit one `mcp_invocation` audit event per invocation.
+ *
+ * IMPORTANT: this is AUDIT-ONLY, not enforcement. By the time
+ * this function runs, Anthropic has already called the upstream
+ * MCP server and the data is back in `contentBlocks`. The
+ * `result: "blocked"` discriminator means "our local allow-list
+ * says no but Anthropic let the call through anyway" — that is a
+ * divergence between Anthropic's server-side enforcement of
+ * `tool_configuration.allowed_tools` and our local mirror in
+ * `mcp-servers.ts`. The data has already flowed. The
+ * `logger.warn` below escalates that divergence above the routine
+ * audit event so ops actually sees it.
+ *
+ * Active enforcement (intercept-and-deny by injecting an error
+ * tool_result back into the next turn) is intentionally deferred
+ * to a follow-up. See _specs/wiz-mcp-server-integration.md.
+ */
+function auditMcpInvocations(
+  contentBlocks: unknown[],
+  role: Role,
+  sessionId: string,
+  ownerIdHash: string | undefined,
+  // Whole-turn wall-clock duration. Anthropic executes every MCP
+  // tool serially inside one API call, so we cannot meaningfully
+  // attribute time per individual tool from outside the SDK. The
+  // value is identical across all events emitted for the same turn
+  // — the field name `turnDurationMs` makes that explicit so
+  // downstream dashboards don't read it as per-tool latency. See
+  // review N1.
+  turnDurationMs: number,
+): void {
+  const resultsByToolUseId = new Map<string, { is_error: boolean }>();
+  for (const block of contentBlocks) {
+    if (!isMcpToolResult(block)) continue;
+    if (resultsByToolUseId.has(block.tool_use_id)) {
+      // Anthropic guarantees unique IDs in practice; if we see a
+      // duplicate, the audit picture is ambiguous. Flag rather than
+      // silently overwrite.
+      logger.warn(
+        "agent: duplicate mcp_tool_result id in response — audit may misclassify",
+        "agent",
+        { toolUseId: block.tool_use_id, sessionId },
+      );
+    }
+    resultsByToolUseId.set(block.tool_use_id, {
+      is_error: Boolean(block.is_error),
+    });
+  }
+  for (const block of contentBlocks) {
+    if (!isMcpToolUse(block)) continue;
+    const result = resultsByToolUseId.get(block.id);
+    const allowed = enforceMcpToolAccess(role, block.server_name, block.name);
+    let auditResult: "success" | "blocked" | "error" | "orphan";
+    if (!allowed) {
+      auditResult = "blocked";
+      // Allow-list divergence is operationally serious — escalate
+      // above the routine audit event. Anthropic just executed a
+      // tool we believed should be denied; either our catalogue is
+      // stale or the SDK / beta semantics shifted.
+      logger.warn(
+        "agent: MCP allow-list divergence — Anthropic invoked a tool our local mirror denies",
+        "agent",
+        {
+          mcpServer: block.server_name,
+          toolName: block.name,
+          role,
+          sessionId,
+        },
+      );
+    } else if (!result) {
+      // Anthropic's beta normally returns mcp_tool_use and its
+      // paired mcp_tool_result in the same response. An orphan
+      // tool_use (no result block) means the response was
+      // truncated or the SDK shape drifted — either way, we have
+      // no evidence the call actually succeeded. Don't silently
+      // upgrade to "success". Surface as a distinct state and
+      // warn so the orphan condition is investigable.
+      auditResult = "orphan";
+      logger.warn(
+        "agent: mcp_tool_use without paired mcp_tool_result — audit grading as orphan",
+        "agent",
+        {
+          mcpServer: block.server_name,
+          toolName: block.name,
+          role,
+          sessionId,
+          toolUseId: block.id,
+        },
+      );
+    } else if (result.is_error) {
+      auditResult = "error";
+    } else {
+      auditResult = "success";
+    }
+
+    // Truncate the JSON-stringified input — Wiz tool arguments are
+    // GraphQL queries or filter objects that can be a few KB. The
+    // SAFE_METADATA_FIELDS allowlist already includes `toolInput`
+    // (parity with the tool_execution event for local tools).
+    let toolInput = "";
+    try {
+      toolInput = JSON.stringify(block.input ?? null).slice(0, 2000);
+    } catch {
+      toolInput = "[unserializable]";
+    }
+
+    logger.emitEvent("mcp_invocation", "MCP tool invoked", "agent", {
+      mcpServer: block.server_name,
+      toolName: block.name,
+      role,
+      sessionId,
+      result: auditResult,
+      turnDurationMs,
+      ownerIdHash,
+      toolUseId: block.id,
+      toolInput,
+    });
+  }
+}
+
+interface McpToolUseBlock {
+  type: "mcp_tool_use";
+  id: string;
+  server_name: string;
+  name: string;
+  // Model-supplied arguments. Anthropic's mcp_tool_use block carries
+  // this just like a regular tool_use; we declare it here so the
+  // audit pipeline can surface it without an `as unknown` cast.
+  input?: unknown;
+}
+interface McpToolResultBlock {
+  type: "mcp_tool_result";
+  tool_use_id: string;
+  is_error?: boolean;
+  content?: string | unknown[];
+}
+
+/**
+ * Wrap every `mcp_tool_result` block's `content` field in a
+ * trust-marked envelope before the assistant message is appended to
+ * conversation history. This is the seam where MCP results — which
+ * Anthropic executes server-side and returns inline — get scanned for
+ * prompt-injection patterns and tagged with `_neo_trust_boundary` so
+ * downstream readers (model on next turn, context-manager, persistence
+ * layer) treat them the same way local tool results are treated.
+ *
+ * Always returns a new content array when MCP results are present so
+ * the caller can push the rewritten version to history without
+ * mutating Anthropic's response object. Non-MCP blocks pass through
+ * unchanged.
+ *
+ * The replacement is intentionally lossless from an API perspective:
+ * the block keeps `type: "mcp_tool_result"`, `tool_use_id`, and
+ * `is_error`, so subsequent turns can echo it back to Anthropic
+ * without API rejection.
+ */
+function sanitizeMcpResultsForHistory(
+  content: unknown[],
+  sessionId: string,
+): unknown[] {
+  // Map tool_use_id → { server, tool } so each mcp_tool_result knows
+  // which MCP server/tool it came from for logging.
+  const toolUseById = new Map<string, { server: string; tool: string }>();
+  for (const block of content) {
+    if (isMcpToolUse(block)) {
+      toolUseById.set(block.id, { server: block.server_name, tool: block.name });
+    }
+  }
+
+  let mutated = false;
+  const out = content.map((block) => {
+    if (!isMcpToolResult(block)) return block;
+    const meta = toolUseById.get(block.tool_use_id);
+    const wrapped = wrapMcpToolResultContent(block.content, {
+      sessionId,
+      serverName: meta?.server ?? "unknown",
+      toolName: meta?.tool ?? "unknown",
+    });
+    mutated = true;
+    return {
+      ...block,
+      content: wrapped,
+    };
+  });
+
+  return mutated ? out : content;
+}
+
+/**
+ * Quick scan over a message array to decide whether the stable-API
+ * path needs to materialise persisted MCP blocks before calling the
+ * Anthropic SDK. Most stable-API turns have no MCP blocks (the user
+ * has never used MCP, or this session has not yet), so the fast
+ * negative path keeps the cost near-zero.
+ */
+function hasAnyMcpBlocks(messages: { content: unknown }[]): boolean {
+  for (const msg of messages) {
+    if (!Array.isArray(msg.content)) continue;
+    for (const block of msg.content) {
+      const t = (block as { type?: unknown }).type;
+      if (t === "mcp_tool_use" || t === "mcp_tool_result") return true;
+    }
+  }
+  return false;
+}
+
+function isMcpToolUse(block: unknown): block is McpToolUseBlock {
+  return (
+    typeof block === "object" &&
+    block !== null &&
+    (block as { type?: unknown }).type === "mcp_tool_use" &&
+    typeof (block as { id?: unknown }).id === "string" &&
+    typeof (block as { server_name?: unknown }).server_name === "string" &&
+    typeof (block as { name?: unknown }).name === "string"
+  );
+}
+function isMcpToolResult(block: unknown): block is McpToolResultBlock {
+  return (
+    typeof block === "object" &&
+    block !== null &&
+    (block as { type?: unknown }).type === "mcp_tool_result" &&
+    typeof (block as { tool_use_id?: unknown }).tool_use_id === "string"
+  );
 }
 
 export interface RunAgentLoopOptions {
@@ -364,8 +721,38 @@ export async function runAgentLoop(
     if (options.ownerId) {
       apiParams.metadata = { user_id: hashPii(options.ownerId) };
     }
-    const response = await createWithRetry(apiParams, signal);
+    // Resolve role-scoped MCP servers for this turn. Empty array
+    // ⇒ stable-API path. Non-empty ⇒ beta API + mcp_servers param.
+    // Fetched per-iteration so a token-cache refresh between turns
+    // is picked up without a process restart.
+    const mcpServers = await getMcpServersSafely(role);
+    const { message: response, durationMs: mcpTurnDurationMs } =
+      await createWithOptionalMcp(apiParams, mcpServers, signal);
     iterationCount += 1;
+
+    if (mcpServers.length > 0) {
+      auditMcpInvocations(
+        response.content as unknown[],
+        role,
+        sessionId,
+        options.ownerId ? hashPii(options.ownerId) : undefined,
+        mcpTurnDurationMs,
+      );
+    }
+
+    // Scan + wrap any mcp_tool_result content before the assistant
+    // message hits history. This is the only seam where MCP results
+    // pass through Neo's injection guard — Anthropic executes MCP
+    // tools server-side and returns the result inline, bypassing the
+    // local-tool wrapAndMaybeOffloadToolResult path. No-op when the
+    // response contains no MCP blocks (e.g. stable-API path).
+    const sanitizedAssistantContent =
+      mcpServers.length > 0
+        ? sanitizeMcpResultsForHistory(
+            response.content as unknown[],
+            sessionId,
+          )
+        : (response.content as unknown[]);
 
     lastInputTokens = response.usage.input_tokens;
 
@@ -386,7 +773,10 @@ export async function runAgentLoop(
     });
     if (callbacks.onUsage) callbacks.onUsage(usage, model);
 
-    localMessages.push({ role: "assistant", content: response.content });
+    localMessages.push({
+      role: "assistant",
+      content: sanitizedAssistantContent as Message["content"],
+    });
 
     // Done — Claude has a final response
     if (response.stop_reason === "end_turn") {
@@ -397,16 +787,24 @@ export async function runAgentLoop(
       // Clear the in-progress plan — the agent reached end_turn which
       // means either (a) the plan completed, or (b) the model decided
       // to wrap up (user changed direction, etc). Either way the plan
-      // no longer applies to subsequent turns. Fire-and-forget; any
-      // persistence failure is logged by the session store.
+      // no longer applies to subsequent turns. AWAIT the clear so a
+      // back-to-back turn for the same sessionId (Teams bot, triage,
+      // automated re-fire) cannot read the stale plan before this
+      // write commits — that race would mis-attach a resumption hint
+      // to a completed conversation, or trip the resumption circuit
+      // breaker against the wrong plan. Errors are still soft —
+      // worst case the next turn sees stale state and the user can
+      // recover, but at least no race-amplified false positive.
       if (inProgressPlan) {
         const { sessionStore } = await import("./session-factory");
-        void sessionStore.setInProgressPlan(sessionId, null).catch((err) => {
+        try {
+          await sessionStore.setInProgressPlan(sessionId, null);
+        } catch (err) {
           logger.warn("clear in-progress plan failed (best-effort)", "agent", {
             sessionId,
             errorMessage: (err as Error).message,
           });
-        });
+        }
       }
       logger.info("Agent loop completed", "agent");
       return { type: "response", text, messages: localMessages };
@@ -466,9 +864,24 @@ export async function runAgentLoop(
             (b) => b.type === "tool_use" && b.id === id,
           );
           if (destructiveContentIdx >= 0) {
+            // CRITICAL: slice the sanitized content, not the raw
+            // response. `sanitizedAssistantContent` is the
+            // injection-guard-wrapped version of `response.content`
+            // produced by `sanitizeMcpResultsForHistory` above.
+            // `sanitizeMcpResultsForHistory` is a shape-preserving
+            // map (one input block → one output block, index-for-
+            // index), so `destructiveContentIdx` computed against
+            // `response.content` is also valid against the
+            // sanitized array. Slicing `response.content` directly
+            // here would re-introduce un-wrapped mcp_tool_result
+            // blocks into history on any turn that combines an MCP
+            // result with a destructive tool call — the exact
+            // injection-bypass surface the sanitize step exists to
+            // close. See review B1.
+            const sanitizedArray = sanitizedAssistantContent as unknown[];
             localMessages[lastAssistantIdx] = {
               role: "assistant",
-              content: response.content.slice(0, destructiveContentIdx + 1),
+              content: sanitizedArray.slice(0, destructiveContentIdx + 1) as Message["content"],
             };
 
             // Audit: surface any additional destructive tools that were
@@ -723,6 +1136,51 @@ export async function runAgentLoop(
 
       logger.info("Agent loop completed (truncated)", "agent");
       return { type: "response", text, messages: localMessages, truncated: true };
+    }
+
+    // Beta-API-only stop reasons surfaced by the MCP-connector path
+    // (Anthropic.Beta.BetaStopReason adds these on top of the stable
+    // union). Treat them as graceful terminations instead of letting
+    // the catch-all below throw and crash the session.
+    if ((response.stop_reason as string) === "compaction") {
+      logger.warn(
+        "Beta API returned stop_reason=compaction — Anthropic compacted context server-side; treating as end_turn",
+        "agent",
+        { sessionId, model },
+      );
+      const text = response.content
+        .filter((b): b is Anthropic.Messages.TextBlock => (b as { type: string }).type === "text")
+        .map((b) => b.text)
+        .join("\n");
+      // Mirror the end_turn path: a compaction-terminated turn is
+      // also a terminal state for the in-progress plan (no further
+      // tool calls coming in this turn). Without this, the plan
+      // persists and stale-resumes on the next user message. AWAIT
+      // the clear (same race rationale as the end_turn path above).
+      // See review M2.
+      if (inProgressPlan) {
+        const { sessionStore } = await import("./session-factory");
+        try {
+          await sessionStore.setInProgressPlan(sessionId, null);
+        } catch (err) {
+          logger.warn("clear in-progress plan failed (best-effort)", "agent", {
+            sessionId,
+            errorMessage: (err as Error).message,
+          });
+        }
+      }
+      if (callbacks.onTurnComplete) callbacks.onTurnComplete(localMessages);
+      return { type: "response", text, messages: localMessages };
+    }
+    if ((response.stop_reason as string) === "model_context_window_exceeded") {
+      logger.warn(
+        "Beta API returned stop_reason=model_context_window_exceeded — context window exhausted mid-turn",
+        "agent",
+        { sessionId, model },
+      );
+      throw new Error(
+        "The conversation has grown too large for the model's context window. Please start a new session.",
+      );
     }
 
     logger.warn(`Unexpected stop_reason: ${response.stop_reason}`, "agent");

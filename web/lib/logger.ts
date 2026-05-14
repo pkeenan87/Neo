@@ -169,6 +169,46 @@ const SAFE_METADATA_FIELDS = new Set([
   // action (e.g. "delete").
   "retentionClass",
   "attempted",
+  // MCP audit fields. mcpServer/toolUseId/result/turnDurationMs are the
+  // core mcp_invocation event payload — without these on the allowlist,
+  // sanitizeMetadata strips them and SIEM rules keyed on
+  // `result === "blocked"` (the allow-list divergence alarm) silently
+  // never fire. catalogueSize/patterns/protocol surface configuration
+  // state for the warn logs in mcp-servers.ts. None carry PII —
+  // mcpServer is a registry slug ("wiz"), result is one of three
+  // enum values, turnDurationMs is wall-clock ms, toolUseId is an
+  // Anthropic-generated opaque id.
+  "mcpServer",
+  "toolUseId",
+  "result",
+  "turnDurationMs",
+  "catalogueSize",
+  "patterns",
+  "protocol",
+  // Context-engineering observability — the context-manager and
+  // related callers emit these on truncation / compression /
+  // offload events. Without them on the allowlist, Event Hub sees
+  // empty metadata on the very events operators use to diagnose
+  // prompt-too-long incidents. All are numeric / enum / id-like
+  // and carry no PII (conversationId is the same value as
+  // sessionId in this codebase — see session-factory.ts).
+  "estimatedTokens",
+  "ceiling",
+  "remainingMessages",
+  "droppedCount",
+  "droppedFromIndex",
+  "droppedMessages",
+  "originalTokens",
+  "afterEnforcementTokens",
+  "offloadedCount",
+  "reason",
+  "threshold",
+  "conversationId",
+  "contentType",
+  "messageIndex",
+  "requestedMaxTokens",
+  "phase",
+  "skillInvocation",
 ]);
 
 function sanitizeMetadata(

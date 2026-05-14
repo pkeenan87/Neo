@@ -106,9 +106,13 @@ const TOOL_RESULT_PATTERNS: PatternEntry[] = [
     label: "exfiltration_attempt",
   },
   {
-    // Scoped to tool results only — too many false positives on user input
-    // (SHA256 hashes, GUIDs, machineIds all match the base64 charset).
-    pattern: /[A-Za-z0-9+/]{20,}={0,2}/,
+    // Scoped to tool results only — and tightened to require explicit
+    // base64 padding (`=` or `==`) so SHA256 hashes, GUIDs, machine
+    // IDs, and other hex/alphanumeric identifiers — all common in
+    // legitimate Wiz / Sentinel / Defender responses — don't trip
+    // the heuristic. True adversarial base64 payloads almost always
+    // have padding when not perfectly aligned (most binary data).
+    pattern: /[A-Za-z0-9+/]{20,}={1,2}/,
     label: "encoded_payload",
   },
 ];
@@ -207,6 +211,110 @@ export function wrapToolResult(
         injection_detected: scanResult.flagged,
       },
       data: result,
+    },
+    null,
+    2
+  );
+}
+
+/**
+ * Scan + wrap content from an Anthropic `mcp_tool_result` content block.
+ *
+ * Anthropic's MCP connector executes tools server-side, then returns
+ * `mcp_tool_use` and `mcp_tool_result` blocks inline in the assistant
+ * response. The result content reaches Neo's history without ever
+ * passing through {@link wrapToolResult} — which is the seam where
+ * other tool results get injection-scanned. Without this helper, an
+ * adversarial Wiz payload would be appended to history and re-sent to
+ * the model on every subsequent turn.
+ *
+ * The MCP result content field accepts either a string OR an array of
+ * `{ type: "text", text }` blocks per the SDK spec. We extract the
+ * scannable text from both shapes, run the same TOOL_RESULT_PATTERNS
+ * scan that local tool results get, and return a string envelope with
+ * the trust-boundary marker so downstream consumers (the model on the
+ * next turn, the context-manager, the persistence path) can tell this
+ * came from an external MCP server.
+ *
+ * The returned string is intended to replace the original `content`
+ * field of the mcp_tool_result block before history-persistence.
+ */
+export function wrapMcpToolResultContent(
+  rawContent: string | unknown[] | undefined,
+  context: {
+    sessionId: string;
+    serverName: string;
+    toolName: string;
+  }
+): string {
+  // The MCP-connector spec permits `content` to contain text,
+  // resource, and image-style blocks; we extract scannable text from
+  // every shape we know about and serialize any unfamiliar block
+  // type so an injection-bearing payload buried in a non-text block
+  // can't bypass the scanner just by living in `{type:"resource"}`
+  // instead of `{type:"text"}`. JSON.stringify on the unknown block
+  // is intentionally over-inclusive — false positives on a non-
+  // injection payload are a logging nuisance; false negatives on an
+  // injection payload reach the model unscanned.
+  let textToScan = "";
+  if (typeof rawContent === "string") {
+    textToScan = rawContent;
+  } else if (Array.isArray(rawContent)) {
+    const parts: string[] = [];
+    for (const b of rawContent) {
+      if (typeof b !== "object" || b === null) continue;
+      const block = b as {
+        type?: unknown;
+        text?: unknown;
+        resource?: { text?: unknown };
+      };
+      if (block.type === "text" && typeof block.text === "string") {
+        parts.push(block.text);
+        continue;
+      }
+      if (
+        block.type === "resource" &&
+        typeof block.resource?.text === "string"
+      ) {
+        parts.push(block.resource.text);
+        continue;
+      }
+      // Unknown block shape (image, future MCP types) — scan its
+      // serialized form so embedded text-bearing fields can't slip
+      // through. This catches the case where a future MCP block
+      // type carries injection-pattern text in some inner field
+      // we don't recognize yet.
+      try {
+        parts.push(JSON.stringify(b));
+      } catch {
+        // Circular reference or otherwise unserializable — skip;
+        // we already log the wrap event so the operator can audit.
+      }
+    }
+    textToScan = parts.join("\n");
+  }
+
+  const scanResult = scan(textToScan, TOOL_RESULT_PATTERNS);
+
+  if (scanResult.flagged) {
+    logger.warn("Prompt injection detected in MCP tool result", "injection-guard", {
+      sessionId: context.sessionId,
+      mcpServer: context.serverName,
+      toolName: context.toolName,
+      label: scanResult.label,
+      matchCount: scanResult.matchCount,
+    });
+  }
+
+  return JSON.stringify(
+    {
+      _neo_trust_boundary: {
+        source: "mcp_external",
+        server: context.serverName,
+        tool: context.toolName,
+        injection_detected: scanResult.flagged,
+      },
+      data: rawContent ?? "",
     },
     null,
     2

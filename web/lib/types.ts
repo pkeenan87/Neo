@@ -62,6 +62,12 @@ export interface EnvConfig {
   AI_SEARCH_API_VERSION: string;
   AI_SEARCH_RERANKER_THRESHOLD: number;
   AI_SEARCH_ALLOW_DISABLE_THRESHOLD: boolean;
+  // Wiz MCP Server — documented here for env-schema visibility,
+  // but the runtime path reads these via `getToolSecret` (Key
+  // Vault → env-var fallback). Either both are set or Wiz is
+  // gracefully skipped from the per-role MCP server list.
+  WIZ_MCP_URL: string | undefined;
+  WIZ_MCP_TOKEN: string | undefined;
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -171,7 +177,8 @@ export type LogEventType =
   | "context_engineering"
   | "legal_hold_violation"
   | "skill_modified"
-  | "triage_mapping_modified";
+  | "triage_mapping_modified"
+  | "mcp_invocation";
 
 export interface LogIdentityContext {
   userName: string;

@@ -3,7 +3,14 @@ import { resolveAuth } from "@/lib/auth-helpers";
 import { getIntegration } from "@/lib/integration-registry";
 import { getAzureToken, getMSGraphToken } from "@/lib/auth";
 import { TL_INSTANCE_RE } from "@/lib/executors";
+import { WIZ_ALLOWED_HOST_RE } from "@/lib/mcp-servers";
 import { getToolSecret } from "@/lib/secrets";
+
+// SECURITY: all outbound probe fetches need a timeout. Node's global
+// fetch has no default — without an AbortSignal, a slow/hung upstream
+// hangs the route until the App Service kills the slot. 10s is well
+// above legitimate handshake latency for any of these integrations.
+const PROBE_TIMEOUT_MS = 10_000;
 
 const PROBES: Record<string, () => Promise<void>> = {
   "microsoft-sentinel": async () => {
@@ -35,6 +42,7 @@ const PROBES: Record<string, () => Promise<void>> = {
         // SECURITY: refuse to follow redirects so a 3xx from a CDN/edge can never
         // forward `authorization` or `managedOrganizationId` to a redirect target.
         redirect: "error",
+        signal: AbortSignal.timeout(PROBE_TIMEOUT_MS),
         headers: { authorization: apiKey, "Content-Type": "application/json", managedOrganizationId: orgId },
         body: JSON.stringify({ pageSize: 1, statusIds: [1] }),
       },
@@ -51,6 +59,7 @@ const PROBES: Record<string, () => Promise<void>> = {
       method: "POST",
       // SECURITY: refuse to follow redirects so a 3xx can never forward the PAT.
       redirect: "error",
+      signal: AbortSignal.timeout(PROBE_TIMEOUT_MS),
       // Lansweeper PATs use "Token" scheme, not "Bearer" (which is for OAuth JWTs)
       headers: { Authorization: `Token ${apiToken}`, "Content-Type": "application/json" },
       // SECURITY: siteId passed as a GraphQL variable, not interpolated into the query string
@@ -70,9 +79,60 @@ const PROBES: Record<string, () => Promise<void>> = {
     const res = await fetch("https://api.abnormalplatform.com/v1/threats?pageSize=1&pageNumber=1", {
       // SECURITY: refuse to follow redirects so a 3xx can never forward the bearer token.
       redirect: "error",
+      signal: AbortSignal.timeout(PROBE_TIMEOUT_MS),
       headers: { Authorization: `Bearer ${apiToken}` },
     });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  },
+  "wiz": async () => {
+    const url = await getToolSecret("WIZ_MCP_URL");
+    const token = await getToolSecret("WIZ_MCP_TOKEN");
+    if (!url) throw new Error("Missing WIZ_MCP_URL");
+    if (!token) throw new Error("Missing WIZ_MCP_TOKEN");
+    // SECURITY: only allow https Wiz MCP URLs. Rejecting non-https
+    // up front prevents an accidentally-typed http:// URL from
+    // sending the bearer token over plaintext during the probe.
+    let parsed: URL;
+    try {
+      parsed = new URL(url);
+    } catch {
+      throw new Error("WIZ_MCP_URL is not a valid URL");
+    }
+    if (parsed.protocol !== "https:") {
+      throw new Error("WIZ_MCP_URL must use https:// (refusing to send bearer token over plaintext)");
+    }
+    // SECURITY: enforce a strict host allowlist so a misconfigured /
+    // attacker-influenced WIZ_MCP_URL can't redirect the bearer token
+    // to an arbitrary HTTPS host. Mirrors the runtime guard applied
+    // in mcp-servers.ts so the probe doesn't false-positive a URL
+    // the agent loop will reject.
+    if (!WIZ_ALLOWED_HOST_RE.test(parsed.hostname)) {
+      throw new Error(
+        `WIZ_MCP_URL hostname '${parsed.hostname}' is not in the allowlist — Wiz hosts must end in .wiz.io`,
+      );
+    }
+    // Cheapest possible auth check — the streamable HTTP MCP
+    // transport accepts an OPTIONS request to confirm the server
+    // is reachable with the supplied credentials. We deliberately
+    // do not run a representative graph query here (per the spec's
+    // open-question answer).
+    const res = await fetch(url, {
+      method: "OPTIONS",
+      // SECURITY: refuse to follow redirects so a 3xx can never forward the bearer token.
+      redirect: "error",
+      signal: AbortSignal.timeout(PROBE_TIMEOUT_MS),
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    // Some MCP servers return 200, others 204 for an OPTIONS preflight
+    // — both are covered by `res.ok` (the 200-299 range). 401/403
+    // indicates the token is wrong; 5xx indicates the server is
+    // unhealthy. Anything else is treated as unreachable.
+    if (res.status === 401 || res.status === 403) {
+      throw new Error(`Wiz authentication failed (HTTP ${res.status}) — check WIZ_MCP_TOKEN`);
+    }
+    if (!res.ok) {
+      throw new Error(`Wiz MCP server returned HTTP ${res.status}`);
+    }
   },
 };
 
