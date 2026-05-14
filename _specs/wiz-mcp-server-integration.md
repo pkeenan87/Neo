@@ -83,7 +83,7 @@ The initial integration shipped with a static `WIZ_MCP_TOKEN` bearer. Wiz's serv
 **What changed**
 
 - Five new env vars / Key Vault secrets: `WIZ_CLIENT_ID`, `WIZ_CLIENT_SECRET`, `WIZ_AUTH_URL`, `WIZ_API_URL`. (`WIZ_MCP_URL` remains optional with a default of `https://mcp.app.wiz.io`.)
-- New `web/lib/wiz-auth.ts` module: `getWizAccessToken()` mints (or returns cached) OAuth bearers via client_credentials against the operator-supplied `WIZ_AUTH_URL`. JSON body `{ grant_type: "client_credentials", client_id, client_secret, audience: "wiz-api" }`. Cache key is `sha256(client_id + ":" + client_secret).slice(0, 16)` so credential rotation invalidates cleanly.
+- New `web/lib/wiz-auth.ts` module: `getWizAccessToken()` mints (or returns cached) OAuth bearers via client_credentials against the operator-supplied `WIZ_AUTH_URL`. Form-urlencoded body with `grant_type=client_credentials`, `client_id`, `client_secret`, and `audience` (value depends on the IdP — `wiz-api` for the Cognito-backed `auth.app.wiz.io`, `beyond-api` for the Auth0-backed `auth.wiz.io`). Cache key is `sha256(client_id + ":" + client_secret).slice(0, 16)` so credential rotation invalidates cleanly.
 - `getWizDatacenter()` helper parses the data-center label (e.g. `us68`) from `WIZ_API_URL` for audit-event tagging — no separate `WIZ_DATACENTER` secret to keep in sync.
 - The Wiz host allowlist regex (`/^[a-z0-9][a-z0-9.-]*\.wiz\.io$/i`) now lives in `wiz-auth.ts` and is enforced on BOTH `WIZ_MCP_URL` and `WIZ_AUTH_URL` so neither can redirect credentials to an attacker host.
 - `WIZ_MCP_TOKEN` is **deprecated, kept for one release** as a backward-compat fallback: if the OAuth credentials are unset and the legacy token is present, the registry uses it and emits a one-time deprecation warn.

@@ -420,7 +420,7 @@ Neo's agent loop integrates with the Wiz Cloud Security Platform via Anthropic's
 | `WIZ_API_URL` | `wiz-api-url` | Wiz GraphQL endpoint, e.g. `https://api.us68.app.wiz.io/graphql`. The data-center label is parsed from the hostname for audit-event tagging. |
 | `WIZ_MCP_URL` | `wiz-mcp-url` | Optional. Defaults to `https://mcp.app.wiz.io` if unset — override only if your tenant uses a private MCP endpoint. |
 
-**OAuth flow**: on the first agent turn after process start (or after a cached token expires), `web/lib/wiz-auth.ts` POSTs `application/json` to `WIZ_AUTH_URL` with `{ grant_type: "client_credentials", client_id, client_secret, audience: "wiz-api" }`. The returned access token is cached in-memory until expiry (minus a 5-minute safety buffer) and reused on subsequent turns. A `Wiz-Datacenter` audit tag is parsed from `WIZ_API_URL` and attached to the `mcp_invocation` event metadata.
+**OAuth flow**: on the first agent turn after process start (or after a cached token expires), `web/lib/wiz-auth.ts` POSTs `application/x-www-form-urlencoded` to `WIZ_AUTH_URL` with `grant_type=client_credentials`, `client_id`, `client_secret`, and `audience`. The `audience` value depends on which IdP backs the auth URL — `wiz-api` for `https://auth.app.wiz.io/oauth/token` (Amazon Cognito) or `beyond-api` for `https://auth.wiz.io/oauth/token` (Auth0). Sending the wrong audience returns HTTP 400 with no JSON body. The returned access token is cached in-memory until expiry (minus a 5-minute safety buffer) and reused on subsequent turns. A `Wiz-Datacenter` audit tag is parsed from `WIZ_API_URL` and attached to the `mcp_invocation` event metadata.
 
 **Deprecated** (kept for one release as a backward-compat fallback while operators migrate):
 
