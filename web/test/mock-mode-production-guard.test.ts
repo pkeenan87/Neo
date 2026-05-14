@@ -57,7 +57,13 @@ describe("validateConfig — MOCK_MODE production guard", () => {
 
   it("treats unset MOCK_MODE as the project default (true) — and therefore throws in production", async () => {
     env().NODE_ENV = "production";
-    delete env().MOCK_MODE;
+    // Empty string (not delete) so dotenv.config() — which runs on every
+    // config module re-import — can't repopulate MOCK_MODE from a
+    // developer's local `.env`. The config.ts parser is
+    // `process.env.MOCK_MODE !== "false"`, so "" round-trips to true
+    // exactly like undefined would. This preserves the intent of the
+    // test (project default is mock-mode) while staying robust to .env.
+    env().MOCK_MODE = "";
 
     const { validateConfig } = await import("../lib/config");
     expect(() => validateConfig()).toThrow(/MOCK_MODE must not be enabled in production/);

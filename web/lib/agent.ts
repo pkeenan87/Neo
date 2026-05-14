@@ -281,7 +281,7 @@ function auditMcpInvocations(
     if (!isMcpToolUse(block)) continue;
     const result = resultsByToolUseId.get(block.id);
     const allowed = enforceMcpToolAccess(role, block.server_name, block.name);
-    let auditResult: "success" | "blocked" | "error";
+    let auditResult: "success" | "blocked" | "error" | "orphan";
     if (!allowed) {
       auditResult = "blocked";
       // Allow-list divergence is operationally serious — escalate
@@ -298,10 +298,41 @@ function auditMcpInvocations(
           sessionId,
         },
       );
-    } else if (result?.is_error) {
+    } else if (!result) {
+      // Anthropic's beta normally returns mcp_tool_use and its
+      // paired mcp_tool_result in the same response. An orphan
+      // tool_use (no result block) means the response was
+      // truncated or the SDK shape drifted — either way, we have
+      // no evidence the call actually succeeded. Don't silently
+      // upgrade to "success". Surface as a distinct state and
+      // warn so the orphan condition is investigable.
+      auditResult = "orphan";
+      logger.warn(
+        "agent: mcp_tool_use without paired mcp_tool_result — audit grading as orphan",
+        "agent",
+        {
+          mcpServer: block.server_name,
+          toolName: block.name,
+          role,
+          sessionId,
+          toolUseId: block.id,
+        },
+      );
+    } else if (result.is_error) {
       auditResult = "error";
     } else {
       auditResult = "success";
+    }
+
+    // Truncate the JSON-stringified input — Wiz tool arguments are
+    // GraphQL queries or filter objects that can be a few KB. The
+    // SAFE_METADATA_FIELDS allowlist already includes `toolInput`
+    // (parity with the tool_execution event for local tools).
+    let toolInput = "";
+    try {
+      toolInput = JSON.stringify(block.input ?? null).slice(0, 2000);
+    } catch {
+      toolInput = "[unserializable]";
     }
 
     logger.emitEvent("mcp_invocation", "MCP tool invoked", "agent", {
@@ -312,6 +343,8 @@ function auditMcpInvocations(
       result: auditResult,
       turnDurationMs,
       ownerIdHash,
+      toolUseId: block.id,
+      toolInput,
     });
   }
 }
@@ -321,6 +354,10 @@ interface McpToolUseBlock {
   id: string;
   server_name: string;
   name: string;
+  // Model-supplied arguments. Anthropic's mcp_tool_use block carries
+  // this just like a regular tool_use; we declare it here so the
+  // audit pipeline can surface it without an `as unknown` cast.
+  input?: unknown;
 }
 interface McpToolResultBlock {
   type: "mcp_tool_result";
@@ -750,16 +787,24 @@ export async function runAgentLoop(
       // Clear the in-progress plan — the agent reached end_turn which
       // means either (a) the plan completed, or (b) the model decided
       // to wrap up (user changed direction, etc). Either way the plan
-      // no longer applies to subsequent turns. Fire-and-forget; any
-      // persistence failure is logged by the session store.
+      // no longer applies to subsequent turns. AWAIT the clear so a
+      // back-to-back turn for the same sessionId (Teams bot, triage,
+      // automated re-fire) cannot read the stale plan before this
+      // write commits — that race would mis-attach a resumption hint
+      // to a completed conversation, or trip the resumption circuit
+      // breaker against the wrong plan. Errors are still soft —
+      // worst case the next turn sees stale state and the user can
+      // recover, but at least no race-amplified false positive.
       if (inProgressPlan) {
         const { sessionStore } = await import("./session-factory");
-        void sessionStore.setInProgressPlan(sessionId, null).catch((err) => {
+        try {
+          await sessionStore.setInProgressPlan(sessionId, null);
+        } catch (err) {
           logger.warn("clear in-progress plan failed (best-effort)", "agent", {
             sessionId,
             errorMessage: (err as Error).message,
           });
-        });
+        }
       }
       logger.info("Agent loop completed", "agent");
       return { type: "response", text, messages: localMessages };
@@ -1110,16 +1155,19 @@ export async function runAgentLoop(
       // Mirror the end_turn path: a compaction-terminated turn is
       // also a terminal state for the in-progress plan (no further
       // tool calls coming in this turn). Without this, the plan
-      // persists and stale-resumes on the next user message. See
-      // review M2.
+      // persists and stale-resumes on the next user message. AWAIT
+      // the clear (same race rationale as the end_turn path above).
+      // See review M2.
       if (inProgressPlan) {
         const { sessionStore } = await import("./session-factory");
-        void sessionStore.setInProgressPlan(sessionId, null).catch((err) => {
+        try {
+          await sessionStore.setInProgressPlan(sessionId, null);
+        } catch (err) {
           logger.warn("clear in-progress plan failed (best-effort)", "agent", {
             sessionId,
             errorMessage: (err as Error).message,
           });
-        });
+        }
       }
       if (callbacks.onTurnComplete) callbacks.onTurnComplete(localMessages);
       return { type: "response", text, messages: localMessages };

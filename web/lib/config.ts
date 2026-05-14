@@ -346,8 +346,12 @@ export function validateConfig(): void {
         );
       }
     } catch {
+      // Do not print the raw value — an operator who accidentally pastes
+      // a credential-bearing URL (https://user:secret@host/) would leak
+      // the secret to stdout / log aggregators. The corrective action
+      // (fix WIZ_MCP_URL) doesn't require the bad value to be quoted.
       console.warn(
-        `WIZ_MCP_URL is not a valid URL: '${env.WIZ_MCP_URL}' — Wiz integration will fail until corrected.`,
+        "WIZ_MCP_URL is not a valid URL (value redacted) — Wiz integration will fail until corrected.",
       );
     }
   }

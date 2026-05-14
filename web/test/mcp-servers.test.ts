@@ -68,33 +68,33 @@ describe("getMcpServers", () => {
   });
 
   it("returns empty when WIZ_MCP_TOKEN is unset", async () => {
-    secretsState.WIZ_MCP_URL = "https://wiz.example.com/mcp";
+    secretsState.WIZ_MCP_URL = "https://test.wiz.io/mcp";
     const servers = await getMcpServers("admin");
     expect(servers).toEqual([]);
   });
 
   it("returns the Wiz server when both env vars resolve and role is admin", async () => {
-    secretsState.WIZ_MCP_URL = "https://wiz.example.com/mcp";
+    secretsState.WIZ_MCP_URL = "https://test.wiz.io/mcp";
     secretsState.WIZ_MCP_TOKEN = "secret-token";
     const servers = await getMcpServers("admin");
     expect(servers).toHaveLength(1);
     expect(servers[0]).toMatchObject({
       type: "url",
       name: "wiz",
-      url: "https://wiz.example.com/mcp",
+      url: "https://test.wiz.io/mcp",
       authorization_token: "secret-token",
     });
   });
 
   it("omits tool_configuration for admin (allow-all)", async () => {
-    secretsState.WIZ_MCP_URL = "https://wiz.example.com/mcp";
+    secretsState.WIZ_MCP_URL = "https://test.wiz.io/mcp";
     secretsState.WIZ_MCP_TOKEN = "secret-token";
     const servers = await getMcpServers("admin");
     expect(servers[0].tool_configuration).toBeUndefined();
   });
 
   it("includes literal expanded allowed_tools for reader role", async () => {
-    secretsState.WIZ_MCP_URL = "https://wiz.example.com/mcp";
+    secretsState.WIZ_MCP_URL = "https://test.wiz.io/mcp";
     secretsState.WIZ_MCP_TOKEN = "secret-token";
     const servers = await getMcpServers("reader");
     expect(servers).toHaveLength(1);
@@ -108,7 +108,7 @@ describe("getMcpServers", () => {
   });
 
   it("triage role gets the same scoping as reader (Logic Apps inherit)", async () => {
-    secretsState.WIZ_MCP_URL = "https://wiz.example.com/mcp";
+    secretsState.WIZ_MCP_URL = "https://test.wiz.io/mcp";
     secretsState.WIZ_MCP_TOKEN = "secret-token";
     const readerServers = await getMcpServers("reader");
     const triageServers = await getMcpServers("triage");
@@ -118,7 +118,7 @@ describe("getMcpServers", () => {
   });
 
   it("fails open (returns empty) when the secrets store throws", async () => {
-    secretsState.WIZ_MCP_URL = "https://wiz.example.com/mcp";
+    secretsState.WIZ_MCP_URL = "https://test.wiz.io/mcp";
     // Force getToolSecret to throw on the token lookup
     vi.doMock("../lib/secrets", () => ({
       getToolSecret: async (name: string) => {
@@ -144,7 +144,7 @@ describe("getMcpServers", () => {
 describe("getMcpServers — mock mode disables Wiz", () => {
   it("returns empty in mock mode even when both env vars are set", async () => {
     envState.MOCK_MODE = true;
-    secretsState.WIZ_MCP_URL = "https://wiz.example.com/mcp";
+    secretsState.WIZ_MCP_URL = "https://test.wiz.io/mcp";
     secretsState.WIZ_MCP_TOKEN = "tok";
     const servers = await getMcpServers("admin");
     expect(servers).toEqual([]);
@@ -212,7 +212,7 @@ describe("enforceMcpToolAccess", () => {
 
 describe("getMcpServers — HTTPS enforcement (B3)", () => {
   it("returns empty when WIZ_MCP_URL uses http://", async () => {
-    secretsState.WIZ_MCP_URL = "http://wiz.example.com/mcp";
+    secretsState.WIZ_MCP_URL = "http://test.wiz.io/mcp";
     secretsState.WIZ_MCP_TOKEN = "tok";
     const servers = await getMcpServers("admin");
     expect(servers).toEqual([]);
@@ -226,7 +226,7 @@ describe("getMcpServers — HTTPS enforcement (B3)", () => {
   });
 
   it("returns the server when WIZ_MCP_URL uses https://", async () => {
-    secretsState.WIZ_MCP_URL = "https://wiz.example.com/mcp";
+    secretsState.WIZ_MCP_URL = "https://test.wiz.io/mcp";
     secretsState.WIZ_MCP_TOKEN = "tok";
     const servers = await getMcpServers("admin");
     expect(servers).toHaveLength(1);
@@ -243,7 +243,7 @@ describe("getMcpServers — empty pattern expansion warns (N2)", () => {
   // verify the happy path produces NO N2 warn so we'd notice a
   // regression that fires it spuriously.
   it("does not warn when reader's catalogued patterns expand cleanly", async () => {
-    secretsState.WIZ_MCP_URL = "https://wiz.example.com/mcp";
+    secretsState.WIZ_MCP_URL = "https://test.wiz.io/mcp";
     secretsState.WIZ_MCP_TOKEN = "tok";
     await getMcpServers("reader");
     const n2Calls = warnSpy.mock.calls.filter((args) =>

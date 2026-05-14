@@ -129,15 +129,15 @@ export function truncateToolResults(
 
       // Skip truncation when the content is already a
       // _neo_trust_boundary envelope. Slicing the envelope JSON
-      // mid-stream produces a malformed string and a misleading
-      // `get_full_tool_result` hint (there's no local tool to
-      // re-fetch for an inline MCP block). The blob offload path
-      // handles oversized envelope payloads correctly; truncation
-      // here would just corrupt them. See review N4.
-      if (
-        blockType === "mcp_tool_result" &&
-        tr.content.includes("_neo_trust_boundary")
-      ) {
+      // mid-stream produces a malformed string and corrupts the
+      // trust marker — downstream parsers in
+      // offloadLargeToolResultsInPrompt silently swallow the
+      // parse error and lose the injection_detected flag. Applies
+      // to BOTH local tool_result envelopes (from
+      // wrapAndMaybeOffloadToolResult, which can fall back to
+      // inlining when blob storage is unavailable) and inline
+      // mcp_tool_result envelopes. See review N4.
+      if (tr.content.includes("_neo_trust_boundary")) {
         return block;
       }
 
@@ -491,7 +491,15 @@ async function compressOlderMessages(
   systemPromptTokenEstimate: number,
   ownerId?: string,
 ): Promise<Message[]> {
-  if (messages.length <= preserveCount + 1) return messages;
+  // Both early-return paths below skip the summarization branch but
+  // MUST still enforce the ceiling. Without that, a small-but-bloated
+  // conversation (e.g. 9 messages each ~21K tokens) that trips the
+  // trim trigger lands back in prepareMessages unchanged and ships
+  // over NEO_CONTEXT_MAX_INPUT_TOKENS → 400 from Anthropic with
+  // `prompt is too long`. See review M4 + verified finding.
+  if (messages.length <= preserveCount + 1) {
+    return enforceCeiling(messages, NEO_CONTEXT_MAX_INPUT_TOKENS, systemPromptTokenEstimate);
+  }
 
   // Find the first user message to use as the anchor (may not be messages[0]
   // after Cosmos session reconstruction).
@@ -511,7 +519,9 @@ async function compressOlderMessages(
   const middle = messages.slice(anchorIndex + 1, safeRecentStart);
   const recent = messages.slice(safeRecentStart);
 
-  if (middle.length === 0) return messages;
+  if (middle.length === 0) {
+    return enforceCeiling(messages, NEO_CONTEXT_MAX_INPUT_TOKENS, systemPromptTokenEstimate);
+  }
 
   // Cap middle messages sent to Haiku to avoid unbounded input cost.
   // Ensure the cap boundary respects tool pairs.
@@ -561,6 +571,33 @@ async function compressOlderMessages(
   const summaryRole = "assistant" as const;
 
   let result: Message[];
+
+  // If the pre-trim loop exited because cappedMiddle is down to its
+  // floor (≤2 messages) but the estimate is still above Haiku's
+  // ceiling, the upcoming messages.create would 400 with
+  // `prompt is too long` for Haiku's 200K window. Skip the wasted
+  // API call and go straight to the hard-truncation fallback so
+  // operators see the cause at error level instead of a swallowed
+  // 400 buried in the warn at the catch site below.
+  if (haikuInputEstimate > HAIKU_INPUT_MAX_TOKENS) {
+    logger.error(
+      "Skipping Haiku compression: pre-trim floor still exceeds HAIKU_INPUT_MAX_TOKENS — using hard truncation fallback",
+      "context-manager",
+      {
+        estimatedTokens: haikuInputEstimate,
+        ceiling: HAIKU_INPUT_MAX_TOKENS,
+        remainingMessages: cappedMiddle.length,
+      },
+    );
+    const fallbackMessage: Message = {
+      role: summaryRole,
+      content:
+        "[Earlier conversation context was removed to stay within token limits. " +
+        "Key findings may need to be re-investigated.]",
+    };
+    result = [...anchor, fallbackMessage, ...recent];
+    return enforceCeiling(result, NEO_CONTEXT_MAX_INPUT_TOKENS, systemPromptTokenEstimate);
+  }
 
   try {
     // Validate cappedMiddle shape before sending to Haiku

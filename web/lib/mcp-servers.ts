@@ -51,6 +51,25 @@ import {
 //  add a matching mock fixture in `mcp-fixtures.ts`.
 // ─────────────────────────────────────────────────────────────
 
+// ─────────────────────────────────────────────────────────────
+//  Wiz host allowlist
+//
+//  Anthropic's MCP connector forwards the bearer token in our
+//  request to whatever host we hand it. Without an allowlist, an
+//  operator with Key Vault / env-var write access could redirect
+//  WIZ_MCP_URL to an attacker-controlled HTTPS server and capture
+//  both the token and every model-generated tool argument. Mirror
+//  the TL_INSTANCE_RE pattern in executors.ts — exported so the
+//  integration test probe (route.ts) applies the identical guard.
+//
+//  The default matches Wiz's hosted SaaS hostnames (anything ending
+//  in `.wiz.io`). If Wiz adds a new top-level domain or your
+//  deployment uses a private host, extend this regex — do NOT
+//  remove the host check.
+// ─────────────────────────────────────────────────────────────
+
+export const WIZ_ALLOWED_HOST_RE = /^[a-z0-9][a-z0-9.-]*\.wiz\.io$/i;
+
 export const WIZ_TOOL_CATALOGUE = [
   "wiz_get_issues",
   "wiz_get_vulnerabilities",
@@ -240,6 +259,23 @@ export async function getMcpServers(role: Role): Promise<McpServerConfig[]> {
           mcpServer: entry.name,
           role,
           protocol: parsedUrl.protocol,
+        },
+      );
+      continue;
+    }
+
+    // SECURITY: enforce a strict host allowlist. Without this, anyone
+    // who can write to Key Vault or the env can redirect the bearer
+    // token + tool arguments to an attacker-controlled HTTPS host.
+    // See WIZ_ALLOWED_HOST_RE comment above.
+    if (entry.name === "wiz" && !WIZ_ALLOWED_HOST_RE.test(parsedUrl.hostname)) {
+      logger.error(
+        "mcp-servers: WIZ_MCP_URL host not in allowlist — skipping server",
+        "mcp-servers",
+        {
+          mcpServer: entry.name,
+          role,
+          hostname: parsedUrl.hostname,
         },
       );
       continue;

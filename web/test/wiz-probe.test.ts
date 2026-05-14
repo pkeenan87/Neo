@@ -74,7 +74,7 @@ describe("Wiz integration probe", () => {
   });
 
   it("fails closed when WIZ_MCP_TOKEN is missing", async () => {
-    secretsState.WIZ_MCP_URL = "https://wiz.example.com/mcp";
+    secretsState.WIZ_MCP_URL = "https://test.wiz.io/mcp";
     const res = await callProbe();
     const body = await res.json();
     expect(body.success).toBe(false);
@@ -82,7 +82,7 @@ describe("Wiz integration probe", () => {
   });
 
   it("rejects a non-https URL up front (no token egress on plaintext)", async () => {
-    secretsState.WIZ_MCP_URL = "http://wiz.example.com/mcp";
+    secretsState.WIZ_MCP_URL = "http://test.wiz.io/mcp";
     secretsState.WIZ_MCP_TOKEN = "tok";
     const res = await callProbe();
     const body = await res.json();
@@ -93,7 +93,7 @@ describe("Wiz integration probe", () => {
   });
 
   it("succeeds on a 200 from the MCP server", async () => {
-    secretsState.WIZ_MCP_URL = "https://wiz.example.com/mcp";
+    secretsState.WIZ_MCP_URL = "https://test.wiz.io/mcp";
     secretsState.WIZ_MCP_TOKEN = "tok";
     fetchMock.mockResolvedValue(new Response(null, { status: 200 }));
     const res = await callProbe();
@@ -102,7 +102,7 @@ describe("Wiz integration probe", () => {
   });
 
   it("succeeds on a 204 from the MCP server (some servers return No Content on OPTIONS)", async () => {
-    secretsState.WIZ_MCP_URL = "https://wiz.example.com/mcp";
+    secretsState.WIZ_MCP_URL = "https://test.wiz.io/mcp";
     secretsState.WIZ_MCP_TOKEN = "tok";
     fetchMock.mockResolvedValue(new Response(null, { status: 204 }));
     const res = await callProbe();
@@ -111,7 +111,7 @@ describe("Wiz integration probe", () => {
   });
 
   it("returns a distinct auth-failure message on 401", async () => {
-    secretsState.WIZ_MCP_URL = "https://wiz.example.com/mcp";
+    secretsState.WIZ_MCP_URL = "https://test.wiz.io/mcp";
     secretsState.WIZ_MCP_TOKEN = "tok";
     fetchMock.mockResolvedValue(new Response("Unauthorized", { status: 401 }));
     const res = await callProbe();
@@ -122,7 +122,7 @@ describe("Wiz integration probe", () => {
   });
 
   it("returns a server-error message on 5xx", async () => {
-    secretsState.WIZ_MCP_URL = "https://wiz.example.com/mcp";
+    secretsState.WIZ_MCP_URL = "https://test.wiz.io/mcp";
     secretsState.WIZ_MCP_TOKEN = "tok";
     fetchMock.mockResolvedValue(new Response("Server Error", { status: 503 }));
     const res = await callProbe();
@@ -132,13 +132,13 @@ describe("Wiz integration probe", () => {
   });
 
   it("sends Authorization: Bearer <token> with redirect: error", async () => {
-    secretsState.WIZ_MCP_URL = "https://wiz.example.com/mcp";
+    secretsState.WIZ_MCP_URL = "https://test.wiz.io/mcp";
     secretsState.WIZ_MCP_TOKEN = "secret-token-value";
     fetchMock.mockResolvedValue(new Response(null, { status: 200 }));
     await callProbe();
     expect(fetchMock).toHaveBeenCalledTimes(1);
     const [url, init] = fetchMock.mock.calls[0];
-    expect(url).toBe("https://wiz.example.com/mcp");
+    expect(url).toBe("https://test.wiz.io/mcp");
     expect((init as RequestInit).method).toBe("OPTIONS");
     expect((init as RequestInit).redirect).toBe("error");
     const headers = (init as RequestInit).headers as Record<string, string>;
