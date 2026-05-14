@@ -230,7 +230,43 @@ const WIZ_ENTRY: McpRegistryEntry = {
   },
 };
 
-const REGISTRY: McpRegistryEntry[] = [WIZ_ENTRY];
+// ─────────────────────────────────────────────────────────────
+//  WIZ INTEGRATION CURRENTLY DISABLED
+//
+//  Anthropic's API-side MCP connector only forwards
+//  `Authorization: Bearer <token>` to MCP servers. The Wiz MCP
+//  server requires three custom headers
+//  (`Wiz-Client-Id`/`Wiz-Client-Secret`/`Wiz-DataCenter`) for
+//  service-account authentication and rejects OAuth bearers
+//  minted from `auth.app.wiz.io/oauth/token` with HTTP 401
+//  "Invalid or expired token". Verified via Postman 2026-05-14:
+//
+//      Bearer (from auth.app.wiz.io)  →  401 Invalid or expired
+//      Wiz-Client-* headers           →  200 + initialize ok
+//
+//  Until one of these lands we leave the registry empty so the
+//  agent loop simply doesn't try Wiz:
+//    1. Anthropic adds custom-header support to mcp_servers, OR
+//    2. Wiz issues OAuth bearers their MCP server will accept, OR
+//    3. We build a header-translation proxy (Neo intercepts the
+//       MCP request and injects the 3 headers), OR
+//    4. We pivot to direct Wiz GraphQL via a local executor.
+//
+//  WIZ_ENTRY's definition is preserved above so re-enabling is a
+//  one-line change: put it back into REGISTRY when path 1 or 2
+//  lands. The OAuth helper (web/lib/wiz-auth.ts) and the env-var
+//  plumbing (WIZ_CLIENT_ID/SECRET/AUTH_URL/API_URL) are also
+//  kept — they'll be reusable for paths 3 and 4.
+// ─────────────────────────────────────────────────────────────
+
+const REGISTRY: McpRegistryEntry[] = [];
+
+// Mark WIZ_ENTRY as intentionally unused (the dead reference
+// prevents the helper definitions above from being flagged as
+// orphaned by linters / future refactors). When the integration
+// is re-enabled, swap this line for `[WIZ_ENTRY]` in REGISTRY
+// above and delete this no-op reference.
+void WIZ_ENTRY;
 
 // ─────────────────────────────────────────────────────────────
 //  Public API
