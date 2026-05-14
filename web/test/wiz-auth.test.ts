@@ -152,16 +152,37 @@ describe("getWizAccessToken", () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  it("throws when WIZ_AUTH_URL is non-https", async () => {
+  it("throws when WIZ_AUTH_URL is non-https (not in the literal allowlist)", async () => {
     secretsState.WIZ_AUTH_URL = "http://auth.app.wiz.io/oauth/token";
-    await expect(getWizAccessToken()).rejects.toThrow(/must use https/);
+    await expect(getWizAccessToken()).rejects.toThrow(/not in the Wiz auth-URL allowlist/);
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  it("throws when WIZ_AUTH_URL hostname is not in the allowlist", async () => {
+  it("throws when WIZ_AUTH_URL hostname is not in the literal allowlist", async () => {
     secretsState.WIZ_AUTH_URL = "https://attacker.example.com/oauth/token";
-    await expect(getWizAccessToken()).rejects.toThrow(/not in the allowlist/);
+    await expect(getWizAccessToken()).rejects.toThrow(/not in the Wiz auth-URL allowlist/);
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("accepts the alternative documented Wiz auth URL (auth.wiz.io)", async () => {
+    secretsState.WIZ_AUTH_URL = "https://auth.wiz.io/oauth/token";
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse({ access_token: "T1", token_type: "Bearer", expires_in: 3600 }),
+    );
+    const token = await getWizAccessToken();
+    expect(token).toBe("T1");
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [url] = fetchMock.mock.calls[0];
+    expect(url).toBe("https://auth.wiz.io/oauth/token");
+  });
+
+  it("trims whitespace before checking the auth URL allowlist", async () => {
+    secretsState.WIZ_AUTH_URL = "  https://auth.app.wiz.io/oauth/token\n";
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse({ access_token: "T1", token_type: "Bearer", expires_in: 3600 }),
+    );
+    const token = await getWizAccessToken();
+    expect(token).toBe("T1");
   });
 
   it("surfaces a 401 from the token endpoint with the body included", async () => {

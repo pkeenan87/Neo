@@ -181,7 +181,7 @@ describe("Wiz integration probe — OAuth failure surfacing", () => {
   it("surfaces a host-allowlist rejection from getWizAccessToken", async () => {
     setOAuthCreds();
     getWizAccessTokenMock.mockRejectedValue(
-      new Error("WIZ_AUTH_URL hostname 'attacker.example.com' is not in the allowlist — Wiz hosts must end in .wiz.io"),
+      new Error("WIZ_AUTH_URL 'https://attacker.example.com/oauth/token' is not in the Wiz auth-URL allowlist."),
     );
 
     const res = await callProbe();

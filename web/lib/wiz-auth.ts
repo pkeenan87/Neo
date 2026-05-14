@@ -44,10 +44,26 @@ import { logger } from "./logger";
 // your deployment uses a private host, extend the regex — do
 // NOT remove the host check.
 //
-// Lives here (not in mcp-servers.ts) so wiz-auth has no upward
-// dependency: mcp-servers.ts and the integration probe route
-// import this constant FROM wiz-auth, avoiding a cycle.
+// Used by mcp-servers.ts to gate WIZ_MCP_URL at the agent-loop
+// path. Lives here (not in mcp-servers.ts) so wiz-auth has no
+// upward dependency: mcp-servers.ts and the integration probe
+// route import this constant FROM wiz-auth, avoiding a cycle.
 export const WIZ_ALLOWED_HOST_RE = /^[a-z0-9][a-z0-9.-]*\.wiz\.io$/i;
+
+// SECURITY: literal allowlist for the OAuth token endpoint URL.
+// The credentials we POST here are the long-lived service-account
+// secret; an operator-supplied WIZ_AUTH_URL pointing at an
+// attacker host would exfiltrate them. CodeQL's
+// `js/request-forgery` rule rejects regex `.test()` as a
+// sanitiser, so we keep this as a Set of literal strings —
+// CodeQL accepts Set membership as a proof that the URL is one
+// of N specific values. The two documented Wiz auth endpoints
+// today are listed below; extend explicitly if Wiz publishes a
+// new one.
+export const WIZ_AUTH_URL_ALLOWLIST = new Set<string>([
+  "https://auth.app.wiz.io/oauth/token",
+  "https://auth.wiz.io/oauth/token",
+]);
 
 const TOKEN_FETCH_TIMEOUT_MS = 10_000;
 const TOKEN_EXPIRY_BUFFER_MS = 5 * 60 * 1000;
@@ -106,30 +122,25 @@ export async function getWizAccessToken(): Promise<string> {
     return cached.token;
   }
 
-  // SECURITY: host validation BEFORE the fetch so a misconfigured
-  // / attacker-influenced WIZ_AUTH_URL can't redirect the
-  // credentials to an arbitrary HTTPS host. Mirrors the runtime
-  // guard in mcp-servers.ts for WIZ_MCP_URL.
-  let parsedAuthUrl: URL;
-  try {
-    parsedAuthUrl = new URL(authUrl);
-  } catch {
-    throw new Error("WIZ_AUTH_URL is not a valid URL");
-  }
-  if (parsedAuthUrl.protocol !== "https:") {
+  // SECURITY: literal allowlist for the token endpoint. The
+  // operator-supplied URL must match one of WIZ_AUTH_URL_ALLOWLIST
+  // exactly — CodeQL recognises this as a sanitiser for the
+  // js/request-forgery rule. Protocol is implicitly https because
+  // both allowlist entries start with https://. Trim the input so
+  // a trailing newline (common when pasting from clipboard into
+  // the admin UI) doesn't break an otherwise-valid value.
+  const normalisedAuthUrl = authUrl.trim();
+  if (!WIZ_AUTH_URL_ALLOWLIST.has(normalisedAuthUrl)) {
     throw new Error(
-      "WIZ_AUTH_URL must use https:// (refusing to send client_secret over plaintext)",
-    );
-  }
-  if (!WIZ_ALLOWED_HOST_RE.test(parsedAuthUrl.hostname)) {
-    throw new Error(
-      `WIZ_AUTH_URL hostname '${parsedAuthUrl.hostname}' is not in the allowlist — Wiz hosts must end in .wiz.io`,
+      `WIZ_AUTH_URL '${normalisedAuthUrl}' is not in the Wiz auth-URL allowlist. ` +
+        `Today only https://auth.app.wiz.io/oauth/token and https://auth.wiz.io/oauth/token ` +
+        `are accepted; if Wiz publishes a new auth endpoint, extend WIZ_AUTH_URL_ALLOWLIST in wiz-auth.ts.`,
     );
   }
 
   let res: Response;
   try {
-    res = await fetch(authUrl, {
+    res = await fetch(normalisedAuthUrl, {
       method: "POST",
       redirect: "error",
       signal: AbortSignal.timeout(TOKEN_FETCH_TIMEOUT_MS),
