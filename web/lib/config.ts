@@ -283,12 +283,21 @@ export const env: EnvConfig = {
   AI_SEARCH_API_VERSION:                process.env.AI_SEARCH_API_VERSION || "2024-07-01",
   AI_SEARCH_RERANKER_THRESHOLD:         Number(process.env.AI_SEARCH_RERANKER_THRESHOLD ?? "1.5"),
   AI_SEARCH_ALLOW_DISABLE_THRESHOLD:    process.env.AI_SEARCH_ALLOW_DISABLE_THRESHOLD === "true",
-  // Wiz MCP Server (preview). Both required to enable the
-  // server in `getMcpServers`; either missing → Wiz is silently
-  // omitted from the per-role MCP server array. Production
-  // should pull these from Key Vault via getToolSecret.
+  // Wiz MCP Server. Service-account OAuth (preferred):
+  // WIZ_CLIENT_ID + WIZ_CLIENT_SECRET + WIZ_AUTH_URL drive the
+  // client_credentials exchange in wiz-auth.ts. WIZ_API_URL is
+  // captured for tenant-DC tagging (parsed server-side) and the
+  // upcoming direct-GraphQL path. WIZ_MCP_URL is optional and
+  // defaults to https://mcp.app.wiz.io at the registry layer.
+  // WIZ_MCP_TOKEN is deprecated and kept as a backward-compat
+  // fallback while operators rotate to OAuth — remove next
+  // release.
   WIZ_MCP_URL:                          process.env.WIZ_MCP_URL,
   WIZ_MCP_TOKEN:                        process.env.WIZ_MCP_TOKEN,
+  WIZ_CLIENT_ID:                        process.env.WIZ_CLIENT_ID,
+  WIZ_CLIENT_SECRET:                    process.env.WIZ_CLIENT_SECRET,
+  WIZ_AUTH_URL:                         process.env.WIZ_AUTH_URL,
+  WIZ_API_URL:                          process.env.WIZ_API_URL,
 };
 
 // Note: validateConfig uses console.warn directly (not logger) because
@@ -330,28 +339,42 @@ export function validateConfig(): void {
     console.warn("AUTH_SECRET is not set — Auth.js requires this in production.");
   }
 
-  // Wiz MCP — fail-soft URL validation. The connection-test probe
-  // also enforces https, but it's opt-in (admin-clicked). If the
-  // operator typo'd the env var, every agent turn will hand
-  // Anthropic a bad URL until someone notices. Surface that at
-  // startup as a warning, not a hard abort, so a temporarily-broken
-  // Wiz config doesn't take the whole server down — Wiz is
+  // Wiz MCP — fail-soft URL validation for all three Wiz URLs.
+  // The connection-test probe and the runtime path also enforce
+  // these (with hard rejection), but those are opt-in / called
+  // mid-request. Surfacing operator typos at startup gives a
+  // breadcrumb without taking the whole server down — Wiz is
   // graceful-degradation-on-missing anyway.
-  if (env.WIZ_MCP_URL) {
+  const WIZ_HOST_RE_STARTUP = /^[a-z0-9][a-z0-9.-]*\.wiz\.io$/i;
+  type WizUrlCheck = { name: string; value: string | undefined };
+  const wizUrlChecks: WizUrlCheck[] = [
+    { name: "WIZ_MCP_URL", value: env.WIZ_MCP_URL },
+    { name: "WIZ_AUTH_URL", value: env.WIZ_AUTH_URL },
+    { name: "WIZ_API_URL", value: env.WIZ_API_URL },
+  ];
+  for (const { name, value } of wizUrlChecks) {
+    if (!value) continue;
+    let parsed: URL;
     try {
-      const parsed = new URL(env.WIZ_MCP_URL);
-      if (parsed.protocol !== "https:") {
-        console.warn(
-          `WIZ_MCP_URL must use https:// (got ${parsed.protocol}//...) — Wiz integration will fail until corrected.`,
-        );
-      }
+      parsed = new URL(value);
     } catch {
-      // Do not print the raw value — an operator who accidentally pastes
-      // a credential-bearing URL (https://user:secret@host/) would leak
-      // the secret to stdout / log aggregators. The corrective action
-      // (fix WIZ_MCP_URL) doesn't require the bad value to be quoted.
+      // Do not print the raw value — an operator who accidentally
+      // pastes a credential-bearing URL (https://user:secret@host/)
+      // would leak the secret to stdout / log aggregators.
       console.warn(
-        "WIZ_MCP_URL is not a valid URL (value redacted) — Wiz integration will fail until corrected.",
+        `${name} is not a valid URL (value redacted) — Wiz integration will fail until corrected.`,
+      );
+      continue;
+    }
+    if (parsed.protocol !== "https:") {
+      console.warn(
+        `${name} must use https:// (got ${parsed.protocol}//...) — Wiz integration will fail until corrected.`,
+      );
+      continue;
+    }
+    if (!WIZ_HOST_RE_STARTUP.test(parsed.hostname)) {
+      console.warn(
+        `${name} hostname '${parsed.hostname}' is not in the Wiz allowlist (must end in .wiz.io) — Wiz integration will fail until corrected.`,
       );
     }
   }

@@ -3,7 +3,7 @@ import { resolveAuth } from "@/lib/auth-helpers";
 import { getIntegration } from "@/lib/integration-registry";
 import { getAzureToken, getMSGraphToken } from "@/lib/auth";
 import { TL_INSTANCE_RE } from "@/lib/executors";
-import { WIZ_ALLOWED_HOST_RE } from "@/lib/mcp-servers";
+import { getWizAccessToken } from "@/lib/wiz-auth";
 import { getToolSecret } from "@/lib/secrets";
 
 // SECURITY: all outbound probe fetches need a timeout. Node's global
@@ -85,30 +85,59 @@ const PROBES: Record<string, () => Promise<void>> = {
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
   },
   "wiz": async () => {
-    const url = await getToolSecret("WIZ_MCP_URL");
-    const token = await getToolSecret("WIZ_MCP_TOKEN");
-    if (!url) throw new Error("Missing WIZ_MCP_URL");
-    if (!token) throw new Error("Missing WIZ_MCP_TOKEN");
-    // SECURITY: only allow https Wiz MCP URLs. Rejecting non-https
-    // up front prevents an accidentally-typed http:// URL from
-    // sending the bearer token over plaintext during the probe.
-    let parsed: URL;
-    try {
-      parsed = new URL(url);
-    } catch {
-      throw new Error("WIZ_MCP_URL is not a valid URL");
-    }
-    if (parsed.protocol !== "https:") {
-      throw new Error("WIZ_MCP_URL must use https:// (refusing to send bearer token over plaintext)");
-    }
-    // SECURITY: enforce a strict host allowlist so a misconfigured /
-    // attacker-influenced WIZ_MCP_URL can't redirect the bearer token
-    // to an arbitrary HTTPS host. Mirrors the runtime guard applied
-    // in mcp-servers.ts so the probe doesn't false-positive a URL
-    // the agent loop will reject.
-    if (!WIZ_ALLOWED_HOST_RE.test(parsed.hostname)) {
+    const clientId = await getToolSecret("WIZ_CLIENT_ID");
+    const clientSecret = await getToolSecret("WIZ_CLIENT_SECRET");
+    const authUrl = await getToolSecret("WIZ_AUTH_URL");
+    const legacyToken = await getToolSecret("WIZ_MCP_TOKEN");
+    const configuredMcpUrl = (await getToolSecret("WIZ_MCP_URL"))?.trim();
+
+    // Branch on which credential set is configured. Preferred:
+    // service-account OAuth via WIZ_CLIENT_ID + WIZ_CLIENT_SECRET
+    // + WIZ_AUTH_URL. Backward-compat: legacy static
+    // WIZ_MCP_TOKEN. If neither is configured, fail loudly with
+    // a specific message so operators know what to set.
+    let bearer: string;
+    if (clientId && clientSecret && authUrl) {
+      // getWizAccessToken validates the auth URL host + protocol,
+      // performs the OAuth exchange, and surfaces a structured
+      // error on failure. We rewrap so the probe response can
+      // distinguish "OAuth failed" from "MCP reachable but
+      // rejected the bearer" downstream.
+      try {
+        bearer = await getWizAccessToken();
+      } catch (err) {
+        throw new Error(
+          `Wiz authentication failed: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+    } else if (legacyToken) {
+      bearer = legacyToken;
+    } else {
       throw new Error(
-        `WIZ_MCP_URL hostname '${parsed.hostname}' is not in the allowlist — Wiz hosts must end in .wiz.io`,
+        "Missing Wiz credentials. Configure WIZ_CLIENT_ID, WIZ_CLIENT_SECRET, and WIZ_AUTH_URL (service account) — or the legacy WIZ_MCP_TOKEN — via /integrations.",
+      );
+    }
+
+    // SECURITY: enforce a LITERAL allowlist on the probe URL.
+    // CodeQL's `js/request-forgery` rule rejects regex `.test()`
+    // as a sanitiser for the host part of an outbound URL — but
+    // accepts membership in a Set of literal strings, because
+    // the taint analyser can then prove the URL is one of N
+    // specific values. The runtime agent-loop path
+    // (mcp-servers.ts) still uses the broader WIZ_ALLOWED_HOST_RE
+    // regex for flexibility — it doesn't fetch from Neo's code,
+    // so it isn't a SSRF sink. The probe IS such a sink, so we
+    // pin it to a literal allowlist here. If a tenant ever needs
+    // a private MCP host, add it explicitly to WIZ_MCP_PROBE_ALLOWLIST.
+    const WIZ_MCP_PROBE_ALLOWLIST = new Set<string>([
+      "https://mcp.app.wiz.io",
+    ]);
+    const mcpUrl = configuredMcpUrl && configuredMcpUrl.length > 0
+      ? configuredMcpUrl
+      : "https://mcp.app.wiz.io";
+    if (!WIZ_MCP_PROBE_ALLOWLIST.has(mcpUrl)) {
+      throw new Error(
+        `WIZ_MCP_URL '${mcpUrl}' is not in the probe allowlist. Today the probe targets https://mcp.app.wiz.io only; if your tenant uses a private MCP host, extend WIZ_MCP_PROBE_ALLOWLIST in route.ts.`,
       );
     }
     // Cheapest possible auth check — the streamable HTTP MCP
@@ -116,19 +145,22 @@ const PROBES: Record<string, () => Promise<void>> = {
     // is reachable with the supplied credentials. We deliberately
     // do not run a representative graph query here (per the spec's
     // open-question answer).
-    const res = await fetch(url, {
+    const res = await fetch(mcpUrl, {
       method: "OPTIONS",
       // SECURITY: refuse to follow redirects so a 3xx can never forward the bearer token.
       redirect: "error",
       signal: AbortSignal.timeout(PROBE_TIMEOUT_MS),
-      headers: { Authorization: `Bearer ${token}` },
+      headers: { Authorization: `Bearer ${bearer}` },
     });
     // Some MCP servers return 200, others 204 for an OPTIONS preflight
     // — both are covered by `res.ok` (the 200-299 range). 401/403
-    // indicates the token is wrong; 5xx indicates the server is
-    // unhealthy. Anything else is treated as unreachable.
+    // indicates the bearer is wrong (which for the OAuth path is
+    // strange — it means the freshly-minted access token was
+    // rejected, suggesting a clock skew or audience mismatch).
     if (res.status === 401 || res.status === 403) {
-      throw new Error(`Wiz authentication failed (HTTP ${res.status}) — check WIZ_MCP_TOKEN`);
+      throw new Error(
+        `Wiz MCP server rejected the bearer token (HTTP ${res.status}). For the legacy path, check WIZ_MCP_TOKEN; for the OAuth path, verify WIZ_AUTH_URL and the audience parameter.`,
+      );
     }
     if (!res.ok) {
       throw new Error(`Wiz MCP server returned HTTP ${res.status}`);

@@ -73,3 +73,24 @@ Create test files in `web/test/` covering at least:
 - **Connection-test probe** — admin-only; returns a structured success/failure body; failure modes (wrong URL, expired token, network error) each produce a distinct operator-readable message.
 - **Agent loop integration** — a Security-role conversation includes `mcp_servers` in the Anthropic API call; a Help Desk conversation does not.
 - **Failure mode** — when the Wiz MCP server is unreachable, the agent loop still produces a response; the failure is logged but the user-visible answer doesn't crash.
+
+---
+
+## v2 — Service Account OAuth (post-merge migration)
+
+The initial integration shipped with a static `WIZ_MCP_TOKEN` bearer. Wiz's service-account auth pattern issues OAuth2 access tokens with short TTLs instead, which is the path operators should be on going forward.
+
+**What changed**
+
+- Five new env vars / Key Vault secrets: `WIZ_CLIENT_ID`, `WIZ_CLIENT_SECRET`, `WIZ_AUTH_URL`, `WIZ_API_URL`. (`WIZ_MCP_URL` remains optional with a default of `https://mcp.app.wiz.io`.)
+- New `web/lib/wiz-auth.ts` module: `getWizAccessToken()` mints (or returns cached) OAuth bearers via client_credentials against the operator-supplied `WIZ_AUTH_URL`. JSON body `{ grant_type: "client_credentials", client_id, client_secret, audience: "wiz-api" }`. Cache key is `sha256(client_id + ":" + client_secret).slice(0, 16)` so credential rotation invalidates cleanly.
+- `getWizDatacenter()` helper parses the data-center label (e.g. `us68`) from `WIZ_API_URL` for audit-event tagging — no separate `WIZ_DATACENTER` secret to keep in sync.
+- The Wiz host allowlist regex (`/^[a-z0-9][a-z0-9.-]*\.wiz\.io$/i`) now lives in `wiz-auth.ts` and is enforced on BOTH `WIZ_MCP_URL` and `WIZ_AUTH_URL` so neither can redirect credentials to an attacker host.
+- `WIZ_MCP_TOKEN` is **deprecated, kept for one release** as a backward-compat fallback: if the OAuth credentials are unset and the legacy token is present, the registry uses it and emits a one-time deprecation warn.
+- Connection-test probe now performs OAuth → MCP-OPTIONS in two stages, surfacing distinct error messages for each.
+
+**Open question status (from §"Open questions" above)**
+
+- "Per-server credential storage" is now answered: Key Vault, with the four-secret split documented in `docs/configuration.md`.
+- "Caller-allowlist alignment" is unchanged — Logic Apps still inherit role mapping.
+- All other v1 open questions remain resolved as before.
