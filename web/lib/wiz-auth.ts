@@ -3,34 +3,37 @@
 //
 //  Replaces the static `WIZ_MCP_TOKEN` bearer with a short-TTL
 //  OAuth access token minted at request time. Mirrors the cache-
-//  and-refresh shape of `getAzureToken` in ./auth.ts but speaks
-//  a different wire shape — Wiz's token endpoint expects JSON,
-//  not form-urlencoded.
+//  and-refresh shape of `getAzureToken` in ./auth.ts.
 //
-//  Wire contract (verified against the `mcp-server-wiz` npm
-//  package and https://mernstackdev.com/wiz-mcp-server-complete-
-//  guide-to-cloud-security-automation/):
+//  Wire contract (verified against Wiz's published curl example,
+//  the queeno/wiz Terraform provider, and the 1Password shell-
+//  plugin Wiz integration):
 //
 //      POST <WIZ_AUTH_URL>
-//      Content-Type: application/json
+//      Content-Type: application/x-www-form-urlencoded
 //
-//      {
-//        "grant_type":    "client_credentials",
-//        "client_id":     <WIZ_CLIENT_ID>,
-//        "client_secret": <WIZ_CLIENT_SECRET>,
-//        "audience":      "wiz-api"
-//      }
+//      grant_type=client_credentials
+//      &client_id=<WIZ_CLIENT_ID>
+//      &client_secret=<WIZ_CLIENT_SECRET>
+//      &audience=<wiz-api | beyond-api>
 //
 //  Response (RFC 6749):
 //      { "access_token": "...", "token_type": "Bearer",
 //        "expires_in": 3600 }
 //
-//  The auth URL host is treated as operator-configurable because
-//  it varies across Wiz deployments — this tenant uses
-//  `https://auth.app.wiz.io/oauth/token`, the public Wiz example
-//  uses `https://auth.wiz.io/oauth/token`. Both are gated by
-//  `WIZ_ALLOWED_HOST_RE` so an operator-supplied URL can never
-//  redirect credentials to an attacker-controlled host.
+//  `audience` depends on which IdP backs the auth URL:
+//    - https://auth.app.wiz.io/oauth/token (Amazon Cognito) → wiz-api
+//    - https://auth.wiz.io/oauth/token     (Auth0)           → beyond-api
+//
+//  This is the gotcha that the queeno/wiz Terraform provider
+//  documents most clearly — sending `wiz-api` to an Auth0 tenant
+//  (or `beyond-api` to a Cognito tenant) returns HTTP 400 with
+//  no JSON body, which is the error we hit in production on the
+//  initial deploy.
+//
+//  WIZ_AUTH_URL is operator-configurable but constrained to the
+//  two documented endpoints via WIZ_AUTH_URL_ALLOWLIST (CodeQL-
+//  compatible sanitisation for the credential-bearing fetch).
 // ─────────────────────────────────────────────────────────────
 
 import { createHash } from "crypto";
@@ -64,6 +67,15 @@ export const WIZ_AUTH_URL_ALLOWLIST = new Set<string>([
   "https://auth.app.wiz.io/oauth/token",
   "https://auth.wiz.io/oauth/token",
 ]);
+
+// Audience parameter value depends on which identity provider
+// fronts the auth URL. Sending the wrong value produces an
+// HTTP 400 with no JSON body — the silent-rejection mode the
+// initial production deploy hit on 2026-05-14.
+const WIZ_AUDIENCE_BY_AUTH_URL: Record<string, string> = {
+  "https://auth.app.wiz.io/oauth/token": "wiz-api",   // Amazon Cognito
+  "https://auth.wiz.io/oauth/token":     "beyond-api", // Auth0
+};
 
 const TOKEN_FETCH_TIMEOUT_MS = 10_000;
 const TOKEN_EXPIRY_BUFFER_MS = 5 * 60 * 1000;
@@ -138,19 +150,36 @@ export async function getWizAccessToken(): Promise<string> {
     );
   }
 
+  const audience = WIZ_AUDIENCE_BY_AUTH_URL[normalisedAuthUrl];
+  if (!audience) {
+    // Should be impossible — the WIZ_AUTH_URL_ALLOWLIST check above
+    // guarantees membership, and every member has a matching
+    // audience here. If this ever fires, it means someone extended
+    // WIZ_AUTH_URL_ALLOWLIST without updating WIZ_AUDIENCE_BY_AUTH_URL.
+    throw new Error(
+      `Wiz auth URL '${normalisedAuthUrl}' has no audience mapping. Update WIZ_AUDIENCE_BY_AUTH_URL in wiz-auth.ts.`,
+    );
+  }
+
+  // SECURITY / wire contract: Wiz's token endpoint expects a form-
+  // urlencoded body, NOT JSON. Sending JSON returns HTTP 400 with
+  // no JSON body, which is hard to diagnose — see the comment at
+  // the top of this file. URLSearchParams handles the encoding.
+  const body = new URLSearchParams({
+    grant_type: "client_credentials",
+    client_id: clientId,
+    client_secret: clientSecret,
+    audience,
+  });
+
   let res: Response;
   try {
     res = await fetch(normalisedAuthUrl, {
       method: "POST",
       redirect: "error",
       signal: AbortSignal.timeout(TOKEN_FETCH_TIMEOUT_MS),
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        grant_type: "client_credentials",
-        client_id: clientId,
-        client_secret: clientSecret,
-        audience: "wiz-api",
-      }),
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body,
     });
   } catch (err) {
     throw new Error(

@@ -69,7 +69,7 @@ describe("getWizAccessToken", () => {
     secretsState.WIZ_AUTH_URL = "https://auth.app.wiz.io/oauth/token";
   });
 
-  it("POSTs JSON to the auth URL with the expected body and returns the access token", async () => {
+  it("POSTs form-urlencoded body to the auth URL with the Cognito audience and returns the access token", async () => {
     fetchMock.mockResolvedValueOnce(
       jsonResponse({ access_token: "T1", token_type: "Bearer", expires_in: 3600 }),
     );
@@ -82,13 +82,28 @@ describe("getWizAccessToken", () => {
     expect(url).toBe("https://auth.app.wiz.io/oauth/token");
     expect(init?.method).toBe("POST");
     expect(init?.redirect).toBe("error");
-    expect((init?.headers as Record<string, string>)["Content-Type"]).toBe("application/json");
-    expect(JSON.parse(init?.body as string)).toEqual({
-      grant_type: "client_credentials",
-      client_id: "test-client",
-      client_secret: "test-secret",
-      audience: "wiz-api",
-    });
+    expect((init?.headers as Record<string, string>)["Content-Type"]).toBe("application/x-www-form-urlencoded");
+    // Body is URLSearchParams; iterate to assert the four expected
+    // key/value pairs without depending on encoded-string ordering.
+    const params = init?.body as URLSearchParams;
+    expect(params.get("grant_type")).toBe("client_credentials");
+    expect(params.get("client_id")).toBe("test-client");
+    expect(params.get("client_secret")).toBe("test-secret");
+    // auth.app.wiz.io (Cognito) → wiz-api
+    expect(params.get("audience")).toBe("wiz-api");
+  });
+
+  it("uses 'beyond-api' audience when the auth URL is the Auth0 endpoint", async () => {
+    secretsState.WIZ_AUTH_URL = "https://auth.wiz.io/oauth/token";
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse({ access_token: "T1", token_type: "Bearer", expires_in: 3600 }),
+    );
+
+    await getWizAccessToken();
+    const [, init] = fetchMock.mock.calls[0];
+    const params = init?.body as URLSearchParams;
+    // auth.wiz.io (Auth0) → beyond-api
+    expect(params.get("audience")).toBe("beyond-api");
   });
 
   it("caches the token across calls until near-expiry", async () => {
