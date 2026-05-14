@@ -185,6 +185,12 @@ const SAFE_METADATA_FIELDS = new Set([
   "catalogueSize",
   "patterns",
   "protocol",
+  // Wiz service-account auth observability. wizDatacenter is a
+  // low-cardinality tenant label (e.g. "us68") parsed from
+  // WIZ_API_URL; wizTokenExpiry is an ISO-8601 timestamp.
+  // Neither carries credentials or PII.
+  "wizDatacenter",
+  "wizTokenExpiry",
   // Context-engineering observability — the context-manager and
   // related callers emit these on truncation / compression /
   // offload events. Without them on the allowlist, Event Hub sees

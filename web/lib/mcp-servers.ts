@@ -41,6 +41,12 @@ import {
   matchesAllowedTools,
   expandPatternsAgainstCatalogue,
 } from "./mcp-tool-matcher";
+import { getWizAccessToken, WIZ_ALLOWED_HOST_RE } from "./wiz-auth";
+
+// Re-export so existing callers (e.g. the integration probe route
+// imported it from here historically) continue to work without an
+// import-path change. wiz-auth is the canonical owner.
+export { WIZ_ALLOWED_HOST_RE };
 
 // ─────────────────────────────────────────────────────────────
 //  Wiz tool catalogue
@@ -51,24 +57,9 @@ import {
 //  add a matching mock fixture in `mcp-fixtures.ts`.
 // ─────────────────────────────────────────────────────────────
 
-// ─────────────────────────────────────────────────────────────
-//  Wiz host allowlist
-//
-//  Anthropic's MCP connector forwards the bearer token in our
-//  request to whatever host we hand it. Without an allowlist, an
-//  operator with Key Vault / env-var write access could redirect
-//  WIZ_MCP_URL to an attacker-controlled HTTPS server and capture
-//  both the token and every model-generated tool argument. Mirror
-//  the TL_INSTANCE_RE pattern in executors.ts — exported so the
-//  integration test probe (route.ts) applies the identical guard.
-//
-//  The default matches Wiz's hosted SaaS hostnames (anything ending
-//  in `.wiz.io`). If Wiz adds a new top-level domain or your
-//  deployment uses a private host, extend this regex — do NOT
-//  remove the host check.
-// ─────────────────────────────────────────────────────────────
-
-export const WIZ_ALLOWED_HOST_RE = /^[a-z0-9][a-z0-9.-]*\.wiz\.io$/i;
+// (WIZ_ALLOWED_HOST_RE is defined and exported from ./wiz-auth.
+// It's re-exported at the top of this file for backward compat
+// with callers that import it from here.)
 
 export const WIZ_TOOL_CATALOGUE = [
   "wiz_get_issues",
@@ -172,6 +163,26 @@ interface McpRegistryEntry {
 //  Wiz tenant.
 // ─────────────────────────────────────────────────────────────
 
+// One-shot deprecation warn: when an operator is still on the
+// legacy WIZ_MCP_TOKEN bearer, log once-per-process so the upgrade
+// path is visible without spamming the agent-loop hot path.
+let emittedLegacyTokenDeprecation = false;
+function warnLegacyTokenOnce(): void {
+  if (emittedLegacyTokenDeprecation) return;
+  emittedLegacyTokenDeprecation = true;
+  logger.warn(
+    "Wiz integration is using the deprecated WIZ_MCP_TOKEN bearer. Migrate to WIZ_CLIENT_ID + WIZ_CLIENT_SECRET + WIZ_AUTH_URL (service-account OAuth). See docs/configuration.md.",
+    "mcp-servers",
+    { mcpServer: "wiz" },
+  );
+}
+
+// Default Wiz MCP URL. Operators can override via WIZ_MCP_URL but
+// the default is the hosted Wiz endpoint — same value the upstream
+// `mcp-server-wiz` package uses. Saves operators from having to
+// configure an extra value when they're on the standard SaaS.
+const WIZ_MCP_URL_DEFAULT = "https://mcp.app.wiz.io";
+
 const WIZ_ENTRY: McpRegistryEntry = {
   name: "wiz",
   allowedRoles: ["admin", "reader", "triage"],
@@ -179,11 +190,43 @@ const WIZ_ENTRY: McpRegistryEntry = {
   catalogue: WIZ_TOOL_CATALOGUE,
   getToken: async () => {
     if (env.MOCK_MODE) return undefined; // see TODO above
-    return getToolSecret("WIZ_MCP_TOKEN");
+
+    // Preferred path: service-account OAuth client_credentials.
+    // If both new-style creds resolve, mint (or fetch-cached) a
+    // bearer via wiz-auth and return it. Throws from
+    // getWizAccessToken are downgraded to a warn + skip-this-turn
+    // so a transient Wiz auth failure can't crash the agent loop.
+    const clientId = await getToolSecret("WIZ_CLIENT_ID");
+    const clientSecret = await getToolSecret("WIZ_CLIENT_SECRET");
+    if (clientId && clientSecret) {
+      try {
+        return await getWizAccessToken();
+      } catch (err) {
+        logger.error(
+          "mcp-servers: Wiz OAuth token fetch failed — skipping Wiz on this turn",
+          "mcp-servers",
+          {
+            mcpServer: "wiz",
+            errorMessage: err instanceof Error ? err.message : String(err),
+          },
+        );
+        return undefined;
+      }
+    }
+
+    // Legacy fallback (deprecated). Remove in the next release
+    // once operators have migrated to the OAuth flow.
+    const legacy = await getToolSecret("WIZ_MCP_TOKEN");
+    if (legacy) {
+      warnLegacyTokenOnce();
+      return legacy;
+    }
+    return undefined;
   },
   getUrl: async () => {
     if (env.MOCK_MODE) return undefined; // see TODO above
-    return getToolSecret("WIZ_MCP_URL");
+    const configured = await getToolSecret("WIZ_MCP_URL");
+    return configured ?? WIZ_MCP_URL_DEFAULT;
   },
 };
 

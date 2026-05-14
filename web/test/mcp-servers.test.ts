@@ -1,4 +1,4 @@
-import { describe, expect, it, beforeEach, afterEach, vi } from "vitest";
+import { describe, expect, it, beforeEach, vi } from "vitest";
 
 // Mock the secrets store so we can fully control what getMcpServers
 // reads without touching Key Vault or env vars across tests.
@@ -24,7 +24,7 @@ vi.mock("../lib/config", () => ({
 
 // Quiet logger — getMcpServers warns on credential lookup errors,
 // but we don't want test output noise. Hoisted spies so individual
-// tests can assert specific log calls (N2).
+// tests can assert specific log calls (N2 + deprecation warn).
 const { warnSpy, errorSpy, infoSpy, debugSpy } = vi.hoisted(() => ({
   warnSpy: vi.fn(),
   errorSpy: vi.fn(),
@@ -42,6 +42,18 @@ vi.mock("../lib/logger", () => ({
   hashPii: (s: string) => `hashed-${s}`,
 }));
 
+// Mock wiz-auth — the registry calls getWizAccessToken on the
+// preferred path. We return a stub bearer (or throw) per test.
+// WIZ_ALLOWED_HOST_RE re-exports through mcp-servers, so the live
+// regex still gates the MCP URL check.
+const { getWizAccessTokenMock } = vi.hoisted(() => ({
+  getWizAccessTokenMock: vi.fn<() => Promise<string>>(),
+}));
+vi.mock("../lib/wiz-auth", () => ({
+  getWizAccessToken: getWizAccessTokenMock,
+  WIZ_ALLOWED_HOST_RE: /^[a-z0-9][a-z0-9.-]*\.wiz\.io$/i,
+}));
+
 import {
   getMcpServers,
   enforceMcpToolAccess,
@@ -56,51 +68,74 @@ beforeEach(() => {
   errorSpy.mockClear();
   infoSpy.mockClear();
   debugSpy.mockClear();
+  getWizAccessTokenMock.mockReset();
 });
 
-// ── getMcpServers ────────────────────────────────────────────
+// ── getMcpServers — service-account OAuth path ───────────────
 
-describe("getMcpServers", () => {
-  it("returns empty when WIZ_MCP_URL is unset", async () => {
-    secretsState.WIZ_MCP_TOKEN = "tok";
+describe("getMcpServers (service-account OAuth)", () => {
+  it("returns empty when no creds are configured (no OAuth, no legacy)", async () => {
     const servers = await getMcpServers("admin");
     expect(servers).toEqual([]);
   });
 
-  it("returns empty when WIZ_MCP_TOKEN is unset", async () => {
-    secretsState.WIZ_MCP_URL = "https://test.wiz.io/mcp";
+  it("returns empty when only WIZ_CLIENT_ID is set", async () => {
+    secretsState.WIZ_CLIENT_ID = "c";
     const servers = await getMcpServers("admin");
     expect(servers).toEqual([]);
   });
 
-  it("returns the Wiz server when both env vars resolve and role is admin", async () => {
+  it("returns the Wiz server when service-account creds resolve and role is admin", async () => {
+    secretsState.WIZ_CLIENT_ID = "c";
+    secretsState.WIZ_CLIENT_SECRET = "s";
+    secretsState.WIZ_AUTH_URL = "https://auth.app.wiz.io/oauth/token";
     secretsState.WIZ_MCP_URL = "https://test.wiz.io/mcp";
-    secretsState.WIZ_MCP_TOKEN = "secret-token";
+    getWizAccessTokenMock.mockResolvedValue("oauth-bearer-T1");
+
     const servers = await getMcpServers("admin");
     expect(servers).toHaveLength(1);
     expect(servers[0]).toMatchObject({
       type: "url",
       name: "wiz",
       url: "https://test.wiz.io/mcp",
-      authorization_token: "secret-token",
+      authorization_token: "oauth-bearer-T1",
     });
+    expect(getWizAccessTokenMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("defaults WIZ_MCP_URL to https://mcp.app.wiz.io when unset", async () => {
+    secretsState.WIZ_CLIENT_ID = "c";
+    secretsState.WIZ_CLIENT_SECRET = "s";
+    secretsState.WIZ_AUTH_URL = "https://auth.app.wiz.io/oauth/token";
+    getWizAccessTokenMock.mockResolvedValue("oauth-bearer-T1");
+
+    const servers = await getMcpServers("admin");
+    expect(servers).toHaveLength(1);
+    expect(servers[0].url).toBe("https://mcp.app.wiz.io");
   });
 
   it("omits tool_configuration for admin (allow-all)", async () => {
+    secretsState.WIZ_CLIENT_ID = "c";
+    secretsState.WIZ_CLIENT_SECRET = "s";
+    secretsState.WIZ_AUTH_URL = "https://auth.app.wiz.io/oauth/token";
     secretsState.WIZ_MCP_URL = "https://test.wiz.io/mcp";
-    secretsState.WIZ_MCP_TOKEN = "secret-token";
+    getWizAccessTokenMock.mockResolvedValue("oauth-bearer-T1");
+
     const servers = await getMcpServers("admin");
     expect(servers[0].tool_configuration).toBeUndefined();
   });
 
   it("includes literal expanded allowed_tools for reader role", async () => {
+    secretsState.WIZ_CLIENT_ID = "c";
+    secretsState.WIZ_CLIENT_SECRET = "s";
+    secretsState.WIZ_AUTH_URL = "https://auth.app.wiz.io/oauth/token";
     secretsState.WIZ_MCP_URL = "https://test.wiz.io/mcp";
-    secretsState.WIZ_MCP_TOKEN = "secret-token";
+    getWizAccessTokenMock.mockResolvedValue("oauth-bearer-T1");
+
     const servers = await getMcpServers("reader");
     expect(servers).toHaveLength(1);
     const allowed = servers[0].tool_configuration?.allowed_tools;
     expect(allowed).toBeDefined();
-    // Reader gets the read-only subset — no defend, no blast-radius
     expect(allowed).not.toContain("wiz_get_defend_threat");
     expect(allowed).not.toContain("wiz_get_blast_radius");
     expect(allowed).toContain("wiz_get_issues");
@@ -108,8 +143,12 @@ describe("getMcpServers", () => {
   });
 
   it("triage role gets the same scoping as reader (Logic Apps inherit)", async () => {
+    secretsState.WIZ_CLIENT_ID = "c";
+    secretsState.WIZ_CLIENT_SECRET = "s";
+    secretsState.WIZ_AUTH_URL = "https://auth.app.wiz.io/oauth/token";
     secretsState.WIZ_MCP_URL = "https://test.wiz.io/mcp";
-    secretsState.WIZ_MCP_TOKEN = "secret-token";
+    getWizAccessTokenMock.mockResolvedValue("oauth-bearer-T1");
+
     const readerServers = await getMcpServers("reader");
     const triageServers = await getMcpServers("triage");
     expect(triageServers[0].tool_configuration?.allowed_tools).toEqual(
@@ -117,37 +156,69 @@ describe("getMcpServers", () => {
     );
   });
 
-  it("fails open (returns empty) when the secrets store throws", async () => {
+  it("skips Wiz (returns empty) when getWizAccessToken throws — fail-open", async () => {
+    secretsState.WIZ_CLIENT_ID = "c";
+    secretsState.WIZ_CLIENT_SECRET = "s";
+    secretsState.WIZ_AUTH_URL = "https://auth.app.wiz.io/oauth/token";
     secretsState.WIZ_MCP_URL = "https://test.wiz.io/mcp";
-    // Force getToolSecret to throw on the token lookup
-    vi.doMock("../lib/secrets", () => ({
-      getToolSecret: async (name: string) => {
-        if (name === "WIZ_MCP_TOKEN") throw new Error("Cosmos timeout");
-        return secretsState[name];
-      },
-    }));
-    vi.resetModules();
-    const { getMcpServers: reload } = await import("../lib/mcp-servers");
-    const servers = await reload("admin");
+    getWizAccessTokenMock.mockRejectedValue(new Error("token endpoint down"));
+
+    const servers = await getMcpServers("admin");
     expect(servers).toEqual([]);
+    expect(errorSpy).toHaveBeenCalledWith(
+      expect.stringContaining("Wiz OAuth token fetch failed"),
+      expect.any(String),
+      expect.objectContaining({ mcpServer: "wiz", errorMessage: "token endpoint down" }),
+    );
+  });
+});
+
+// ── Backward-compat: legacy WIZ_MCP_TOKEN path ───────────────
+
+describe("getMcpServers (legacy WIZ_MCP_TOKEN fallback)", () => {
+  it("uses the legacy bearer when OAuth creds are absent and emits a deprecation warn", async () => {
+    secretsState.WIZ_MCP_URL = "https://test.wiz.io/mcp";
+    secretsState.WIZ_MCP_TOKEN = "legacy-static-bearer";
+
+    const servers = await getMcpServers("admin");
+    expect(servers).toHaveLength(1);
+    expect(servers[0].authorization_token).toBe("legacy-static-bearer");
+    expect(getWizAccessTokenMock).not.toHaveBeenCalled();
+
+    const deprecationCall = warnSpy.mock.calls.find(
+      (args) => typeof args[0] === "string" && args[0].includes("deprecated WIZ_MCP_TOKEN"),
+    );
+    expect(deprecationCall).toBeDefined();
+  });
+
+  it("prefers OAuth over the legacy token when both are configured", async () => {
+    secretsState.WIZ_CLIENT_ID = "c";
+    secretsState.WIZ_CLIENT_SECRET = "s";
+    secretsState.WIZ_AUTH_URL = "https://auth.app.wiz.io/oauth/token";
+    secretsState.WIZ_MCP_URL = "https://test.wiz.io/mcp";
+    secretsState.WIZ_MCP_TOKEN = "legacy-static-bearer";
+    getWizAccessTokenMock.mockResolvedValue("oauth-bearer-T1");
+
+    const servers = await getMcpServers("admin");
+    expect(servers[0].authorization_token).toBe("oauth-bearer-T1");
+    expect(getWizAccessTokenMock).toHaveBeenCalledTimes(1);
   });
 });
 
 // ── Mock-mode behaviour ──────────────────────────────────────
-// In the current iteration of the integration, mock mode disables
-// Wiz unconditionally — the fixture short-circuit it would otherwise
-// pair with is deferred to a follow-up. These tests pin the
-// "no-Wiz-in-mock" guarantee so the deferral is testable and so a
-// future contributor wiring fixtures back in updates these cases
-// in lockstep with the registry change.
 
 describe("getMcpServers — mock mode disables Wiz", () => {
-  it("returns empty in mock mode even when both env vars are set", async () => {
+  it("returns empty in mock mode even when service-account creds are set", async () => {
     envState.MOCK_MODE = true;
+    secretsState.WIZ_CLIENT_ID = "c";
+    secretsState.WIZ_CLIENT_SECRET = "s";
+    secretsState.WIZ_AUTH_URL = "https://auth.app.wiz.io/oauth/token";
     secretsState.WIZ_MCP_URL = "https://test.wiz.io/mcp";
-    secretsState.WIZ_MCP_TOKEN = "tok";
+    getWizAccessTokenMock.mockResolvedValue("oauth-bearer-T1");
+
     const servers = await getMcpServers("admin");
     expect(servers).toEqual([]);
+    expect(getWizAccessTokenMock).not.toHaveBeenCalled();
   });
 
   it("returns empty in mock mode when env vars are unset", async () => {
@@ -165,9 +236,6 @@ describe("enforceMcpToolAccess", () => {
   });
 
   it("returns false when the role isn't allowed on the server", () => {
-    // The Wiz server allows admin/reader/triage — there is no role
-    // outside that union today, but make sure a not-listed role
-    // can't slip through. Cast through unknown for the test.
     expect(
       enforceMcpToolAccess("nobody" as unknown as "admin", "wiz", "wiz_get_issues"),
     ).toBe(false);
@@ -194,9 +262,7 @@ describe("enforceMcpToolAccess", () => {
     expect(enforceMcpToolAccess("triage", "wiz", "wiz_get_defend_threat")).toBe(false);
   });
 
-  // M5: admin allow-all is still bounded by the catalogue. Anthropic
-  // invoking a tool name not in WIZ_TOOL_CATALOGUE must be flagged
-  // as a divergence, not silently approved.
+  // M5: admin allow-all is still bounded by the catalogue.
   it("denies admin invocation of a tool not in the catalogue (M5)", () => {
     expect(enforceMcpToolAccess("admin", "wiz", "wiz_delete_everything")).toBe(false);
   });
@@ -208,43 +274,51 @@ describe("enforceMcpToolAccess", () => {
   });
 });
 
-// ── B3: runtime HTTPS enforcement ────────────────────────────
+// ── B3: runtime HTTPS enforcement on the MCP URL ─────────────
 
 describe("getMcpServers — HTTPS enforcement (B3)", () => {
+  beforeEach(() => {
+    secretsState.WIZ_CLIENT_ID = "c";
+    secretsState.WIZ_CLIENT_SECRET = "s";
+    secretsState.WIZ_AUTH_URL = "https://auth.app.wiz.io/oauth/token";
+    getWizAccessTokenMock.mockResolvedValue("oauth-bearer-T1");
+  });
+
   it("returns empty when WIZ_MCP_URL uses http://", async () => {
     secretsState.WIZ_MCP_URL = "http://test.wiz.io/mcp";
-    secretsState.WIZ_MCP_TOKEN = "tok";
     const servers = await getMcpServers("admin");
     expect(servers).toEqual([]);
   });
 
   it("returns empty when WIZ_MCP_URL is malformed", async () => {
     secretsState.WIZ_MCP_URL = "not a valid url at all";
-    secretsState.WIZ_MCP_TOKEN = "tok";
     const servers = await getMcpServers("admin");
     expect(servers).toEqual([]);
   });
 
   it("returns the server when WIZ_MCP_URL uses https://", async () => {
     secretsState.WIZ_MCP_URL = "https://test.wiz.io/mcp";
-    secretsState.WIZ_MCP_TOKEN = "tok";
     const servers = await getMcpServers("admin");
     expect(servers).toHaveLength(1);
+  });
+
+  it("rejects WIZ_MCP_URL whose host is not in the allowlist", async () => {
+    secretsState.WIZ_MCP_URL = "https://attacker.example.com/mcp";
+    const servers = await getMcpServers("admin");
+    expect(servers).toEqual([]);
   });
 });
 
 // ── N2: empty pattern-expansion produces a warn ──────────────
 
 describe("getMcpServers — empty pattern expansion warns (N2)", () => {
-  // We can't easily inject a typo'd pattern without rewriting the
-  // module's role table, so this test verifies the warn would fire
-  // by reaching into the public API: forcing the pattern path to
-  // expand-to-empty would require a registry override. Instead,
-  // verify the happy path produces NO N2 warn so we'd notice a
-  // regression that fires it spuriously.
   it("does not warn when reader's catalogued patterns expand cleanly", async () => {
+    secretsState.WIZ_CLIENT_ID = "c";
+    secretsState.WIZ_CLIENT_SECRET = "s";
+    secretsState.WIZ_AUTH_URL = "https://auth.app.wiz.io/oauth/token";
     secretsState.WIZ_MCP_URL = "https://test.wiz.io/mcp";
-    secretsState.WIZ_MCP_TOKEN = "tok";
+    getWizAccessTokenMock.mockResolvedValue("oauth-bearer-T1");
+
     await getMcpServers("reader");
     const n2Calls = warnSpy.mock.calls.filter((args) =>
       typeof args[0] === "string" && args[0].includes("expanded to zero catalogue tools"),

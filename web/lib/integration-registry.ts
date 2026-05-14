@@ -265,18 +265,46 @@ export const INTEGRATIONS: IntegrationInfo[] = [
     ],
     secrets: [
       {
-        key: "WIZ_MCP_URL",
-        label: "MCP server URL",
+        key: "WIZ_CLIENT_ID",
+        label: "Client ID",
         description:
-          "HTTPS URL of the Wiz MCP server (streamable HTTP transport).",
+          "Wiz Service Account client identifier. Create a Service Account in Wiz Settings > Service Accounts; copy the Client ID. Stored in Key Vault (`wiz-client-id`).",
         required: true,
       },
       {
-        key: "WIZ_MCP_TOKEN",
-        label: "Bearer token",
+        key: "WIZ_CLIENT_SECRET",
+        label: "Client Secret",
         description:
-          "Bearer token for authenticating to the Wiz MCP server. Prefer Key Vault in production (secret name `wiz-mcp-token`).",
+          "Wiz Service Account client secret (shown once at creation; rotate periodically). Used in the OAuth2 client_credentials exchange against WIZ_AUTH_URL. Stored in Key Vault (`wiz-client-secret`).",
         required: true,
+      },
+      {
+        key: "WIZ_AUTH_URL",
+        label: "Auth URL",
+        description:
+          "Wiz OAuth2 token endpoint, e.g. https://auth.app.wiz.io/oauth/token (this tenant) or https://auth.wiz.io/oauth/token (Wiz default). Confirm the exact value in your Wiz Service Account setup page — the host varies across Wiz deployments.",
+        required: true,
+      },
+      {
+        key: "WIZ_API_URL",
+        label: "API URL",
+        description:
+          "Wiz GraphQL endpoint, e.g. https://api.us68.app.wiz.io/graphql. The data-center label (us68) is parsed from this URL for audit-event tagging.",
+        required: true,
+      },
+      {
+        key: "WIZ_MCP_URL",
+        label: "MCP server URL (optional)",
+        description:
+          "HTTPS URL of the Wiz MCP server. Defaults to https://mcp.app.wiz.io if left unset — only override if your Wiz tenant uses a private MCP endpoint.",
+        required: false,
+      },
+      {
+        key: "WIZ_MCP_TOKEN",
+        label: "Bearer token (deprecated)",
+        description:
+          "DEPRECATED. Static bearer token for the Wiz MCP server. Kept as a backward-compat fallback for one release while operators migrate to the Service Account OAuth flow above. Clear this value after rotating to WIZ_CLIENT_ID / WIZ_CLIENT_SECRET.",
+        required: false,
       },
     ],
   },

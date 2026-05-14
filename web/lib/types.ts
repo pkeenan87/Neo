@@ -64,10 +64,18 @@ export interface EnvConfig {
   AI_SEARCH_ALLOW_DISABLE_THRESHOLD: boolean;
   // Wiz MCP Server — documented here for env-schema visibility,
   // but the runtime path reads these via `getToolSecret` (Key
-  // Vault → env-var fallback). Either both are set or Wiz is
-  // gracefully skipped from the per-role MCP server list.
+  // Vault → env-var fallback). The new service-account auth
+  // flow (preferred) needs WIZ_CLIENT_ID + WIZ_CLIENT_SECRET +
+  // WIZ_AUTH_URL; WIZ_API_URL is required for upcoming direct
+  // GraphQL calls and feeds tenant-DC tagging today.
+  // WIZ_MCP_TOKEN is deprecated, kept for one release as a
+  // backward-compat path while operators migrate.
   WIZ_MCP_URL: string | undefined;
   WIZ_MCP_TOKEN: string | undefined;
+  WIZ_CLIENT_ID: string | undefined;
+  WIZ_CLIENT_SECRET: string | undefined;
+  WIZ_AUTH_URL: string | undefined;
+  WIZ_API_URL: string | undefined;
 }
 
 // ─────────────────────────────────────────────────────────────
