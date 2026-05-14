@@ -135,12 +135,21 @@ const PROBES: Record<string, () => Promise<void>> = {
         `WIZ_MCP_URL hostname '${parsed.hostname}' is not in the allowlist — Wiz hosts must end in .wiz.io`,
       );
     }
+    // SECURITY: reconstruct the URL from validated components
+    // before the fetch. The hostname has just passed
+    // WIZ_ALLOWED_HOST_RE; protocol is pinned to https. Building
+    // the request URL from these parts (instead of forwarding the
+    // operator-supplied `mcpUrl` string directly) makes the SSRF
+    // sanitization legible to CodeQL's taint analysis, which only
+    // recognises construction-from-validated-parts — not regex
+    // assertions — as a sanitiser for `js/request-forgery`.
+    const safeMcpUrl = `https://${parsed.hostname}${parsed.pathname}${parsed.search}`;
     // Cheapest possible auth check — the streamable HTTP MCP
     // transport accepts an OPTIONS request to confirm the server
     // is reachable with the supplied credentials. We deliberately
     // do not run a representative graph query here (per the spec's
     // open-question answer).
-    const res = await fetch(mcpUrl, {
+    const res = await fetch(safeMcpUrl, {
       method: "OPTIONS",
       // SECURITY: refuse to follow redirects so a 3xx can never forward the bearer token.
       redirect: "error",

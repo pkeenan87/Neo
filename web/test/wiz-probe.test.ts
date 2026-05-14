@@ -157,7 +157,11 @@ describe("Wiz integration probe — OAuth happy path", () => {
     await callProbe();
     expect(fetchMock).toHaveBeenCalledTimes(1);
     const [url] = fetchMock.mock.calls[0];
-    expect(url).toBe("https://mcp.app.wiz.io");
+    // The probe reconstructs the URL from validated parts
+    // (parsed.hostname + parsed.pathname + parsed.search) before
+    // the fetch, which normalises an empty pathname to "/".
+    // Semantically equivalent — HTTP requests always send a path.
+    expect(url).toBe("https://mcp.app.wiz.io/");
   });
 });
 
