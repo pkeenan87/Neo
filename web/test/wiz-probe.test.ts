@@ -69,7 +69,7 @@ function setOAuthCreds(): void {
   secretsState.WIZ_CLIENT_ID = "test-client";
   secretsState.WIZ_CLIENT_SECRET = "test-secret";
   secretsState.WIZ_AUTH_URL = "https://auth.app.wiz.io/oauth/token";
-  secretsState.WIZ_MCP_URL = "https://test.wiz.io/mcp";
+  secretsState.WIZ_MCP_URL = "https://mcp.app.wiz.io";
 }
 
 // ── Authorization ────────────────────────────────────────────
@@ -129,7 +129,7 @@ describe("Wiz integration probe — OAuth happy path", () => {
     expect(getWizAccessTokenMock).toHaveBeenCalledTimes(1);
     expect(fetchMock).toHaveBeenCalledTimes(1);
     const [url, init] = fetchMock.mock.calls[0];
-    expect(url).toBe("https://test.wiz.io/mcp");
+    expect(url).toBe("https://mcp.app.wiz.io");
     expect((init as RequestInit).method).toBe("OPTIONS");
     expect((init as RequestInit).redirect).toBe("error");
     const headers = (init as RequestInit).headers as Record<string, string>;
@@ -157,11 +157,7 @@ describe("Wiz integration probe — OAuth happy path", () => {
     await callProbe();
     expect(fetchMock).toHaveBeenCalledTimes(1);
     const [url] = fetchMock.mock.calls[0];
-    // The probe reconstructs the URL from validated parts
-    // (parsed.hostname + parsed.pathname + parsed.search) before
-    // the fetch, which normalises an empty pathname to "/".
-    // Semantically equivalent — HTTP requests always send a path.
-    expect(url).toBe("https://mcp.app.wiz.io/");
+    expect(url).toBe("https://mcp.app.wiz.io");
   });
 });
 
@@ -223,19 +219,19 @@ describe("Wiz integration probe — MCP failure surfacing", () => {
     expect(body.error).toMatch(/HTTP 503/);
   });
 
-  it("rejects a non-https MCP URL up front (no token egress on plaintext)", async () => {
+  it("rejects a non-https MCP URL (literal allowlist excludes http://)", async () => {
     setOAuthCreds();
-    secretsState.WIZ_MCP_URL = "http://test.wiz.io/mcp";
+    secretsState.WIZ_MCP_URL = "http://mcp.app.wiz.io";
     getWizAccessTokenMock.mockResolvedValue("oauth-bearer-T1");
 
     const res = await callProbe();
     const body = await res.json();
     expect(body.success).toBe(false);
-    expect(body.error).toMatch(/https/i);
+    expect(body.error).toMatch(/probe allowlist/);
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  it("rejects an MCP URL whose host is not in the allowlist", async () => {
+  it("rejects an MCP URL whose host is not in the literal probe allowlist", async () => {
     setOAuthCreds();
     secretsState.WIZ_MCP_URL = "https://attacker.example.com/mcp";
     getWizAccessTokenMock.mockResolvedValue("oauth-bearer-T1");
@@ -243,7 +239,7 @@ describe("Wiz integration probe — MCP failure surfacing", () => {
     const res = await callProbe();
     const body = await res.json();
     expect(body.success).toBe(false);
-    expect(body.error).toMatch(/not in the allowlist/);
+    expect(body.error).toMatch(/probe allowlist/);
     expect(fetchMock).not.toHaveBeenCalled();
   });
 });
@@ -253,7 +249,7 @@ describe("Wiz integration probe — MCP failure surfacing", () => {
 describe("Wiz integration probe — legacy WIZ_MCP_TOKEN fallback", () => {
   it("uses WIZ_MCP_TOKEN as the bearer when no OAuth creds are configured", async () => {
     secretsState.WIZ_MCP_TOKEN = "legacy-static-bearer";
-    secretsState.WIZ_MCP_URL = "https://test.wiz.io/mcp";
+    secretsState.WIZ_MCP_URL = "https://mcp.app.wiz.io";
     fetchMock.mockResolvedValue(new Response(null, { status: 200 }));
 
     const res = await callProbe();
@@ -269,7 +265,7 @@ describe("Wiz integration probe — legacy WIZ_MCP_TOKEN fallback", () => {
 
   it("surfaces an MCP 401 with the dual-path hint message", async () => {
     secretsState.WIZ_MCP_TOKEN = "legacy-static-bearer";
-    secretsState.WIZ_MCP_URL = "https://test.wiz.io/mcp";
+    secretsState.WIZ_MCP_URL = "https://mcp.app.wiz.io";
     fetchMock.mockResolvedValue(new Response("Unauthorized", { status: 401 }));
 
     const res = await callProbe();

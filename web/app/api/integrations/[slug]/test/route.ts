@@ -3,7 +3,7 @@ import { resolveAuth } from "@/lib/auth-helpers";
 import { getIntegration } from "@/lib/integration-registry";
 import { getAzureToken, getMSGraphToken } from "@/lib/auth";
 import { TL_INSTANCE_RE } from "@/lib/executors";
-import { WIZ_ALLOWED_HOST_RE, getWizAccessToken } from "@/lib/wiz-auth";
+import { getWizAccessToken } from "@/lib/wiz-auth";
 import { getToolSecret } from "@/lib/secrets";
 
 // SECURITY: all outbound probe fetches need a timeout. Node's global
@@ -89,7 +89,7 @@ const PROBES: Record<string, () => Promise<void>> = {
     const clientSecret = await getToolSecret("WIZ_CLIENT_SECRET");
     const authUrl = await getToolSecret("WIZ_AUTH_URL");
     const legacyToken = await getToolSecret("WIZ_MCP_TOKEN");
-    const mcpUrl = (await getToolSecret("WIZ_MCP_URL")) ?? "https://mcp.app.wiz.io";
+    const configuredMcpUrl = (await getToolSecret("WIZ_MCP_URL"))?.trim();
 
     // Branch on which credential set is configured. Preferred:
     // service-account OAuth via WIZ_CLIENT_ID + WIZ_CLIENT_SECRET
@@ -118,38 +118,34 @@ const PROBES: Record<string, () => Promise<void>> = {
       );
     }
 
-    // Validate the MCP URL up front. Same regex as the runtime
-    // path so the probe and the agent loop reject the same set
-    // of misconfigurations.
-    let parsed: URL;
-    try {
-      parsed = new URL(mcpUrl);
-    } catch {
-      throw new Error("WIZ_MCP_URL is not a valid URL");
-    }
-    if (parsed.protocol !== "https:") {
-      throw new Error("WIZ_MCP_URL must use https:// (refusing to send bearer token over plaintext)");
-    }
-    if (!WIZ_ALLOWED_HOST_RE.test(parsed.hostname)) {
+    // SECURITY: enforce a LITERAL allowlist on the probe URL.
+    // CodeQL's `js/request-forgery` rule rejects regex `.test()`
+    // as a sanitiser for the host part of an outbound URL — but
+    // accepts membership in a Set of literal strings, because
+    // the taint analyser can then prove the URL is one of N
+    // specific values. The runtime agent-loop path
+    // (mcp-servers.ts) still uses the broader WIZ_ALLOWED_HOST_RE
+    // regex for flexibility — it doesn't fetch from Neo's code,
+    // so it isn't a SSRF sink. The probe IS such a sink, so we
+    // pin it to a literal allowlist here. If a tenant ever needs
+    // a private MCP host, add it explicitly to WIZ_MCP_PROBE_ALLOWLIST.
+    const WIZ_MCP_PROBE_ALLOWLIST = new Set<string>([
+      "https://mcp.app.wiz.io",
+    ]);
+    const mcpUrl = configuredMcpUrl && configuredMcpUrl.length > 0
+      ? configuredMcpUrl
+      : "https://mcp.app.wiz.io";
+    if (!WIZ_MCP_PROBE_ALLOWLIST.has(mcpUrl)) {
       throw new Error(
-        `WIZ_MCP_URL hostname '${parsed.hostname}' is not in the allowlist — Wiz hosts must end in .wiz.io`,
+        `WIZ_MCP_URL '${mcpUrl}' is not in the probe allowlist. Today the probe targets https://mcp.app.wiz.io only; if your tenant uses a private MCP host, extend WIZ_MCP_PROBE_ALLOWLIST in route.ts.`,
       );
     }
-    // SECURITY: reconstruct the URL from validated components
-    // before the fetch. The hostname has just passed
-    // WIZ_ALLOWED_HOST_RE; protocol is pinned to https. Building
-    // the request URL from these parts (instead of forwarding the
-    // operator-supplied `mcpUrl` string directly) makes the SSRF
-    // sanitization legible to CodeQL's taint analysis, which only
-    // recognises construction-from-validated-parts — not regex
-    // assertions — as a sanitiser for `js/request-forgery`.
-    const safeMcpUrl = `https://${parsed.hostname}${parsed.pathname}${parsed.search}`;
     // Cheapest possible auth check — the streamable HTTP MCP
     // transport accepts an OPTIONS request to confirm the server
     // is reachable with the supplied credentials. We deliberately
     // do not run a representative graph query here (per the spec's
     // open-question answer).
-    const res = await fetch(safeMcpUrl, {
+    const res = await fetch(mcpUrl, {
       method: "OPTIONS",
       // SECURITY: refuse to follow redirects so a 3xx can never forward the bearer token.
       redirect: "error",
