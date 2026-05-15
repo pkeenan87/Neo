@@ -1,7 +1,9 @@
 import { env, REMEDIATE_MAX_EXPLICIT_MESSAGES } from "./config";
 import { getAzureToken, getMSGraphToken, generateSecurePassword } from "./auth";
+import { getInfosecAccessToken } from "./infosec-auth";
+import { getMcpClient } from "./mcp-client";
 import { getToolSecret } from "./secrets";
-import { logger, hashPii } from "./logger";
+import { logger, hashPii, getLogContext } from "./logger";
 import { queryCsv } from "./csv-query-executor";
 import { canUseTool, ToolPermissionError, type Role } from "./permissions";
 import type {
@@ -3653,6 +3655,226 @@ async function maybeResolveBlobRefContent(
   }
 }
 
+// ─────────────────────────────────────────────────────────────
+//  Information Security Incident Response — Logic App via MCP
+//
+//  Six destructive executors dispatched through Neo's local tool
+//  pipeline (not Anthropic's mcp_servers connector) so the
+//  confirmation gate fires before any Logic App call. Auth uses
+//  Entra ID client_credentials via infosec-auth.ts; transport is
+//  the Streamable HTTP MCP client at mcp-client.ts. See
+//  _plans/infosec-incident-response-mcp.md.
+//
+//  Every executor:
+//   1. Pulls `responder` from getLogContext().userName. Refuses to
+//      fire if absent — destructive actions without an accountable
+//      human don't happen.
+//   2. Validates Neo-side input shape (IP / hash / email / domain
+//      shape) — the Logic App's JSON Schemas have no `required`
+//      fields and no shape constraints, so Neo enforces.
+//   3. Mock-mode short-circuits to a synthetic fixture.
+//   4. Live-mode resolves the MCP client (per-URL singleton) and
+//      invokes callTool with the kebab-case Logic App tool name.
+// ─────────────────────────────────────────────────────────────
+
+interface InfosecBlockInput {
+  ioc?: string;
+  notes?: string;
+}
+
+interface InfosecRequestSslbypassInput {
+  reportedDomain?: string;
+  submitDate?: string;
+}
+
+const INFOSEC_DOMAIN_RE = /^[a-z0-9][a-z0-9.-]*\.[a-z]{2,}$/i;
+const INFOSEC_HEX_RE = /^[a-fA-F0-9]+$/;
+const INFOSEC_HASH_LENGTHS = new Set([32, 40, 64]); // MD5, SHA1, SHA256
+// ASCII control characters (0x00–0x1F + 0x7F) — invalid in any
+// well-formed identifier (UPN, email, domain, GP id). Used to keep
+// log-injection / audit-poisoning out of values forwarded to the
+// Logic App and recorded in its audit trail.
+const INFOSEC_CONTROL_CHAR_RE = /[\x00-\x1F\x7F]/;
+// Strict ISO-8601 (`YYYY-MM-DD` or `YYYY-MM-DDTHH:MM:SS[.fff]Z|±HH:MM`).
+// We do a regex match first to reject obviously-malformed inputs,
+// then a round-trip parse-and-reformat below to catch valid-looking
+// but impossible dates (e.g. 2026-02-30 which V8 silently rolls
+// forward to 2026-03-02). Used by request_sslbypass.submitDate.
+const INFOSEC_ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}(T\d{2}:\d{2}(:\d{2}(\.\d{1,9})?)?(Z|[+-]\d{2}:\d{2})?)?$/;
+
+function resolveResponder(toolName: string): string {
+  const ctx = getLogContext();
+  const responder = ctx?.userName?.trim();
+  if (!responder) {
+    throw new Error(
+      `Destructive Infosec tool '${toolName}' requires an authenticated user identity, but no responder is in scope. ` +
+        `This typically means the executor was invoked outside an authenticated request context (e.g. a background job).`,
+    );
+  }
+  return responder;
+}
+
+async function callInfosecLogicAppTool(
+  toolName: string,
+  kebabName: string,
+  payload: Record<string, unknown>,
+): Promise<unknown> {
+  if (env.MOCK_MODE) {
+    const responder = typeof payload.responder === "string" ? payload.responder : undefined;
+    return {
+      status: "submitted",
+      mocked: true,
+      tool: kebabName,
+      payload,
+      responder,
+      runId: `mock-run-${Date.now()}`,
+    };
+  }
+
+  // Key Vault → env-var precedence (same pattern as the other three
+  // Infosec secrets in infosec-auth.ts). An operator who stores the
+  // URL only in Key Vault — the documented preferred path — must work.
+  // See ultra-review HIGH #2.
+  const url = (await getToolSecret("INFOSEC_LOGIC_APP_MCP_URL")) ?? env.INFOSEC_LOGIC_APP_MCP_URL;
+  if (!url) {
+    throw new Error(
+      `Cannot execute '${toolName}': INFOSEC_LOGIC_APP_MCP_URL is not configured. Configure via /integrations.`,
+    );
+  }
+
+  const client = getMcpClient(url, {
+    type: "bearer",
+    tokenFactory: getInfosecAccessToken,
+  });
+  const result = await client.callTool(kebabName, payload);
+
+  // Surface `responder` and `correlationHeaders` in the result so
+  // agent.ts's `tool_execution` audit emit can pick them up via
+  // extractToolAuditExtras. Without this the audit event lands
+  // without the security-critical "who authorized this" field —
+  // see ultra-review HIGH #3.
+  const responder = typeof payload.responder === "string" ? payload.responder : undefined;
+  return {
+    status: result.isError ? "error" : "submitted",
+    content: result.content,
+    correlationHeaders: result.correlationHeaders,
+    responder,
+    tool: kebabName,
+  };
+}
+
+function validateBlockInput(toolName: string, input: InfosecBlockInput): { ioc: string; notes: string } {
+  const ioc = input.ioc?.trim();
+  const notes = input.notes?.trim();
+  if (!ioc) throw new Error(`${toolName}: missing required 'ioc' field`);
+  if (!notes) throw new Error(`${toolName}: missing required 'notes' field (audit justification)`);
+  return { ioc, notes };
+}
+
+async function block_domain(input: InfosecBlockInput): Promise<unknown> {
+  const { ioc, notes } = validateBlockInput("block_domain", input);
+  if (ioc.includes("://") || /\s/.test(ioc) || !INFOSEC_DOMAIN_RE.test(ioc)) {
+    throw new Error(`block_domain: '${ioc}' is not a valid domain (expected e.g. 'malicious-c2.example.com', no protocol, no whitespace)`);
+  }
+  const responder = resolveResponder("block_domain");
+  return callInfosecLogicAppTool("block_domain", "block-domain", { responder, ioc, notes });
+}
+
+async function block_email(input: InfosecBlockInput): Promise<unknown> {
+  const { ioc, notes } = validateBlockInput("block_email", input);
+  // Reject whitespace and ASCII control chars before the email-shape
+  // check — these aren't legitimate in any RFC-5321 address and would
+  // fragment downstream audit lines / SIEM consumers if forwarded.
+  // See ultra-review MEDIUM #9.
+  if (/\s/.test(ioc) || INFOSEC_CONTROL_CHAR_RE.test(ioc)) {
+    throw new Error(`block_email: '${ioc}' contains whitespace or control characters`);
+  }
+  const at = ioc.indexOf("@");
+  if (at <= 0 || at !== ioc.lastIndexOf("@") || !ioc.slice(at + 1).includes(".")) {
+    throw new Error(`block_email: '${ioc}' is not a valid email address`);
+  }
+  const responder = resolveResponder("block_email");
+  return callInfosecLogicAppTool("block_email", "block-email", { responder, ioc, notes });
+}
+
+async function block_globalprotect(input: InfosecBlockInput): Promise<unknown> {
+  const { ioc, notes } = validateBlockInput("block_globalprotect", input);
+  // GlobalProtect identifiers are intentionally unrestricted in
+  // shape (could be a UPN, a device ID, an IP) — but ASCII control
+  // characters and NULs aren't legitimate in any of those forms and
+  // would fragment downstream audit lines. See ultra-review LOW
+  // (block_globalprotect control chars).
+  if (!ioc) throw new Error(`block_globalprotect: 'ioc' must be a non-empty identifier`);
+  if (INFOSEC_CONTROL_CHAR_RE.test(ioc)) {
+    throw new Error(`block_globalprotect: 'ioc' contains control characters`);
+  }
+  const responder = resolveResponder("block_globalprotect");
+  return callInfosecLogicAppTool("block_globalprotect", "block-globalprotect", { responder, ioc, notes });
+}
+
+async function block_hash(input: InfosecBlockInput): Promise<unknown> {
+  const { ioc, notes } = validateBlockInput("block_hash", input);
+  if (!INFOSEC_HEX_RE.test(ioc) || !INFOSEC_HASH_LENGTHS.has(ioc.length)) {
+    throw new Error(
+      `block_hash: '${ioc}' is not a valid hex hash (expected MD5=32, SHA1=40, or SHA256=64 hex chars)`,
+    );
+  }
+  const responder = resolveResponder("block_hash");
+  return callInfosecLogicAppTool("block_hash", "block-hash", { responder, ioc, notes });
+}
+
+async function block_ipaddress(input: InfosecBlockInput): Promise<unknown> {
+  const { ioc, notes } = validateBlockInput("block_ipaddress", input);
+  // node:net's isIP returns 4, 6, or 0 (no match). The previous regex
+  // (`/^[0-9a-fA-F:]+$/`) accepted bare hex strings like MD5/SHA1/
+  // SHA256 hashes as "valid IPv6" — see ultra-review MEDIUM #5.
+  // net.isIP implements RFC 4291 / RFC 5952 semantics exactly.
+  if (isIP(ioc) === 0) {
+    throw new Error(`block_ipaddress: '${ioc}' is not a valid IPv4 or IPv6 address`);
+  }
+  const responder = resolveResponder("block_ipaddress");
+  return callInfosecLogicAppTool("block_ipaddress", "block-ipaddress", { responder, ioc, notes });
+}
+
+async function request_sslbypass(input: InfosecRequestSslbypassInput): Promise<unknown> {
+  const reportedDomain = input.reportedDomain?.trim();
+  if (!reportedDomain) throw new Error("request_sslbypass: missing required 'reportedDomain' field");
+  if (reportedDomain.includes("://") || /\s/.test(reportedDomain) || !INFOSEC_DOMAIN_RE.test(reportedDomain)) {
+    throw new Error(`request_sslbypass: '${reportedDomain}' is not a valid domain`);
+  }
+  let submitDate = input.submitDate?.trim();
+  if (!submitDate) {
+    submitDate = new Date().toISOString();
+  } else {
+    // Strict validation: regex check rejects obviously-malformed
+    // inputs ('1', '2026/13/01'); the round-trip parse-and-reformat
+    // catches valid-shape but impossible dates that V8 silently
+    // rolls forward (e.g. '2026-02-30' → 2026-03-02). See
+    // ultra-review MEDIUM #10.
+    if (!INFOSEC_ISO_DATE_RE.test(submitDate)) {
+      throw new Error(`request_sslbypass: 'submitDate' must be ISO-8601 (YYYY-MM-DD or YYYY-MM-DDTHH:MM:SSZ) — got '${submitDate}'`);
+    }
+    const parsed = new Date(submitDate);
+    if (Number.isNaN(parsed.getTime())) {
+      throw new Error(`request_sslbypass: 'submitDate' is not parseable as a date — got '${submitDate}'`);
+    }
+    // Round-trip: extract the date portion and confirm the parsed
+    // Date represents the same calendar day. V8 rolls '2026-02-30'
+    // into March; the round-trip catches that.
+    const datePart = submitDate.slice(0, 10);
+    const reformattedDate = parsed.toISOString().slice(0, 10);
+    if (datePart !== reformattedDate) {
+      throw new Error(`request_sslbypass: 'submitDate' is an impossible calendar date — '${submitDate}' rolls forward to ${reformattedDate}`);
+    }
+  }
+  const responder = resolveResponder("request_sslbypass");
+  return callInfosecLogicAppTool("request_sslbypass", "request-sslbypass", {
+    responder,
+    submitDate,
+    reportedDomain,
+  });
+}
+
 // ── Router ────────────────────────────────────────────────────
 
 const executors: Record<string, (input: Record<string, unknown>) => Promise<unknown>> = {
@@ -3713,6 +3935,13 @@ const executors: Record<string, (input: Record<string, unknown>) => Promise<unkn
   get_appomni_audit_logs: (input) => get_appomni_audit_logs(input as unknown as GetAppOmniAuditLogsInput),
   action_appomni_finding: (input) => action_appomni_finding(input as unknown as ActionAppOmniFindingInput),
   searchKnowledgeBase: (input) => searchKnowledgeBase(input as unknown as SearchKnowledgeBaseInput),
+  // Information Security Incident Response Logic App.
+  block_domain: (input) => block_domain(input as InfosecBlockInput),
+  block_email: (input) => block_email(input as InfosecBlockInput),
+  block_globalprotect: (input) => block_globalprotect(input as InfosecBlockInput),
+  block_hash: (input) => block_hash(input as InfosecBlockInput),
+  block_ipaddress: (input) => block_ipaddress(input as InfosecBlockInput),
+  request_sslbypass: (input) => request_sslbypass(input as InfosecRequestSslbypassInput),
 };
 
 export interface ExecuteToolContext {

@@ -76,6 +76,21 @@ export interface EnvConfig {
   WIZ_CLIENT_SECRET: string | undefined;
   WIZ_AUTH_URL: string | undefined;
   WIZ_API_URL: string | undefined;
+  // Information Security Incident Response Logic App — six destructive
+  // remediation tools dispatched through Neo's confirmation gate.
+  // See _specs/infosec-incident-response-mcp.md.
+  //   AGENT_CLIENT_ID / AGENT_CLIENT_SECRET — Entra app reg FOR THE
+  //     NEO AGENT (the client_credentials caller). Separate from the
+  //     existing AZURE_CLIENT_ID/SECRET so the Sentinel/Defender app
+  //     reg isn't cross-purposed with Logic App scopes.
+  //   INFOSEC_LOGIC_APP_API_ID — the Logic App's own app reg client
+  //     ID, used as the OAuth audience (api://<this-id>/.default).
+  //   INFOSEC_LOGIC_APP_MCP_URL — full HTTPS URL of the MCP endpoint;
+  //     gated by a literal-host allowlist in mcp-client.ts.
+  AGENT_CLIENT_ID: string | undefined;
+  AGENT_CLIENT_SECRET: string | undefined;
+  INFOSEC_LOGIC_APP_API_ID: string | undefined;
+  INFOSEC_LOGIC_APP_MCP_URL: string | undefined;
 }
 
 // ─────────────────────────────────────────────────────────────

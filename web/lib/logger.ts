@@ -191,6 +191,18 @@ const SAFE_METADATA_FIELDS = new Set([
   // Neither carries credentials or PII.
   "wizDatacenter",
   "wizTokenExpiry",
+  // Information Security Incident Response Logic App audit fields.
+  // `responder` is the server-populated operator identity (UPN or
+  // equivalent — sourced from getLogContext().userName). The three
+  // *RequestId / *RunId fields are Azure-side correlation IDs
+  // captured from MCP response headers for cross-system tracing.
+  // mcpSessionId is the per-process MCP-Session-Id used to scope
+  // related calls. None carry PII the system doesn't already log.
+  "responder",
+  "apiManagementRequestId",
+  "apiManagementMiddlewareRequestId",
+  "workflowRunId",
+  "mcpSessionId",
   // Context-engineering observability — the context-manager and
   // related callers emit these on truncation / compression /
   // offload events. Without them on the allowlist, Event Hub sees

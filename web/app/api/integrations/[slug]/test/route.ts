@@ -5,6 +5,9 @@ import { getAzureToken, getMSGraphToken } from "@/lib/auth";
 import { TL_INSTANCE_RE } from "@/lib/executors";
 // import { getWizAccessToken } from "@/lib/wiz-auth";
 // (Wiz probe is currently disabled — see route.ts wiz branch below.)
+import { getInfosecAccessToken } from "@/lib/infosec-auth";
+import { getMcpClient, INFOSEC_LOGIC_APP_URL_ALLOWLIST } from "@/lib/mcp-client";
+import { env } from "@/lib/config";
 import { getToolSecret } from "@/lib/secrets";
 
 // SECURITY: all outbound probe fetches need a timeout. Node's global
@@ -97,6 +100,59 @@ const PROBES: Record<string, () => Promise<void>> = {
     throw new Error(
       "Wiz integration is currently unavailable. Anthropic's API-side MCP connector cannot forward the custom Wiz-Client-* headers required for service-account authentication. The credentials you've configured will be reused when one of the planned re-enable paths lands — see docs/configuration.md.",
     );
+  },
+  "infosec-incident-response": async () => {
+    // Stage 1: Entra ID token. Surfaces credential / audience
+    // misconfiguration distinctly from MCP-side reachability errors.
+    // The result is discarded — auth.ts caches the token, and the
+    // stage-2 handshake's tokenFactory hits the same cache.
+    try {
+      await getInfosecAccessToken();
+    } catch (err) {
+      throw new Error(
+        `Infosec authentication failed: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+
+    // Stage 2: force the MCP handshake (initialize +
+    // notifications/initialized). Doesn't invoke any destructive
+    // tool — `ensureSession()` is the dedicated probe hook. URL
+    // resolution follows the same Key Vault → env-var precedence
+    // the executor uses (HIGH #2): operators who store the URL only
+    // in Key Vault must work, not be silently rejected.
+    const mcpUrl = (await getToolSecret("INFOSEC_LOGIC_APP_MCP_URL")) ?? env.INFOSEC_LOGIC_APP_MCP_URL;
+    if (!mcpUrl) {
+      throw new Error(
+        "Missing INFOSEC_LOGIC_APP_MCP_URL — required to reach the Logic App. Configure via /integrations.",
+      );
+    }
+    if (!INFOSEC_LOGIC_APP_URL_ALLOWLIST.has(mcpUrl)) {
+      throw new Error(
+        `INFOSEC_LOGIC_APP_MCP_URL '${mcpUrl}' is not in the probe allowlist. Today the probe targets the production Logic App URL only; if your tenant uses a different endpoint, extend INFOSEC_LOGIC_APP_URL_ALLOWLIST in mcp-client.ts.`,
+      );
+    }
+    // SECURITY: pass the same shared factory the executor uses —
+    // NOT a closure capturing the probe-time token. getMcpClient is a
+    // per-URL singleton; the FIRST authStrategy registered wins. If
+    // the probe captured `token` as a frozen value, every subsequent
+    // executor call would inherit the same frozen factory and stop
+    // refreshing after ~1 hour. See ultra-review HIGH #1.
+    const client = getMcpClient(mcpUrl, {
+      type: "bearer",
+      tokenFactory: getInfosecAccessToken,
+    });
+    // Force a fresh handshake so we surface failures on this probe
+    // call rather than reusing a cached session from a prior agent
+    // turn. `reset()` is non-destructive — just clears the cached
+    // session promise; subsequent calls re-handshake.
+    client.reset();
+    try {
+      await client.ensureSession();
+    } catch (err) {
+      throw new Error(
+        `Infosec Logic App handshake failed: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
   },
 };
 

@@ -308,6 +308,52 @@ export const INTEGRATIONS: IntegrationInfo[] = [
       },
     ],
   },
+  {
+    slug: "infosec-incident-response",
+    name: "Information Security Incident Response",
+    iconName: "ShieldAlert",
+    imageSrc: "/microsoft-logo.png",
+    description:
+      "Network-layer remediation via the Information Security Incident Response Logic App. Six destructive tools (block-domain, block-email, block-globalprotect, block-hash, block-ipaddress, request-sslbypass). Every call routes through Neo's destructive-action confirmation gate; admin role only. Service-account auth via Entra ID OAuth2 client_credentials against the Logic App's app registration.",
+    capabilities: [
+      "block_domain",
+      "block_email",
+      "block_globalprotect",
+      "block_hash",
+      "block_ipaddress",
+      "request_sslbypass",
+    ],
+    secrets: [
+      {
+        key: "AGENT_CLIENT_ID",
+        label: "Agent client ID",
+        description:
+          "Entra ID app registration FOR THE NEO AGENT — the client_credentials caller. Must have `api://<INFOSEC_LOGIC_APP_API_ID>/.default` admin-consented in Entra. Distinct from AZURE_CLIENT_ID, which is scoped to Sentinel/Defender/Entra.",
+        required: true,
+      },
+      {
+        key: "AGENT_CLIENT_SECRET",
+        label: "Agent client secret",
+        description:
+          "Client secret for the agent app registration above. Rotate periodically.",
+        required: true,
+      },
+      {
+        key: "INFOSEC_LOGIC_APP_API_ID",
+        label: "Logic App API ID",
+        description:
+          "The Logic App's app registration client ID — the audience for the OAuth token (`api://<this-value>/.default`). Found in Entra under the Logic App app reg's 'Expose an API' tab.",
+        required: true,
+      },
+      {
+        key: "INFOSEC_LOGIC_APP_MCP_URL",
+        label: "MCP server URL",
+        description:
+          "Full HTTPS URL of the Logic App's MCP endpoint. Gated by a literal-host allowlist in mcp-client.ts — adding new environments requires a code change.",
+        required: true,
+      },
+    ],
+  },
 ];
 
 export function getIntegration(slug: string): IntegrationInfo | undefined {
