@@ -28,7 +28,7 @@
 // ─────────────────────────────────────────────────────────────
 
 import { getToolSecret } from "./secrets";
-import { getEntraTokenAs, clearEntraTokenCacheFor } from "./auth";
+import { getEntraTokenAs, clearAllEntraTokenCache } from "./auth";
 
 /**
  * Mint (or fetch-cached) an Entra ID bearer scoped to the Infosec
@@ -61,17 +61,20 @@ export async function getInfosecAccessToken(): Promise<string> {
 }
 
 /**
- * Clear the cached Infosec bearer. Call this after rotating the
- * agent app registration's secret in Key Vault so the next agent
- * turn re-authenticates with the new value. Best-effort — if the
- * underlying secrets aren't readable (Key Vault outage) the cache
- * stays as-is and the next mint will fail loudly with a precise
- * error.
+ * Clear ALL cached `getEntraTokenAs`-minted bearers. Call after
+ * rotating the agent app registration's secret in Key Vault so the
+ * next agent turn re-authenticates with the new value.
+ *
+ * Uses prefix-wipe (`clearAllEntraTokenCache`) instead of a targeted
+ * eviction by current creds — after a rotation, the NEW secrets
+ * compute to a different sha256 cache key than the OLD ones, so a
+ * targeted eviction by current creds would be a no-op and the stale
+ * token would sit in memory until natural expiry (~1 hour). The
+ * blast radius is small in practice: every prefix-wiped entry is an
+ * `entra:`-keyed integration bearer, and each one re-mints on its
+ * next call. Legacy `getAzureToken` entries (raw-resource keys) are
+ * untouched. See ultra-review MEDIUM #8.
  */
-export async function clearInfosecTokenCache(): Promise<void> {
-  const clientId = await getToolSecret("AGENT_CLIENT_ID");
-  const clientSecret = await getToolSecret("AGENT_CLIENT_SECRET");
-  const audienceId = await getToolSecret("INFOSEC_LOGIC_APP_API_ID");
-  if (!clientId || !clientSecret || !audienceId) return;
-  clearEntraTokenCacheFor(clientId, clientSecret, `api://${audienceId}`);
+export function clearInfosecTokenCache(): void {
+  clearAllEntraTokenCache();
 }

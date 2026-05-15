@@ -235,6 +235,19 @@ describe("McpClient 401 retry", () => {
 
     await expect(makeClient().callTool("noop", {})).rejects.toThrow(/rejected after retry/);
   });
+
+  // 403 means the bearer is valid but the caller lacks permission. A
+  // retry won't fix that — it just doubles the request volume. The
+  // earlier impl retried 401 || 403; the fix narrows it to 401 only.
+  // See ultra-review MEDIUM #6.
+  it("does NOT retry on 403 — surfaces the original error immediately", async () => {
+    fetchMock.mockResolvedValueOnce(initializeOk("S-A"));
+    fetchMock.mockResolvedValueOnce(initializedAck());
+    fetchMock.mockResolvedValueOnce(new Response("forbidden", { status: 403 }));
+
+    await expect(makeClient().callTool("noop", {})).rejects.toThrow(/403/);
+    expect(fetchMock).toHaveBeenCalledTimes(3); // initialize + ack + 403 only
+  });
 });
 
 // ── Correlation headers ──────────────────────────────────────

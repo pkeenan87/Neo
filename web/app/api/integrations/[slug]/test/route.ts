@@ -104,9 +104,10 @@ const PROBES: Record<string, () => Promise<void>> = {
   "infosec-incident-response": async () => {
     // Stage 1: Entra ID token. Surfaces credential / audience
     // misconfiguration distinctly from MCP-side reachability errors.
-    let token: string;
+    // The result is discarded — auth.ts caches the token, and the
+    // stage-2 handshake's tokenFactory hits the same cache.
     try {
-      token = await getInfosecAccessToken();
+      await getInfosecAccessToken();
     } catch (err) {
       throw new Error(
         `Infosec authentication failed: ${err instanceof Error ? err.message : String(err)}`,
@@ -115,8 +116,11 @@ const PROBES: Record<string, () => Promise<void>> = {
 
     // Stage 2: force the MCP handshake (initialize +
     // notifications/initialized). Doesn't invoke any destructive
-    // tool — `ensureSession()` is the dedicated probe hook.
-    const mcpUrl = env.INFOSEC_LOGIC_APP_MCP_URL;
+    // tool — `ensureSession()` is the dedicated probe hook. URL
+    // resolution follows the same Key Vault → env-var precedence
+    // the executor uses (HIGH #2): operators who store the URL only
+    // in Key Vault must work, not be silently rejected.
+    const mcpUrl = (await getToolSecret("INFOSEC_LOGIC_APP_MCP_URL")) ?? env.INFOSEC_LOGIC_APP_MCP_URL;
     if (!mcpUrl) {
       throw new Error(
         "Missing INFOSEC_LOGIC_APP_MCP_URL — required to reach the Logic App. Configure via /integrations.",
@@ -127,9 +131,15 @@ const PROBES: Record<string, () => Promise<void>> = {
         `INFOSEC_LOGIC_APP_MCP_URL '${mcpUrl}' is not in the probe allowlist. Today the probe targets the production Logic App URL only; if your tenant uses a different endpoint, extend INFOSEC_LOGIC_APP_URL_ALLOWLIST in mcp-client.ts.`,
       );
     }
+    // SECURITY: pass the same shared factory the executor uses —
+    // NOT a closure capturing the probe-time token. getMcpClient is a
+    // per-URL singleton; the FIRST authStrategy registered wins. If
+    // the probe captured `token` as a frozen value, every subsequent
+    // executor call would inherit the same frozen factory and stop
+    // refreshing after ~1 hour. See ultra-review HIGH #1.
     const client = getMcpClient(mcpUrl, {
       type: "bearer",
-      tokenFactory: async () => token,
+      tokenFactory: getInfosecAccessToken,
     });
     // Force a fresh handshake so we surface failures on this probe
     // call rather than reusing a cached session from a prior agent

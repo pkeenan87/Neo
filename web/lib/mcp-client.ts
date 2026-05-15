@@ -188,7 +188,12 @@ export class McpClient {
       body,
     });
 
-    if (res.status === 401 || res.status === 403) {
+    // 401 only — NOT 403. 401 = "your bearer is stale/missing", which a
+    // re-handshake can fix. 403 = "your bearer is valid but you don't
+    // have permission for this tool" — re-handshaking will just produce
+    // the same identity and the same 403, doubling the request volume
+    // against the upstream. See ultra-review MEDIUM #6.
+    if (res.status === 401) {
       if (!allowRetry) {
         const bodyText = (await res.text().catch(() => "")).slice(0, 500);
         throw new Error(

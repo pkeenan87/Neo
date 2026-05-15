@@ -13,6 +13,7 @@ import {
 import {
   getEntraTokenAs,
   clearEntraTokenCacheFor,
+  clearAllEntraTokenCache,
   clearTokenCache,
 } from "../lib/auth";
 
@@ -150,8 +151,149 @@ describe("getInfosecAccessToken", () => {
     fetchMock.mockResolvedValueOnce(entraTokenResponse("T1"));
     fetchMock.mockResolvedValueOnce(entraTokenResponse("T2"));
     expect(await getInfosecAccessToken()).toBe("T1");
-    await clearInfosecTokenCache();
+    clearInfosecTokenCache();
     expect(await getInfosecAccessToken()).toBe("T2");
     expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  // ── Ultra-review MEDIUM #8: prefix-wipe handles rotation ──
+  // After a SECRET ROTATION the new secrets compute to a different
+  // sha256 cache key than the old ones, so a targeted eviction by
+  // current creds is a no-op. clearInfosecTokenCache now uses
+  // clearAllEntraTokenCache which is rotation-correct.
+  it("clearInfosecTokenCache evicts a stale entry even after a credential rotation", async () => {
+    fetchMock.mockResolvedValueOnce(entraTokenResponse("T-OLD"));
+    expect(await getInfosecAccessToken()).toBe("T-OLD");
+
+    // Operator rotates AGENT_CLIENT_SECRET in Key Vault.
+    secretsState.AGENT_CLIENT_SECRET = "agent-secret-NEW";
+
+    // Without prefix-wipe, the cache key based on the new creds
+    // wouldn't match the old entry, so the next call would simply
+    // mint with the new creds — that's fine. But the OLD entry
+    // would linger in memory until its natural expiry. With the
+    // prefix-wipe fix, clearInfosecTokenCache evicts everything.
+    clearInfosecTokenCache();
+
+    fetchMock.mockResolvedValueOnce(entraTokenResponse("T-NEW"));
+    expect(await getInfosecAccessToken()).toBe("T-NEW");
+    // The new fetch used the new secret.
+    const newCallBody = fetchMock.mock.calls[1][1]?.body as URLSearchParams;
+    expect(newCallBody.get("client_secret")).toBe("agent-secret-NEW");
+  });
+});
+
+// ── Ultra-review MEDIUM #7: response-shape validation ────────
+// A malformed 200 (e.g. proxy returning HTML or empty {}) would
+// previously poison the cache with token=undefined / expiresAt=NaN
+// and cause every later call to send "Authorization: Bearer
+// undefined". The fix validates access_token and expires_in shape
+// before caching.
+
+describe("Entra token response shape validation", () => {
+  beforeEach(() => {
+    secretsState.AZURE_TENANT_ID = "tenant-uuid";
+  });
+
+  it("rejects a 200 response missing access_token", async () => {
+    fetchMock.mockResolvedValueOnce(
+      new Response(JSON.stringify({ expires_in: 3600 }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+    await expect(getEntraTokenAs("c", "s", "api://x")).rejects.toThrow(
+      /missing or empty access_token/,
+    );
+  });
+
+  it("rejects a 200 response with an empty-string access_token", async () => {
+    fetchMock.mockResolvedValueOnce(
+      new Response(JSON.stringify({ access_token: "", expires_in: 3600 }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+    await expect(getEntraTokenAs("c", "s", "api://x")).rejects.toThrow(
+      /missing or empty access_token/,
+    );
+  });
+
+  it("rejects a 200 response missing expires_in", async () => {
+    fetchMock.mockResolvedValueOnce(
+      new Response(JSON.stringify({ access_token: "T1" }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+    await expect(getEntraTokenAs("c", "s", "api://x")).rejects.toThrow(
+      /missing or invalid expires_in/,
+    );
+  });
+
+  it("rejects a 200 response with a non-positive expires_in", async () => {
+    fetchMock.mockResolvedValueOnce(
+      new Response(JSON.stringify({ access_token: "T1", expires_in: 0 }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+    await expect(getEntraTokenAs("c", "s", "api://x")).rejects.toThrow(
+      /missing or invalid expires_in/,
+    );
+  });
+
+  it("does NOT poison the cache when the response is malformed", async () => {
+    fetchMock.mockResolvedValueOnce(
+      new Response(JSON.stringify({ access_token: "" }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+    await expect(getEntraTokenAs("c", "s", "api://x")).rejects.toThrow();
+
+    fetchMock.mockResolvedValueOnce(entraTokenResponse("T-recover"));
+    const after = await getEntraTokenAs("c", "s", "api://x");
+    expect(after).toBe("T-recover");
+  });
+});
+
+// ── Ultra-review MEDIUM #8: clearAllEntraTokenCache prefix wipe ──
+
+describe("clearAllEntraTokenCache", () => {
+  beforeEach(() => {
+    secretsState.AZURE_TENANT_ID = "tenant-uuid";
+  });
+
+  it("evicts every entra:-prefixed entry but leaves targeted-eviction semantics intact", async () => {
+    fetchMock.mockResolvedValueOnce(entraTokenResponse("T-A1"));
+    fetchMock.mockResolvedValueOnce(entraTokenResponse("T-B1"));
+    expect(await getEntraTokenAs("c-A", "s", "api://x")).toBe("T-A1");
+    expect(await getEntraTokenAs("c-B", "s", "api://y")).toBe("T-B1");
+
+    clearAllEntraTokenCache();
+
+    fetchMock.mockResolvedValueOnce(entraTokenResponse("T-A2"));
+    fetchMock.mockResolvedValueOnce(entraTokenResponse("T-B2"));
+    expect(await getEntraTokenAs("c-A", "s", "api://x")).toBe("T-A2");
+    expect(await getEntraTokenAs("c-B", "s", "api://y")).toBe("T-B2");
+    // Both entries were re-minted.
+    expect(fetchMock).toHaveBeenCalledTimes(4);
+  });
+
+  it("co-exists with clearEntraTokenCacheFor (targeted) without disturbing other entries", async () => {
+    fetchMock.mockResolvedValueOnce(entraTokenResponse("T-A"));
+    fetchMock.mockResolvedValueOnce(entraTokenResponse("T-B"));
+    await getEntraTokenAs("c-A", "s", "api://x");
+    await getEntraTokenAs("c-B", "s", "api://y");
+
+    // Targeted eviction of A only.
+    clearEntraTokenCacheFor("c-A", "s", "api://x");
+
+    fetchMock.mockResolvedValueOnce(entraTokenResponse("T-A2"));
+    expect(await getEntraTokenAs("c-A", "s", "api://x")).toBe("T-A2");
+    // B is still cached — no third fetch happened for B.
+    expect(await getEntraTokenAs("c-B", "s", "api://y")).toBe("T-B");
+    expect(fetchMock).toHaveBeenCalledTimes(3);
   });
 });

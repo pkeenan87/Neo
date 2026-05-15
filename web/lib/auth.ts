@@ -62,11 +62,22 @@ async function mintEntraToken(
   });
 
   if (!res.ok) {
-    const err = await res.text();
+    const err = await res.text().catch(() => "<body unreadable>");
     throw new Error(`Entra token request failed for ${resource} (${res.status}): ${err}`);
   }
 
-  const data = await res.json();
+  const data = (await res.json()) as { access_token?: unknown; expires_in?: unknown; token_type?: unknown };
+
+  if (typeof data.access_token !== "string" || data.access_token.length === 0) {
+    throw new Error(
+      `Entra token response for ${resource} is missing or empty access_token — verify the token endpoint hasn't been hijacked by a proxy.`,
+    );
+  }
+  if (typeof data.expires_in !== "number" || !Number.isFinite(data.expires_in) || data.expires_in <= 0) {
+    throw new Error(
+      `Entra token response for ${resource} has missing or invalid expires_in — refusing to cache a token without a valid expiry.`,
+    );
+  }
 
   tokenCache.set(cacheKey, {
     token: data.access_token,
@@ -144,9 +155,11 @@ export function clearTokenCache(): void {
 
 /**
  * Targeted eviction for `getEntraTokenAs` callers. Wipes only the
- * cache entry for the given credential triple. Used by per-integration
- * `clear*TokenCache()` helpers (e.g. `clearInfosecTokenCache`) so
- * rotating one integration's secrets doesn't disturb others.
+ * cache entry for the given credential triple. Useful when the
+ * caller still holds the (old) credentials and wants to evict their
+ * specific entry. After a SECRET ROTATION the new secrets won't
+ * compute to the old cache key — use `clearAllEntraTokenCache()` in
+ * that case, or accept that the old entry self-evicts on expiry.
  */
 export function clearEntraTokenCacheFor(
   clientId: string,
@@ -158,6 +171,25 @@ export function clearEntraTokenCacheFor(
     .digest("hex")
     .slice(0, 16);
   tokenCache.delete(cacheKey);
+}
+
+/**
+ * Wipe every `getEntraTokenAs`-minted cache entry (prefixed `entra:`).
+ * Leaves the legacy `getAzureToken` entries (keyed by raw resource)
+ * untouched so rotating one integration's secrets doesn't disturb
+ * Sentinel / Defender / Entra tokens minted by the platform-level
+ * Azure app reg.
+ *
+ * This is the right helper to call AFTER a credential rotation —
+ * the new secrets won't produce the same cache key as the old ones,
+ * so a targeted eviction by current-creds is a no-op and the stale
+ * token sits in memory until its natural expiry. Prefix-wipe is
+ * unambiguous. See ultra-review MEDIUM #8.
+ */
+export function clearAllEntraTokenCache(): void {
+  for (const key of Array.from(tokenCache.keys())) {
+    if (key.startsWith("entra:")) tokenCache.delete(key);
+  }
 }
 
 export async function getMSGraphToken(): Promise<string> {

@@ -31,6 +31,38 @@ const MCP_CLIENT_BETA = "mcp-client-2025-11-20" as const;
 // earliest user message (skipping tool_result plumbing) for that marker.
 const SKILL_INVOCATION_PREFIX = "[SKILL INVOCATION:";
 
+/**
+ * Pull audit-relevant extras out of an executor's tool result so the
+ * `tool_execution` event captures them. Today the only producer is
+ * the Information Security Incident Response Logic App executors,
+ * which embed `responder` (the authenticated operator, server-
+ * populated — never the model's choice) and `correlationHeaders` (the
+ * Azure API Management / Workflow-Run ids) in the result envelope.
+ * Future executors can opt in by surfacing the same field shapes.
+ *
+ * The function is intentionally permissive: it picks up known fields
+ * if present and ignores everything else. The downstream
+ * `sanitizeMetadata` allowlist in logger.ts is the canonical filter —
+ * fields not on SAFE_METADATA_FIELDS are dropped before reaching
+ * Event Hub regardless of what this returns.
+ */
+function extractToolAuditExtras(result: unknown): Record<string, unknown> {
+  if (!result || typeof result !== "object" || Array.isArray(result)) return {};
+  const r = result as Record<string, unknown>;
+  const extras: Record<string, unknown> = {};
+  if (typeof r.responder === "string") {
+    extras.responder = r.responder;
+  }
+  if (r.correlationHeaders && typeof r.correlationHeaders === "object" && !Array.isArray(r.correlationHeaders)) {
+    const ch = r.correlationHeaders as Record<string, unknown>;
+    if (typeof ch.apiManagementRequestId === "string") extras.apiManagementRequestId = ch.apiManagementRequestId;
+    if (typeof ch.apiManagementMiddlewareRequestId === "string") extras.apiManagementMiddlewareRequestId = ch.apiManagementMiddlewareRequestId;
+    if (typeof ch.workflowRunId === "string") extras.workflowRunId = ch.workflowRunId;
+    if (typeof ch.mcpSessionId === "string") extras.mcpSessionId = ch.mcpSessionId;
+  }
+  return extras;
+}
+
 function detectSkillInvocation(messages: Message[]): boolean {
   for (const msg of messages) {
     if (msg.role !== "user") continue;
@@ -950,6 +982,10 @@ export async function runAgentLoop(
             isDestructive: false,
             durationMs,
             status: "success",
+            // Pick up responder / Azure correlation IDs from any
+            // executor that surfaces them in its result envelope.
+            // See extractToolAuditExtras at the top of this file.
+            ...extractToolAuditExtras(result),
           });
           if (callbacks.onToolResult) {
             callbacks.onToolResult({
@@ -1288,6 +1324,11 @@ export async function resumeAfterConfirmation(
         isDestructive: true,
         durationMs,
         status: "success",
+        // Pick up responder / Azure correlation IDs from any
+        // executor that surfaces them. For Infosec Logic App tools
+        // this is the field that records WHO authorised the
+        // destructive remediation — see ultra-review HIGH #3.
+        ...extractToolAuditExtras(result),
       });
       if (callbacks.onToolResult) {
         callbacks.onToolResult({ name, input, output: result, durationMs, isError: false });

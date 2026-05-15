@@ -394,23 +394,29 @@ export function validateConfig(): void {
   // just a heads-up. Pattern matches the Logic App's azurewebsites.net
   // host shape published in _specs/infosec-incident-response-mcp.md.
   if (env.INFOSEC_LOGIC_APP_MCP_URL) {
-    let parsed: URL;
+    let parsed: URL | null = null;
     try {
       parsed = new URL(env.INFOSEC_LOGIC_APP_MCP_URL);
     } catch {
       console.warn(
         "INFOSEC_LOGIC_APP_MCP_URL is not a valid URL (value redacted) — Infosec integration will fail until corrected.",
       );
-      return;
     }
-    if (parsed.protocol !== "https:") {
-      console.warn(
-        `INFOSEC_LOGIC_APP_MCP_URL must use https:// (got ${parsed.protocol}//...) — Infosec integration will fail until corrected.`,
-      );
-    } else if (!/\.azurewebsites\.net$/i.test(parsed.hostname)) {
-      console.warn(
-        `INFOSEC_LOGIC_APP_MCP_URL hostname '${parsed.hostname}' does not look like an Azure App Service host — Infosec integration will likely fail. Verify against _specs/infosec-incident-response-mcp.md.`,
-      );
+    // Skip the protocol/hostname checks when parse failed; fall
+    // through so the rest of validateConfig (AUTH_URL checks,
+    // TRIM_TRIGGER_THRESHOLD, etc.) still runs. The previous
+    // `return;` here short-circuited the whole function — see
+    // ultra-review HIGH #4.
+    if (parsed) {
+      if (parsed.protocol !== "https:") {
+        console.warn(
+          `INFOSEC_LOGIC_APP_MCP_URL must use https:// (got ${parsed.protocol}//...) — Infosec integration will fail until corrected.`,
+        );
+      } else if (!/\.azurewebsites\.net$/i.test(parsed.hostname)) {
+        console.warn(
+          `INFOSEC_LOGIC_APP_MCP_URL hostname '${parsed.hostname}' does not look like an Azure App Service host — Infosec integration will likely fail. Verify against _specs/infosec-incident-response-mcp.md.`,
+        );
+      }
     }
   }
 
