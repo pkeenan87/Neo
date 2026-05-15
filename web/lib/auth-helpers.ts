@@ -11,6 +11,13 @@ export interface ResolvedAuth {
   name: string;
   ownerId: string;
   provider: AuthProvider;
+  // The user's email / UPN, when an Entra identity is present.
+  // Absent for API-key and service-principal callers, which don't
+  // map to a single email-shaped identifier. Consumers that need an
+  // email (e.g. the Infosec Logic App audit `responder`) must refuse
+  // to fire when this is missing rather than substituting `name` —
+  // `name` may be a key label or app display name in those cases.
+  email?: string;
 }
 
 // ── Entra ID token verification ───────────────────────────────
@@ -82,7 +89,13 @@ export async function resolveAuth(
     process.env.DEV_AUTH_BYPASS === "true"
   ) {
     logger.debug("Auth bypassed (DEV_AUTH_BYPASS)", "auth");
-    return { role: "admin", name: "dev-operator", ownerId: "dev-operator", provider: "entra-id" };
+    return {
+      role: "admin",
+      name: "dev-operator",
+      ownerId: "dev-operator",
+      provider: "entra-id",
+      email: "dev-operator@neo.local",
+    };
   }
 
   // Check for Bearer token in Authorization header
@@ -125,8 +138,16 @@ export async function resolveAuth(
           (payload.oid as string) ??
           (payload.sub as string) ??
           name;
+        // UPN — `preferred_username` is the canonical UPN/email for
+        // v2.0 tokens; `upn` is the legacy v1.0 claim; `email` is
+        // populated when the user has a primary SMTP. Fall through
+        // in that order. Used as the Infosec `responder` audit field.
+        const email =
+          (payload.preferred_username as string | undefined) ??
+          (payload.upn as string | undefined) ??
+          (payload.email as string | undefined);
         logger.info("Auth resolved via Entra ID token", "auth", { role, provider: "entra-id" });
-        return { role, name, ownerId, provider: "entra-id" };
+        return { role, name, ownerId, provider: "entra-id", email };
       }
 
       // App-only token (Managed Identity / service principal from Logic Apps).
@@ -177,6 +198,15 @@ export async function resolveAuth(
       name: (user.name as string) ?? "Unknown",
       ownerId,
       provider: "entra-id",
+      // `session.user.email` is populated by the custom Entra
+      // provider `profile()` override in `web/auth.ts`, which falls
+      // through `email → preferred_username → upn`. The default
+      // Auth.js Entra provider reads only `profile.email` (which is
+      // absent for guests, federated accounts, and managed users
+      // without a verified primary SMTP), so without the override
+      // browser-session admins in those cohorts would be locked out
+      // of the Infosec tools entirely.
+      email: (user.email as string | undefined) ?? undefined,
     };
   }
 

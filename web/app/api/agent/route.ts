@@ -172,6 +172,7 @@ async function handleAgentPost(request: NextRequest, identity: ResolvedAuth): Pr
     provider: identity.provider,
     channel,
     sessionId,
+    userEmail: identity.email,
   };
 
   return setLogContext(logIdentity, () => {

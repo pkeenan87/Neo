@@ -98,6 +98,7 @@ async function handleConfirmPost(request: NextRequest, identity: ResolvedAuth): 
     provider: identity.provider,
     channel: "web",
     sessionId: body.sessionId,
+    userEmail: identity.email,
   };
 
   // Emit destructive action audit event inside logging context so identity envelope is attached

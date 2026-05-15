@@ -210,6 +210,11 @@ export interface LogIdentityContext {
   provider: "entra-id" | "api-key" | "service-principal";
   channel: string;
   sessionId: string;
+  // Email / UPN — present when the caller is an Entra-authenticated
+  // user, absent for API-key and service-principal callers. Consumed
+  // by the Infosec Logic App executors as the audit `responder`
+  // value; those executors refuse to fire when this is missing.
+  userEmail?: string;
 }
 
 // ─────────────────────────────────────────────────────────────

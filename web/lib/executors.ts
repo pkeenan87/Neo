@@ -3702,13 +3702,32 @@ const INFOSEC_CONTROL_CHAR_RE = /[\x00-\x1F\x7F]/;
 // forward to 2026-03-02). Used by request_sslbypass.submitDate.
 const INFOSEC_ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}(T\d{2}:\d{2}(:\d{2}(\.\d{1,9})?)?(Z|[+-]\d{2}:\d{2})?)?$/;
 
+// Lightweight email-shape check — one '@', a dot in the right-hand
+// label, no whitespace. Not RFC-5322 — that's intentional. The goal
+// is to refuse obvious non-emails (display names like "Patrick
+// Keenan", API-key labels like "neo-cli-key-1") before they reach
+// the Logic App audit log. The Logic App itself is the source of
+// truth for what it accepts.
+const INFOSEC_RESPONDER_EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
 function resolveResponder(toolName: string): string {
   const ctx = getLogContext();
-  const responder = ctx?.userName?.trim();
+  // Prefer the Entra UPN / email from the log identity envelope. The
+  // Infosec Logic App audit treats `responder` as an email-shaped
+  // value; falling back to `userName` would yield display names
+  // ("Patrick Keenan") for browser sessions or key labels for API-key
+  // callers — both of which corrupt the downstream audit trail.
+  const responder = ctx?.userEmail?.trim();
   if (!responder) {
     throw new Error(
-      `Destructive Infosec tool '${toolName}' requires an authenticated user identity, but no responder is in scope. ` +
-        `This typically means the executor was invoked outside an authenticated request context (e.g. a background job).`,
+      `Destructive Infosec tool '${toolName}' requires an Entra-authenticated user identity with an email/UPN. ` +
+        `API-key and service-principal callers are not supported for Infosec actions — sign in via Entra ID (browser or CLI) and retry.`,
+    );
+  }
+  if (!INFOSEC_RESPONDER_EMAIL_RE.test(responder)) {
+    throw new Error(
+      `Destructive Infosec tool '${toolName}' requires the responder to be an email/UPN, but the in-scope identity is '${responder}'. ` +
+        `Verify the auth flow surfaced a UPN — see lib/auth-helpers.ts.`,
     );
   }
   return responder;
