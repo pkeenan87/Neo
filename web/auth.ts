@@ -4,6 +4,7 @@ import Credentials from "next-auth/providers/credentials";
 import type { Role } from "@/lib/permissions";
 import { findApiKey } from "@/lib/api-key-store";
 import { logger } from "@/lib/logger";
+import { mapEntraProfile } from "@/lib/entra-profile";
 
 // ─────────────────────────────────────────────────────────────
 //  Auth.js Config
@@ -73,6 +74,25 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
           // AUTH_URL + /api/auth/callback/microsoft-entra-id) needs to be
           // registered in the Entra app registration.
         },
+      },
+      // Override the default profile() to fall through
+      // `email → preferred_username → upn` instead of taking
+      // `email` alone. The `email` claim is only populated by Entra
+      // when a managed user has a verified primary SMTP — guests
+      // from un-verified-domain tenants, federated accounts without
+      // an SMTP, and break-glass admins with on-prem-only mail all
+      // lack it. Those users still have `preferred_username` (the
+      // canonical v2 UPN) which is what the Infosec Logic App audit
+      // consumes. Without this override, session.user.email is
+      // undefined for that cohort and all 6 destructive Infosec
+      // tools refuse to fire.
+      //
+      // Photo fetching is intentionally skipped here — the jwt()
+      // callback below does its own Graph fetch using
+      // account.access_token and writes the result to token.picture,
+      // which overrides anything we put in user.image.
+      profile(profile) {
+        return mapEntraProfile(profile as unknown as Record<string, unknown>);
       },
     }),
     Credentials({

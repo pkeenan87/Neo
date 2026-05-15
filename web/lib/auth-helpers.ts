@@ -198,10 +198,14 @@ export async function resolveAuth(
       name: (user.name as string) ?? "Unknown",
       ownerId,
       provider: "entra-id",
-      // Auth.js's Entra provider parses the `email` claim into
-      // `session.user.email` when present, and falls back to
-      // `preferred_username` otherwise. Either is acceptable as a
-      // UPN-shaped value for the Infosec `responder` audit field.
+      // `session.user.email` is populated by the custom Entra
+      // provider `profile()` override in `web/auth.ts`, which falls
+      // through `email → preferred_username → upn`. The default
+      // Auth.js Entra provider reads only `profile.email` (which is
+      // absent for guests, federated accounts, and managed users
+      // without a verified primary SMTP), so without the override
+      // browser-session admins in those cohorts would be locked out
+      // of the Infosec tools entirely.
       email: (user.email as string | undefined) ?? undefined,
     };
   }
