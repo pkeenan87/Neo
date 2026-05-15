@@ -1431,6 +1431,131 @@ export const TOOLS: Tool[] = [
       required: ["query"],
     },
   },
+  // ───────────────────────────────────────────────────────────
+  // Information Security Incident Response Logic App
+  //
+  // Six remediation tools dispatched through Neo's confirmation
+  // gate. Each maps to a kebab-case Logic App tool name at the
+  // executor layer. `responder` is server-populated from the
+  // authenticated user's identity (never exposed to the model
+  // to prevent prompt-injection identity spoofing). See
+  // _specs/infosec-incident-response-mcp.md for the verified
+  // wire contract (Postman 2026-05-15).
+  // ───────────────────────────────────────────────────────────
+  {
+    name: "block_domain",
+    description:
+      "Block a malicious domain at the network layer via the Information Security Incident Response Logic App. Destructive: requires admin confirmation. Use after positively identifying a domain as part of a confirmed incident. The `notes` field is the operator-readable justification and is captured in the audit trail.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        ioc: {
+          type: "string",
+          description: "The domain to block (e.g. 'malicious-c2.example.com'). No protocol, no path.",
+        },
+        notes: {
+          type: "string",
+          description: "Short rationale: which alert / incident, why blocking this domain is the right call. Captured for audit.",
+        },
+      },
+      required: ["ioc", "notes"],
+    },
+  },
+  {
+    name: "block_email",
+    description:
+      "Block a malicious sender/recipient email address. Destructive: requires admin confirmation. Use during phishing / BEC remediation when a specific email address must be denied delivery. The `notes` field is the audit justification.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        ioc: {
+          type: "string",
+          description: "The email address to block (e.g. 'attacker@bad.example.com').",
+        },
+        notes: {
+          type: "string",
+          description: "Short rationale captured for audit.",
+        },
+      },
+      required: ["ioc", "notes"],
+    },
+  },
+  {
+    name: "block_globalprotect",
+    description:
+      "Block a GlobalProtect connection identifier (user, device, or address) from establishing VPN sessions. Destructive: requires admin confirmation. Use during identity-compromise remediation when a specific GlobalProtect principal must be denied VPN access.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        ioc: {
+          type: "string",
+          description: "The GlobalProtect identifier: a username, device ID, or address depending on the deployment.",
+        },
+        notes: {
+          type: "string",
+          description: "Short rationale captured for audit.",
+        },
+      },
+      required: ["ioc", "notes"],
+    },
+  },
+  {
+    name: "block_hash",
+    description:
+      "Block a file hash (MD5 / SHA1 / SHA256) from execution across the EDR fleet. Destructive: requires admin confirmation. The hash type is inferred from length at the executor; reject if the hash doesn't match a known length.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        ioc: {
+          type: "string",
+          description: "The file hash. Hex string, MD5 (32 chars) / SHA1 (40 chars) / SHA256 (64 chars).",
+        },
+        notes: {
+          type: "string",
+          description: "Short rationale captured for audit (e.g. which alert flagged this hash).",
+        },
+      },
+      required: ["ioc", "notes"],
+    },
+  },
+  {
+    name: "block_ipaddress",
+    description:
+      "Block an IPv4 or IPv6 address at the network perimeter. Destructive: requires admin confirmation. Use after positively identifying an IP as part of a confirmed incident (e.g. a C2 endpoint, a confirmed phishing-campaign source).",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        ioc: {
+          type: "string",
+          description: "The IP address to block. IPv4 (dotted-quad) or IPv6.",
+        },
+        notes: {
+          type: "string",
+          description: "Short rationale captured for audit.",
+        },
+      },
+      required: ["ioc", "notes"],
+    },
+  },
+  {
+    name: "request_sslbypass",
+    description:
+      "File an SSL inspection bypass request for a domain (e.g. a third-party application the security stack is incorrectly breaking). Destructive: requires admin confirmation. Files a ticket with the security team via the Logic App; does NOT bypass inspection unilaterally — a human reviews and approves.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        reportedDomain: {
+          type: "string",
+          description: "The domain to request an SSL inspection bypass for.",
+        },
+        submitDate: {
+          type: "string",
+          description: "ISO-8601 timestamp for when the request should be filed. Defaults to the current time if omitted.",
+        },
+      },
+      required: ["reportedDomain"],
+    },
+  },
 ];
 
 export const DESTRUCTIVE_TOOLS = new Set([
@@ -1450,4 +1575,13 @@ export const DESTRUCTIVE_TOOLS = new Set([
   "remediate_abnormal_messages",
   "action_ato_case",
   "action_appomni_finding",
+  // Information Security Incident Response Logic App — every tool
+  // here is a network-layer remediation write and must go through
+  // the confirmation gate.
+  "block_domain",
+  "block_email",
+  "block_globalprotect",
+  "block_hash",
+  "block_ipaddress",
+  "request_sslbypass",
 ]);

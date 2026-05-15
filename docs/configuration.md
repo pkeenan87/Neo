@@ -450,6 +450,43 @@ The catalogue lives at `WIZ_TOOL_CATALOGUE` in `web/lib/mcp-servers.ts`. When Wi
 
 **Failure mode**: if the MCP-server lookup throws (Key Vault outage, Cosmos blip), `getMcpServersSafely` swallows the error, logs a warning, and the agent loop proceeds without Wiz for that turn. Same fail-open posture as the dedup cache and triage dispatch.
 
+<a id="infosec-incident-response"></a>
+### Information Security Incident Response (Logic App MCP)
+
+The agent can dispatch six destructive network-layer remediations through the Information Security Incident Response Logic App: `block_domain`, `block_email`, `block_globalprotect`, `block_hash`, `block_ipaddress`, and `request_sslbypass`. Every call routes through Neo's existing destructive-action confirmation gate (`DESTRUCTIVE_TOOLS`), is admin-only, and surfaces in the audit pipeline with full correlation IDs back to Azure Monitor.
+
+Architecturally Neo acts as the MCP client itself (`web/lib/mcp-client.ts`) rather than registering the Logic App with Anthropic's `mcp_servers` connector. Anthropic's connector executes tools server-side, which bypasses the confirmation gate — for destructive tools that's not acceptable. So the six Logic App tools register as ordinary local Neo tools and proxy to the Logic App via a TypeScript MCP client. See `_specs/infosec-incident-response-mcp.md` and `_plans/infosec-incident-response-mcp.md` for the full design.
+
+**Credentials** (Key Vault primary, env-var fallback). All four required:
+
+| Variable | Key Vault name | Purpose |
+|---|---|---|
+| `AGENT_CLIENT_ID` | `agent-client-id` | Entra ID app registration FOR THE NEO AGENT (the `client_credentials` caller). Must have `api://<INFOSEC_LOGIC_APP_API_ID>/.default` admin-consented in Entra. **Distinct from `AZURE_CLIENT_ID`**, which is scoped to Sentinel/Defender/Entra. |
+| `AGENT_CLIENT_SECRET` | `agent-client-secret` | Client secret for the agent app registration. Rotate periodically. |
+| `INFOSEC_LOGIC_APP_API_ID` | `infosec-logic-app-api-id` | The Logic App's app registration client ID — the OAuth **audience** (`api://<this-value>/.default`). Found in Entra under the Logic App app reg's *Expose an API* tab. |
+| `INFOSEC_LOGIC_APP_MCP_URL` | `infosec-logic-app-mcp-url` | Full HTTPS URL of the Logic App's MCP endpoint, e.g. `https://logic-infosecautomation-prod-001-...azurewebsites.net/api/mcpservers/InfosecIncidentResponse/mcp`. Gated by a literal-host allowlist in `mcp-client.ts` (`INFOSEC_LOGIC_APP_URL_ALLOWLIST`) — adding new environments requires a code change. |
+
+`AZURE_TENANT_ID` is reused (Neo is single-tenant).
+
+**OAuth flow**: Neo POSTs `application/x-www-form-urlencoded` to `https://login.microsoftonline.com/<tenant>/oauth2/v2.0/token` with `grant_type=client_credentials`, `client_id=<AGENT_CLIENT_ID>`, `client_secret=<AGENT_CLIENT_SECRET>`, `scope=api://<INFOSEC_LOGIC_APP_API_ID>/.default`. The returned access token is cached in-memory keyed by `sha256(client_id + ":" + client_secret + ":" + resource).slice(0, 16)` (5-minute expiry buffer). Mint helper lives at `web/lib/infosec-auth.ts`.
+
+**MCP handshake** (per Streamable HTTP MCP spec):
+1. `initialize` → 200 with `Mcp-Session-Id` response header (cached per-process for subsequent requests).
+2. `notifications/initialized` → 202 Accepted, no body.
+3. `tools/call` per invocation — `Authorization: Bearer <token>` + `Mcp-Session-Id: <session>` + `Accept: application/json, text/event-stream`.
+
+On HTTP 401 mid-session (token expired or server-side session evicted) the client invalidates the cached session promise and retries the call once with a fresh handshake. A second 401 surfaces as a tool error.
+
+**Server-populated `responder`**: every Logic App tool takes a `responder` field. To prevent prompt-injection identity spoofing, Neo's executor **never exposes `responder` on the model-facing tool schema** — it's populated server-side from `getLogContext()?.userName` at dispatch. If no authenticated user is in scope (e.g. background callers without a request context), the executor refuses and the tool never fires.
+
+**Connection-test probe**: Settings → Integrations → Information Security Incident Response → *Test connection* runs the two-stage handshake (mint Entra token → force MCP `initialize`+`notifications/initialized`) without invoking any destructive tool. Distinct error messages for each stage so the admin UI can tell "wrong AGENT_CLIENT_SECRET" from "Logic App unreachable".
+
+**Mock mode**: `MOCK_MODE=true` short-circuits every Infosec executor to a synthetic `{ status: "submitted", mocked: true, runId: "mock-run-<ts>" }` response without touching the network. Useful for dev / e2e tests that exercise the agent loop without firing real remediations.
+
+**Audit**: every Logic App tool invocation emits the standard `tool_execution` event with `toolCategory: "infosec-incident-response"`, `isDestructive: true`, `responder` (the authenticated operator), and the Azure correlation headers (`apiManagementRequestId`, `apiManagementMiddlewareRequestId`, `workflowRunId` if the Logic App emits one on `tools/call`). The bearer token and `AGENT_CLIENT_SECRET` never reach metadata.
+
+**Failure mode**: if `getInfosecAccessToken` throws or the MCP server is unreachable, the executor surfaces the error as a structured tool result. The agent loop continues — the user sees the failure in the model's response and can retry. No background task is queued; remediation is only attempted on the explicit, confirmed user prompt.
+
 ### Token Usage Budgets
 
 Neo enforces per-user token budgets to control API costs. Two rolling windows are checked before each agent loop call:
