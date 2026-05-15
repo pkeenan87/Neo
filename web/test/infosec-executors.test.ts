@@ -43,7 +43,12 @@ vi.mock("../lib/config", () => ({
 }));
 
 // Mock the log context so we control responder injection per-test.
-const logContextState = { userName: "admin@example.com" as string | undefined };
+// userEmail is the Entra UPN / email; userName is the display label.
+// The Infosec executor pulls `userEmail` for the responder field.
+const logContextState = {
+  userName: "Patrick Keenan" as string | undefined,
+  userEmail: "admin@example.com" as string | undefined,
+};
 vi.mock("../lib/logger", () => ({
   logger: {
     info: vi.fn(),
@@ -53,7 +58,13 @@ vi.mock("../lib/logger", () => ({
     emitEvent: vi.fn(),
   },
   hashPii: (s: string) => `hashed-${s}`,
-  getLogContext: () => (logContextState.userName ? { userName: logContextState.userName } : undefined),
+  getLogContext: () => {
+    if (!logContextState.userName && !logContextState.userEmail) return undefined;
+    return {
+      userName: logContextState.userName,
+      userEmail: logContextState.userEmail,
+    };
+  },
 }));
 
 import { executeTool } from "../lib/executors";
@@ -64,7 +75,8 @@ beforeEach(() => {
   mcpClientMock.reset.mockReset();
   envState.MOCK_MODE = false;
   envState.INFOSEC_LOGIC_APP_MCP_URL = "https://logic-infosecautomation-prod-001-b0b2eje4fehphtf2.eastus2-01.azurewebsites.net/api/mcpservers/InfosecIncidentResponse/mcp";
-  logContextState.userName = "admin@example.com";
+  logContextState.userName = "Patrick Keenan";
+  logContextState.userEmail = "admin@example.com";
   mcpClientMock.callTool.mockResolvedValue({
     content: [{ type: "text", text: "ok" }],
     isError: false,
@@ -168,8 +180,40 @@ describe("Infosec executors — responder injection", () => {
 
   it("refuses to fire when no authenticated user is in scope", async () => {
     logContextState.userName = undefined;
+    logContextState.userEmail = undefined;
     await expect(executeTool("block_ipaddress", { ioc: "1.2.3.4", notes: "n" })).rejects.toThrow(
-      /requires an authenticated user identity/,
+      /requires an Entra-authenticated user identity with an email/,
+    );
+    expect(mcpClientMock.callTool).not.toHaveBeenCalled();
+  });
+
+  // ── Responder MUST be an email/UPN ─────────────────────────
+  // The Logic App audit treats `responder` as an email. Browser
+  // sessions provide a display name in `userName` ("Patrick Keenan"),
+  // so the executor pulls `userEmail` (the Entra UPN) instead.
+
+  it("forwards userEmail (UPN) as the responder, not userName (display name)", async () => {
+    logContextState.userName = "Patrick Keenan";
+    logContextState.userEmail = "pkeenan@goodwinlaw.com";
+    await executeTool("block_ipaddress", { ioc: "1.2.3.4", notes: "n" });
+    const payload = mcpClientMock.callTool.mock.calls[0][1] as Record<string, unknown>;
+    expect(payload.responder).toBe("pkeenan@goodwinlaw.com");
+    expect(payload.responder).not.toBe("Patrick Keenan");
+  });
+
+  it("refuses to fire when only a userName (no email) is in scope — API-key callers blocked", async () => {
+    logContextState.userName = "neo-cli-key-1";
+    logContextState.userEmail = undefined;
+    await expect(executeTool("block_ipaddress", { ioc: "1.2.3.4", notes: "n" })).rejects.toThrow(
+      /requires an Entra-authenticated user identity with an email/,
+    );
+    expect(mcpClientMock.callTool).not.toHaveBeenCalled();
+  });
+
+  it("refuses to fire when userEmail is a display name, not an email shape", async () => {
+    logContextState.userEmail = "Patrick Keenan";
+    await expect(executeTool("block_ipaddress", { ioc: "1.2.3.4", notes: "n" })).rejects.toThrow(
+      /requires the responder to be an email\/UPN/,
     );
     expect(mcpClientMock.callTool).not.toHaveBeenCalled();
   });

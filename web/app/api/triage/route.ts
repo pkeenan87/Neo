@@ -303,6 +303,7 @@ async function handleTriagePost(request: NextRequest, identity: ResolvedAuth): P
     provider: identity.provider,
     channel: "triage",
     sessionId: neoRunId,
+    userEmail: identity.email,
   };
 
   return setLogContext(logIdentity, async () => {
