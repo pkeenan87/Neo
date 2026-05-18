@@ -253,7 +253,7 @@ async function get_user_info({ upn }: UserInfoInput): Promise<unknown> {
   const encodedUpn = encodeURIComponent(upn);
 
   const [user, mfa, groups, devices, riskDetections] = await Promise.allSettled([
-    fetch(`https://graph.microsoft.com/v1.0/users/${encodedUpn}?$select=displayName,jobTitle,department,accountEnabled,lastPasswordChangeDateTime,userPrincipalName`, { headers }).then(r => r.json()),
+    fetch(`https://graph.microsoft.com/v1.0/users/${encodedUpn}?$select=displayName,jobTitle,department,accountEnabled,lastPasswordChangeDateTime,userPrincipalName,onPremisesSamAccountName`, { headers }).then(r => r.json()),
     fetch(`https://graph.microsoft.com/v1.0/reports/authenticationMethods/userRegistrationDetails?$filter=userPrincipalName eq '${escapeODataString(upn)}'`, { headers }).then(r => r.json()),
     fetch(`https://graph.microsoft.com/v1.0/users/${encodedUpn}/memberOf`, { headers }).then(r => r.json()),
     fetch(`https://graph.microsoft.com/v1.0/users/${encodedUpn}/registeredDevices`, { headers }).then(r => r.json()),
@@ -4278,6 +4278,7 @@ function mockUserInfo(upn: string): unknown {
   return {
     upn,
     displayName: "John Smith",
+    onPremisesSamAccountName: "jsmith",
     jobTitle: "Associate Attorney",
     department: "Litigation",
     accountEnabled: true,
