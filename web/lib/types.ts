@@ -697,6 +697,11 @@ export interface SentinelIncidentsInput {
   limit?: number;
 }
 
+export interface DefenderHuntingQueryInput {
+  query: string;
+  description: string;
+}
+
 export interface XdrAlertInput {
   alert_id: string;
   platform: "defender" | "crowdstrike";

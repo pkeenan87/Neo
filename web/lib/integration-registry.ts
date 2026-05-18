@@ -71,7 +71,7 @@ export const INTEGRATIONS: IntegrationInfo[] = [
     iconName: "ShieldAlert",
     imageSrc: "/microsoft-logo.png",
     description:
-      "Endpoint detection and response. Retrieve XDR alerts, search by host, and isolate or release machines.",
+      "Endpoint detection and response. Retrieve XDR alerts, search by host, isolate or release machines, and run Advanced Hunting KQL across the full Defender XDR schema including TVM tables.",
     capabilities: [
       "get_xdr_alert",
       "search_xdr_by_host",
@@ -82,6 +82,7 @@ export const INTEGRATIONS: IntegrationInfo[] = [
       "import_indicators",
       "list_indicators",
       "delete_indicator",
+      "run_defender_hunting_query",
     ],
     secrets: [...AZURE_AD_SECRETS],
   },

@@ -26,6 +26,27 @@ export const TOOLS: Tool[] = [
     },
   },
   {
+    name: "run_defender_hunting_query",
+    description:
+      "Run a KQL query against the Microsoft Defender XDR Advanced Hunting API (Microsoft Graph). This is the ONLY path to the DeviceTvm* tables (DeviceTvmSecureConfigurationAssessment, DeviceTvmSecureConfigurationAssessmentKB, DeviceTvmSoftwareInventory, DeviceTvmSoftwareVulnerabilities, DeviceTvmSoftwareVulnerabilitiesKB) and DeviceInfoGathering / DeviceInfoGatheringKB — these tables are NOT streamed into Sentinel. For SigninLogs, AuditLogs, AlertEvidence, and DeviceProcessEvents prefer run_sentinel_kql unless you need to join with TVM data. Subject to a 30-day query window, 100k-row cap, and 200s per-query timeout.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        query: {
+          type: "string",
+          description:
+            "Valid KQL query for the Microsoft Defender XDR Advanced Hunting schema.",
+        },
+        description: {
+          type: "string",
+          description:
+            "Human-readable explanation of what this query is looking for.",
+        },
+      },
+      required: ["query", "description"],
+    },
+  },
+  {
     name: "get_sentinel_incidents",
     description: "List recent Sentinel incidents with optional severity and status filters. Good starting point for triage.",
     input_schema: {
