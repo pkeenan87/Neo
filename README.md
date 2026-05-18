@@ -264,6 +264,7 @@ For security issues, **do not open a public issue** — see [SECURITY.md](SECURI
 | Log Analytics API | Data.Read | Application |
 | Microsoft Graph | User.ReadWrite.All | Application |
 | Microsoft Graph | Directory.ReadWrite.All | Application |
+| Microsoft Graph | ThreatHunting.Read.All | Application |
 | Defender for Endpoint | Machine.Isolate | Application |
 | Defender for Endpoint | Machine.ReadWrite.All | Application |
 | Sentinel (ARM) | Microsoft Sentinel Reader | Role (RBAC) |

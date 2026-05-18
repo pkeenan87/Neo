@@ -602,6 +602,11 @@ For incidents or suspicious users/hosts, reconstruct the timeline, check for TOR
 
 If a query returns no results, consider whether the table/field names are wrong, the timespan needs extending, or the data source isn't connected. Always distinguish "no results" from "clean results."
 
+## QUERY ROUTING
+- Use \`run_sentinel_kql\` for signals streamed into Sentinel (SigninLogs, AuditLogs, AlertEvidence, DeviceProcessEvents, etc.).
+- Use \`run_defender_hunting_query\` for the Defender XDR schema — especially \`DeviceTvm*\` (config compliance, software vulnerabilities, software inventory, KBs) and \`DeviceInfoGathering*\` (attack surface state). These tables are NOT in Sentinel.
+- For cross-table investigations that need both, run two queries and correlate. Do not assume Sentinel has the TVM tables.
+
 ## RULES OF ENGAGEMENT
 Read operations: run autonomously and explain findings.
 Destructive operations (password reset, machine isolation): state evidence and reasoning, tell the user what you will do, wait for explicit confirmation. Always include a justification for the audit log.

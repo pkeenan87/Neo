@@ -9,6 +9,7 @@ import { canUseTool, ToolPermissionError, type Role } from "./permissions";
 import type {
   SentinelKqlInput,
   SentinelIncidentsInput,
+  DefenderHuntingQueryInput,
   XdrAlertInput,
   XdrHostSearchInput,
   UserInfoInput,
@@ -177,6 +178,74 @@ async function get_sentinel_incidents({ severity, status = "New", limit = 10 }: 
   }
 
   return await res.json();
+}
+
+// ── Defender XDR Advanced Hunting ─────────────────────────────
+
+const DEFENDER_HUNTING_URL = "https://graph.microsoft.com/v1.0/security/runHuntingQuery";
+const DEFENDER_HUNTING_ROW_CAP = 100_000;
+const DEFENDER_HUNTING_CLIENT_TIMEOUT_MS = 210_000;
+
+function classifyHuntingQuotaKind(body: string): "rate" | "cpu" {
+  return /cpu|concurrent/i.test(body) ? "cpu" : "rate";
+}
+
+// Graph's runHuntingQuery sometimes returns row keys with a lowercased first
+// letter relative to the schema's `name` (see Example 2 in the docs). Fall
+// back so the value isn't dropped silently.
+function lookupRowValue(row: Record<string, unknown>, columnName: string): unknown {
+  if (columnName in row) return row[columnName];
+  const camel = columnName.charAt(0).toLowerCase() + columnName.slice(1);
+  return row[camel];
+}
+
+function normalizeHuntingResponse(payload: unknown): { tables: Array<{ name: string; columns: Array<{ name: string; type: string }>; rows: unknown[][] }>; rowCount: number; truncationPossible: boolean } {
+  const obj = (payload ?? {}) as { schema?: Array<{ name: string; type: string }>; results?: Array<Record<string, unknown>> };
+  const columns = (obj.schema ?? []).map((c) => ({ name: c.name, type: c.type }));
+  const results = obj.results ?? [];
+  const rows = results.map((r) => columns.map((c) => lookupRowValue(r, c.name)));
+  return {
+    tables: [{ name: "PrimaryResult", columns, rows }],
+    rowCount: rows.length,
+    truncationPossible: rows.length >= DEFENDER_HUNTING_ROW_CAP,
+  };
+}
+
+async function run_defender_hunting_query({ query }: DefenderHuntingQueryInput): Promise<unknown> {
+  if (env.MOCK_MODE) {
+    return mockDefenderHuntingQuery(query);
+  }
+
+  const token = await getMSGraphToken();
+  let res: Response;
+  try {
+    res = await fetch(DEFENDER_HUNTING_URL, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ Query: query }),
+      signal: AbortSignal.timeout(DEFENDER_HUNTING_CLIENT_TIMEOUT_MS),
+    });
+  } catch (err) {
+    if ((err as Error)?.name === "TimeoutError") {
+      throw new Error(
+        `Defender Advanced Hunting query exceeded the ${DEFENDER_HUNTING_CLIENT_TIMEOUT_MS / 1000}s client timeout — narrow the timespan or add filters.`,
+      );
+    }
+    throw err;
+  }
+
+  if (res.status === 429) {
+    const errText = await res.text();
+    const kind = classifyHuntingQuotaKind(errText);
+    throw new Error(`Defender Advanced Hunting quota exceeded (${kind}): ${errText}`);
+  }
+
+  if (!res.ok) {
+    const errText = await res.text();
+    throw new Error(`Defender Advanced Hunting query failed (${res.status}): ${errText}`);
+  }
+
+  return normalizeHuntingResponse(await res.json());
 }
 
 // ── XDR ───────────────────────────────────────────────────────
@@ -3899,6 +3968,7 @@ async function request_sslbypass(input: InfosecRequestSslbypassInput): Promise<u
 const executors: Record<string, (input: Record<string, unknown>) => Promise<unknown>> = {
   run_sentinel_kql: (input) => run_sentinel_kql(input as unknown as SentinelKqlInput),
   get_sentinel_incidents: (input) => get_sentinel_incidents(input as unknown as SentinelIncidentsInput),
+  run_defender_hunting_query: (input) => run_defender_hunting_query(input as unknown as DefenderHuntingQueryInput),
   get_xdr_alert: (input) => get_xdr_alert(input as unknown as XdrAlertInput),
   search_xdr_by_host: (input) => search_xdr_by_host(input as unknown as XdrHostSearchInput),
   get_user_info: (input) => get_user_info(input as unknown as UserInfoInput),
@@ -4188,6 +4258,131 @@ function mockSentinelKql(query: string): unknown {
 
   return {
     tables: [{ name: "PrimaryResult", columns: ["TimeGenerated", "Result"], rows: [["2026-03-02T12:00:00Z", "No results"]] }],
+    _mock: true,
+  };
+}
+
+function mockDefenderHuntingQuery(query: string): unknown {
+  const q = query.toLowerCase();
+
+  if (q.includes("simulate_truncation")) {
+    return {
+      tables: [{
+        name: "PrimaryResult",
+        columns: [{ name: "DeviceId", type: "string" }],
+        rows: [["truncation-marker"]],
+      }],
+      rowCount: 1,
+      truncationPossible: true,
+      _mock: true,
+    };
+  }
+
+  if (q.includes("devicetvmsecureconfigurationassessment")) {
+    return {
+      tables: [{
+        name: "PrimaryResult",
+        columns: [
+          { name: "DeviceId", type: "string" },
+          { name: "DeviceName", type: "string" },
+          { name: "OSPlatform", type: "string" },
+          { name: "ConfigurationId", type: "string" },
+          { name: "IsApplicable", type: "long" },
+          { name: "IsCompliant", type: "long" },
+          { name: "Timestamp", type: "datetime" },
+        ],
+        rows: [
+          ["dev-001", "LAPTOP-JS4729", "Windows11", "scid-2000", 1, 0, "2026-03-02T10:00:00Z"],
+          ["dev-002", "LAPTOP-MP1102", "Windows11", "scid-2000", 1, 1, "2026-03-02T10:00:00Z"],
+          ["dev-003", "MAC-AT8821", "macOS", "scid-2010", 1, 0, "2026-03-02T10:00:00Z"],
+          ["dev-004", "LAPTOP-RK0214", "Windows10", "scid-2000", 1, 0, "2026-03-02T10:00:00Z"],
+          ["dev-005", "LAPTOP-TM7765", "Windows11", "scid-2030", 0, 0, "2026-03-02T10:00:00Z"],
+        ],
+      }],
+      rowCount: 5,
+      truncationPossible: false,
+      _mock: true,
+    };
+  }
+
+  if (q.includes("devicetvmsoftwarevulnerabilities")) {
+    return {
+      tables: [{
+        name: "PrimaryResult",
+        columns: [
+          { name: "DeviceId", type: "string" },
+          { name: "DeviceName", type: "string" },
+          { name: "SoftwareName", type: "string" },
+          { name: "SoftwareVendor", type: "string" },
+          { name: "CveId", type: "string" },
+          { name: "VulnerabilitySeverityLevel", type: "string" },
+        ],
+        rows: [
+          ["dev-001", "LAPTOP-JS4729", "chrome", "google", "CVE-2026-1234", "Critical"],
+          ["dev-001", "LAPTOP-JS4729", "acrobat_reader", "adobe", "CVE-2025-9921", "High"],
+          ["dev-002", "LAPTOP-MP1102", "chrome", "google", "CVE-2026-1234", "Critical"],
+          ["dev-003", "MAC-AT8821", "safari", "apple", "CVE-2026-0044", "Medium"],
+          ["dev-004", "LAPTOP-RK0214", "openssh", "openbsd", "CVE-2024-6387", "High"],
+        ],
+      }],
+      rowCount: 5,
+      truncationPossible: false,
+      _mock: true,
+    };
+  }
+
+  if (q.includes("devicetvmsoftwareinventory")) {
+    return {
+      tables: [{
+        name: "PrimaryResult",
+        columns: [
+          { name: "DeviceId", type: "string" },
+          { name: "DeviceName", type: "string" },
+          { name: "SoftwareName", type: "string" },
+          { name: "SoftwareVendor", type: "string" },
+          { name: "SoftwareVersion", type: "string" },
+          { name: "EndOfSupportStatus", type: "string" },
+        ],
+        rows: [
+          ["dev-001", "LAPTOP-JS4729", "chrome", "google", "121.0.6167.184", "None"],
+          ["dev-001", "LAPTOP-JS4729", "windows_11", "microsoft", "23H2", "None"],
+          ["dev-002", "LAPTOP-MP1102", "office", "microsoft", "16.0.18025.20030", "None"],
+          ["dev-003", "MAC-AT8821", "macos", "apple", "14.3.1", "None"],
+          ["dev-004", "LAPTOP-RK0214", "windows_10", "microsoft", "22H2", "EOL"],
+        ],
+      }],
+      rowCount: 5,
+      truncationPossible: false,
+      _mock: true,
+    };
+  }
+
+  if (q.includes("devicetvminfogathering")) {
+    return {
+      tables: [{
+        name: "PrimaryResult",
+        columns: [
+          { name: "DeviceId", type: "string" },
+          { name: "DeviceName", type: "string" },
+          { name: "FieldName", type: "string" },
+          { name: "FieldValue", type: "string" },
+        ],
+        rows: [
+          ["dev-001", "LAPTOP-JS4729", "SmbV1Enabled", "false"],
+          ["dev-002", "LAPTOP-MP1102", "SmbV1Enabled", "true"],
+          ["dev-003", "MAC-AT8821", "FirewallEnabled", "true"],
+        ],
+      }],
+      rowCount: 3,
+      truncationPossible: false,
+      _mock: true,
+    };
+  }
+
+  return {
+    tables: [{ name: "PrimaryResult", columns: [], rows: [] }],
+    rowCount: 0,
+    truncationPossible: false,
     _mock: true,
   };
 }
