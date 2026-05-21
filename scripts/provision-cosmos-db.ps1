@@ -47,6 +47,9 @@ param(
     [string]$InstanceSharedContainerName = "instance-shared",
 
     [ValidateNotNullOrEmpty()]
+    [string]$ScheduledTasksContainerName = "scheduledTasks",
+
+    [ValidateNotNullOrEmpty()]
     [string]$Location = "eastus",
 
     [ValidateRange(86400, 31536000)]
@@ -303,9 +306,31 @@ if ($existingTriageRuns) {
     Write-Host "     Container 'triageRuns' created with /id partition key and autoscale (1000 RU/s max)."
 }
 
+# ── Scheduled Tasks Container ─────────────────────────────
+
+Write-Host "10.5/12 Creating scheduledTasks container..." -ForegroundColor Green
+$existingScheduledTasks = az cosmosdb sql container show `
+    --account-name $AccountName `
+    --resource-group $ResourceGroupName `
+    --database-name $DatabaseName `
+    --name $ScheduledTasksContainerName 2>$null | ConvertFrom-Json
+if ($existingScheduledTasks) {
+    Write-Host "     Container '$ScheduledTasksContainerName' already exists — skipping."
+} else {
+    az cosmosdb sql container create `
+        --account-name $AccountName `
+        --resource-group $ResourceGroupName `
+        --database-name $DatabaseName `
+        --name $ScheduledTasksContainerName `
+        --partition-key-path "/id" `
+        --max-throughput 1000 `
+        --output none
+    Write-Host "     Container '$ScheduledTasksContainerName' created with /id partition key and autoscale (1000 RU/s max, no TTL)."
+}
+
 # ── Managed Identity Role Assignment ───────────────────────
 
-Write-Host "11/11 Assigning Managed Identity role..." -ForegroundColor Green
+Write-Host "12/12 Assigning Managed Identity role..." -ForegroundColor Green
 if ($WebAppName) {
     $principalId = az webapp identity show `
         --name $WebAppName `

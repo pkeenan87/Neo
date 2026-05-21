@@ -965,6 +965,31 @@ export async function runAgentLoop(
           };
         }
 
+        // Allowlist enforcement at the dispatch site. `toolAllowlist`
+        // already narrows the tool list announced to Claude — but Claude
+        // can still emit a tool_use for a tool name it knows from training
+        // or via in-context drift. Without this guard a scheduled task
+        // that scoped itself to read-only Sentinel queries could execute
+        // an arbitrary other read-only tool (knowledge-base search,
+        // user lookup, etc.) without ever appearing in task.allowedTools.
+        if (toolAllowlist && !toolAllowlist.has(name)) {
+          logger.warn(
+            "Tool call rejected — not in toolAllowlist for this run",
+            "agent",
+            { toolName: name, toolId: id, allowlist: [...toolAllowlist] },
+          );
+          toolResults.push({
+            type: "tool_result",
+            tool_use_id: id,
+            content: JSON.stringify({
+              error: `Tool '${name}' is not in the allowlist for this run`,
+              tool: name,
+            }),
+            is_error: true,
+          });
+          continue;
+        }
+
         // Execute the tool with timing
         const toolStart = Date.now();
         try {

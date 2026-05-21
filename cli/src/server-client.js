@@ -272,3 +272,88 @@ export async function fetchSkills(serverUrl, getAuthHeader) {
   const data = await res.json();
   return data.skills || [];
 }
+
+// ── Scheduled Tasks ──────────────────────────────────────────
+
+async function scheduleApi(serverUrl, getAuthHeader, path, init = {}) {
+  const authHeader = await getAuthHeader();
+  const res = await fetch(`${serverUrl}${path}`, {
+    ...init,
+    headers: {
+      Authorization: authHeader,
+      ...(init.body ? { "Content-Type": "application/json" } : {}),
+      ...(init.headers || {}),
+    },
+  });
+
+  if (res.status === 401) {
+    throw new Error("Unauthorized — run: node src/index.js auth login");
+  }
+  if (res.status === 403) {
+    throw new Error("Forbidden — admin role required for scheduled-task operations");
+  }
+  if (!res.ok) {
+    const raw = await res.text().catch(() => "");
+    throw new Error(`Server error (${res.status})${raw ? `: ${raw.slice(0, 200)}` : ""}`);
+  }
+  if (res.status === 204) return null;
+  return res.json();
+}
+
+export async function listSchedules(serverUrl, getAuthHeader) {
+  const data = await scheduleApi(serverUrl, getAuthHeader, "/api/scheduled-tasks");
+  return data?.tasks ?? [];
+}
+
+export async function getSchedule(serverUrl, getAuthHeader, id) {
+  const data = await scheduleApi(serverUrl, getAuthHeader, `/api/scheduled-tasks/${encodeURIComponent(id)}`);
+  return data?.task ?? null;
+}
+
+export async function createSchedule(serverUrl, getAuthHeader, payload) {
+  const data = await scheduleApi(serverUrl, getAuthHeader, "/api/scheduled-tasks", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+  return data?.task ?? null;
+}
+
+export async function patchSchedule(serverUrl, getAuthHeader, id, payload) {
+  const data = await scheduleApi(
+    serverUrl,
+    getAuthHeader,
+    `/api/scheduled-tasks/${encodeURIComponent(id)}`,
+    { method: "PATCH", body: JSON.stringify(payload) },
+  );
+  return data?.task ?? null;
+}
+
+export async function deleteSchedule(serverUrl, getAuthHeader, id) {
+  return scheduleApi(
+    serverUrl,
+    getAuthHeader,
+    `/api/scheduled-tasks/${encodeURIComponent(id)}`,
+    { method: "DELETE" },
+  );
+}
+
+export async function runScheduleNow(serverUrl, getAuthHeader, id) {
+  return scheduleApi(
+    serverUrl,
+    getAuthHeader,
+    `/api/scheduled-tasks/${encodeURIComponent(id)}/run`,
+    { method: "POST" },
+  );
+}
+
+export async function listScheduleRuns(serverUrl, getAuthHeader, id, { limit, offset } = {}) {
+  const qs = new URLSearchParams();
+  if (limit) qs.set("limit", String(limit));
+  if (offset) qs.set("offset", String(offset));
+  const suffix = qs.toString() ? `?${qs.toString()}` : "";
+  return scheduleApi(
+    serverUrl,
+    getAuthHeader,
+    `/api/scheduled-tasks/${encodeURIComponent(id)}/runs${suffix}`,
+  );
+}

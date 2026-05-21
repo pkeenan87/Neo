@@ -32,6 +32,7 @@ const REQUIRED_CONTAINERS: readonly string[] = [
   "api-keys",
   "skills",
   "instance-shared",
+  "scheduledTasks",
 ];
 
 export type DatabaseFactory = (endpoint: string) => Database;

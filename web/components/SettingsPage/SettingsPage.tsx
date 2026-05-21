@@ -9,6 +9,7 @@ import { UsageSection } from './UsageSection'
 import { ApiKeysSection } from './ApiKeysSection'
 import { AdminUsageSection } from './AdminUsageSection'
 import { OrgContextSection } from './OrgContextSection'
+import { ScheduledTasksSection } from './ScheduledTasksSection'
 import { SkillsSection } from './SkillsSection'
 import { TriageMappingsSection } from './TriageMappingsSection'
 import styles from './SettingsPage.module.css'
@@ -21,10 +22,11 @@ type Tab =
   | 'org-context'
   | 'skills'
   | 'triage-mappings'
+  | 'scheduled-tasks'
 
 // Tabs that render multi-column / wide-data views and opt in to the
 // 1280px content variant. Form-style tabs stay at the default 720px.
-const WIDE_TABS = new Set<Tab>(['skills', 'triage-mappings'])
+const WIDE_TABS = new Set<Tab>(['skills', 'triage-mappings', 'scheduled-tasks'])
 
 const BASE_TABS: { value: Tab; label: string }[] = [
   { value: 'general', label: 'General' },
@@ -47,6 +49,7 @@ export function SettingsPage({ userName, userImage, userRole, className }: Setti
         { value: 'org-context' as Tab, label: 'Organization' },
         { value: 'skills' as Tab, label: 'Skills' },
         { value: 'triage-mappings' as Tab, label: 'Triage Mappings' },
+        { value: 'scheduled-tasks' as Tab, label: 'Scheduled Tasks' },
         { value: 'admin-usage' as Tab, label: 'Usage Limits' },
         { value: 'api-keys' as Tab, label: 'API Keys' },
       ]
@@ -94,6 +97,7 @@ export function SettingsPage({ userName, userImage, userRole, className }: Setti
         {activeTab === 'org-context' && <OrgContextSection />}
         {activeTab === 'skills' && <SkillsSection />}
         {activeTab === 'triage-mappings' && <TriageMappingsSection />}
+        {activeTab === 'scheduled-tasks' && <ScheduledTasksSection />}
         {activeTab === 'admin-usage' && <AdminUsageSection />}
         {activeTab === 'api-keys' && <ApiKeysSection />}
       </main>

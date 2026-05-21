@@ -1,0 +1,9 @@
+{
+  "IsEncrypted": false,
+  "Values": {
+    "AzureWebJobsStorage": "UseDevelopmentStorage=true",
+    "FUNCTIONS_WORKER_RUNTIME": "node",
+    "NEO_WEB_URL": "https://neo.example.com",
+    "NEO_WEB_AUDIENCE": "api://<web-app-client-id>"
+  }
+}

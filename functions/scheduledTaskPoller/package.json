@@ -1,0 +1,19 @@
+{
+  "name": "neo-scheduled-task-poller",
+  "version": "1.0.0",
+  "description": "Timer-triggered Azure Function that polls the Neo web app every 2 minutes to drive scheduled-task execution.",
+  "main": "dist/src/scheduledTaskPoller.js",
+  "scripts": {
+    "build": "tsc",
+    "start": "func start",
+    "prestart": "npm run build"
+  },
+  "dependencies": {
+    "@azure/functions": "^4.14.0",
+    "@azure/identity": "^4.13.0"
+  },
+  "devDependencies": {
+    "@types/node": "^25.8.0",
+    "typescript": "^6.0.3"
+  }
+}

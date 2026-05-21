@@ -5,7 +5,17 @@ import { Marked } from "marked";
 import { markedTerminal } from "marked-terminal";
 import { resolveServerConfig, parseFlag, hasFlag, validateServerUrl } from "./config.js";
 import { runAgentLoop, confirmTool } from "./agent.js";
-import { fetchConversations, fetchSkills } from "./server-client.js";
+import {
+  fetchConversations,
+  fetchSkills,
+  listSchedules,
+  getSchedule,
+  createSchedule,
+  patchSchedule,
+  deleteSchedule,
+  runScheduleNow,
+  listScheduleRuns,
+} from "./server-client.js";
 import { checkForUpdate, runUpdate } from "./updater.js";
 import { login, logout, status, getAccessToken } from "./auth-entra.js";
 import { readConfig, writeConfig } from "./config-store.js";
@@ -639,6 +649,146 @@ function handleConfigCommand() {
 }
 
 // ─────────────────────────────────────────────────────────────
+//  Schedule sub-commands
+// ─────────────────────────────────────────────────────────────
+
+function printScheduleUsage() {
+  console.error(`
+  Usage:
+    neo schedule list                 List all scheduled tasks
+    neo schedule show <id>            Show one task and its recent runs
+    neo schedule enable <id>          Enable a task
+    neo schedule disable <id>         Disable a task
+    neo schedule delete <id>          Delete a task (no confirmation prompt)
+    neo schedule run <id>             Trigger an out-of-band run now
+    neo schedule create --file <p>    Create a task from a JSON file
+`);
+}
+
+function formatScheduleRow(task) {
+  const enabled = task.enabled ? "yes" : "no";
+  const status = task.state?.status ?? "idle";
+  const lastResult = task.state?.lastRunResult ?? "—";
+  const nextRun = task.state?.nextRunTime ?? "—";
+  return `${task.id}\t${task.name}\t${enabled}\t${status}\t${lastResult}\t${nextRun}`;
+}
+
+async function handleScheduleCommand() {
+  const { serverUrl, getAuthHeader } = await resolveServerConfig();
+  const sub = process.argv[3];
+
+  if (!sub || sub === "list") {
+    const tasks = await listSchedules(serverUrl, getAuthHeader);
+    if (!tasks.length) {
+      console.log(chalk.gray("\n  No scheduled tasks.\n"));
+      return;
+    }
+    console.log();
+    console.log(chalk.bold("  ID\tNAME\tENABLED\tSTATUS\tLAST\tNEXT"));
+    for (const t of tasks) {
+      console.log(`  ${formatScheduleRow(t)}`);
+    }
+    console.log();
+    return;
+  }
+
+  if (sub === "show") {
+    const id = process.argv[4];
+    if (!id) {
+      console.error(chalk.red("\n  Missing task id. Usage: neo schedule show <id>\n"));
+      process.exit(1);
+    }
+    const task = await getSchedule(serverUrl, getAuthHeader, id);
+    if (!task) {
+      console.error(chalk.red(`\n  Task not found: ${id}\n`));
+      process.exit(1);
+    }
+    const stripped = { ...task };
+    delete stripped._etag;
+    console.log(JSON.stringify(stripped, null, 2));
+    return;
+  }
+
+  if (sub === "enable" || sub === "disable") {
+    const id = process.argv[4];
+    if (!id) {
+      console.error(chalk.red(`\n  Missing task id. Usage: neo schedule ${sub} <id>\n`));
+      process.exit(1);
+    }
+    const task = await getSchedule(serverUrl, getAuthHeader, id);
+    if (!task) {
+      console.error(chalk.red(`\n  Task not found: ${id}\n`));
+      process.exit(1);
+    }
+    const updated = await patchSchedule(serverUrl, getAuthHeader, id, {
+      expectedEtag: task._etag,
+      enabled: sub === "enable",
+    });
+    console.log(
+      chalk.green(`\n  Task "${updated?.name ?? id}" is now ${sub === "enable" ? "enabled" : "disabled"}.\n`),
+    );
+    return;
+  }
+
+  if (sub === "delete") {
+    const id = process.argv[4];
+    if (!id) {
+      console.error(chalk.red("\n  Missing task id. Usage: neo schedule delete <id>\n"));
+      process.exit(1);
+    }
+    await deleteSchedule(serverUrl, getAuthHeader, id);
+    console.log(chalk.green(`\n  Task ${id} deleted.\n`));
+    return;
+  }
+
+  if (sub === "run") {
+    const id = process.argv[4];
+    if (!id) {
+      console.error(chalk.red("\n  Missing task id. Usage: neo schedule run <id>\n"));
+      process.exit(1);
+    }
+    await runScheduleNow(serverUrl, getAuthHeader, id);
+    console.log(chalk.green(`\n  Task ${id} triggered. Use 'neo schedule show <id>' to see the run result once complete.\n`));
+    return;
+  }
+
+  if (sub === "runs") {
+    const id = process.argv[4];
+    if (!id) {
+      console.error(chalk.red("\n  Missing task id. Usage: neo schedule runs <id>\n"));
+      process.exit(1);
+    }
+    const result = await listScheduleRuns(serverUrl, getAuthHeader, id, { limit: 20 });
+    console.log(JSON.stringify(result, null, 2));
+    return;
+  }
+
+  if (sub === "create") {
+    const fileFlagIdx = process.argv.indexOf("--file");
+    if (fileFlagIdx === -1 || !process.argv[fileFlagIdx + 1]) {
+      printScheduleUsage();
+      process.exit(1);
+    }
+    const path = process.argv[fileFlagIdx + 1];
+    let payload;
+    try {
+      const { readFileSync } = await import("node:fs");
+      payload = JSON.parse(readFileSync(path, "utf8"));
+    } catch (err) {
+      console.error(chalk.red(`\n  Failed to read ${path}: ${err.message}\n`));
+      process.exit(1);
+    }
+    const created = await createSchedule(serverUrl, getAuthHeader, payload);
+    console.log(chalk.green(`\n  Created task ${created?.id ?? "?"} ("${created?.name ?? "?"}"). It starts disabled — run 'neo schedule enable <id>' to arm it.\n`));
+    return;
+  }
+
+  console.error(chalk.red(`\n  Unknown schedule sub-command: "${sub}"`));
+  printScheduleUsage();
+  process.exit(1);
+}
+
+// ─────────────────────────────────────────────────────────────
 //  Main REPL loop
 // ─────────────────────────────────────────────────────────────
 
@@ -662,6 +812,16 @@ async function main() {
 
   if (process.argv[2] === "prompt") {
     await handlePromptCommand();
+    return;
+  }
+
+  if (process.argv[2] === "schedule") {
+    try {
+      await handleScheduleCommand();
+    } catch (err) {
+      console.error(chalk.red(`\n  ${err.message}\n`));
+      process.exit(1);
+    }
     return;
   }
 

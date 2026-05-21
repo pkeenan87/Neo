@@ -36,6 +36,7 @@
     "autoprefixer": "10.5.0",
     "botbuilder": "4.23.3",
     "busboy": "1.6.0",
+    "cron-parser": "4.9.0",
     "csv-parse": "6.2.1",
     "dotenv": "17.4.2",
     "jose": "6.2.3",
