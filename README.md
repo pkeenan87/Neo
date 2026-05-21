@@ -229,6 +229,7 @@ The CLI is a thin client. All agent logic, tool execution, credential management
 
 - [Configuration Guide](docs/configuration.md) — Environment variables, API keys, Entra ID setup, CLI config
 - [User Guide](docs/user-guide.md) — Step-by-step instructions for users and admins
+- [Scheduled Tasks Setup](docs/scheduled-tasks.md) — Deploy the proactive cron-driven workflow engine
 - [Architecture](ARCHITECTURE.md) — System design and component responsibilities
 - [Security Policy](SECURITY.md) — How to report vulnerabilities
 
@@ -265,6 +266,7 @@ For security issues, **do not open a public issue** — see [SECURITY.md](SECURI
 | Microsoft Graph | User.ReadWrite.All | Application |
 | Microsoft Graph | Directory.ReadWrite.All | Application |
 | Microsoft Graph | ThreatHunting.Read.All | Application |
+| Microsoft Graph | ChannelMessage.Send | Application |
 | Defender for Endpoint | Machine.Isolate | Application |
 | Defender for Endpoint | Machine.ReadWrite.All | Application |
 | Sentinel (ARM) | Microsoft Sentinel Reader | Role (RBAC) |

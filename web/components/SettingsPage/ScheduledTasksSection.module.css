@@ -1,0 +1,332 @@
+@reference "../../app/globals.css";
+
+.tableWrapper {
+  @apply overflow-x-auto;
+}
+
+.table {
+  @apply w-full;
+  border-collapse: collapse;
+  font-size: 0.8125rem;
+}
+
+.tableHeader {
+  @apply text-left text-sm font-bold text-brand-600 pb-2 border-b border-border-default;
+}
+
+.tableRow {
+  @apply border-b border-border-default;
+}
+
+.tableCell {
+  @apply py-2 pr-4 text-sm text-brand-700;
+  vertical-align: top;
+}
+
+.taskName {
+  @apply font-bold text-brand-900;
+}
+
+.taskDescription {
+  @apply text-sm text-brand-500;
+  font-size: 0.75rem;
+  max-width: 320px;
+  white-space: normal;
+}
+
+.badge {
+  @apply px-2 py-1 rounded-lg text-sm font-bold;
+  font-size: 0.6875rem;
+}
+
+.badge_idle {
+  @apply bg-brand-100 text-brand-700;
+}
+
+.badge_running {
+  background-color: rgba(99, 102, 241, 0.15);
+  color: #4f46e5;
+}
+
+.badge_failed {
+  background-color: rgba(239, 68, 68, 0.1);
+  color: #dc2626;
+}
+
+.badge_success {
+  background-color: rgba(34, 197, 94, 0.15);
+  color: #16a34a;
+}
+
+.badge_timeout {
+  @apply bg-warning-500 text-white;
+}
+
+.actions {
+  @apply flex flex-wrap gap-2;
+}
+
+.actionButton {
+  @apply px-2 py-1 rounded-lg text-sm font-bold cursor-pointer transition-colors duration-150;
+  font-size: 0.75rem;
+  background: none;
+  border: 1px solid var(--color-border-default, #e2e8f0);
+  color: var(--color-brand-700, #334155);
+}
+
+.actionButton:hover {
+  @apply bg-brand-100;
+}
+
+.actionButton:focus-visible {
+  outline: 2px solid #64748b;
+  outline-offset: 2px;
+}
+
+.actionDanger {
+  color: #dc2626;
+  border-color: rgba(239, 68, 68, 0.4);
+}
+
+.actionDanger:hover {
+  background-color: rgba(239, 68, 68, 0.1);
+}
+
+.toolbar {
+  @apply flex items-center justify-between mb-4;
+}
+
+.newButton {
+  @apply px-4 py-2 rounded-lg bg-brand-900 text-white text-sm font-bold cursor-pointer transition-colors duration-150;
+  border: none;
+}
+
+.newButton:hover {
+  @apply bg-brand-800;
+}
+
+.newButton:focus-visible {
+  outline: 2px solid #64748b;
+  outline-offset: 2px;
+}
+
+.emptyState {
+  @apply text-sm text-brand-500 py-8;
+  text-align: center;
+}
+
+.detailPanel {
+  @apply p-4 rounded-lg border border-border-default bg-surface-sunken mt-4;
+}
+
+.detailHeader {
+  @apply flex items-center justify-between mb-4;
+}
+
+.detailTitle {
+  @apply text-lg font-bold text-brand-900;
+}
+
+.runRow {
+  @apply border-b border-border-default py-2;
+  font-size: 0.8125rem;
+}
+
+.runRow:last-child {
+  border-bottom: none;
+}
+
+.runMeta {
+  @apply flex items-center gap-4 text-brand-500 mb-2;
+  font-size: 0.75rem;
+}
+
+.runSummary {
+  @apply text-brand-700;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 180px;
+  overflow-y: auto;
+}
+
+.modalOverlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 50;
+}
+
+.modalContent {
+  @apply p-8 rounded-lg bg-surface-default shadow-modal;
+  max-width: 720px;
+  width: 90%;
+  max-height: 90vh;
+  overflow-y: auto;
+}
+
+.modalTitle {
+  @apply text-xl font-bold text-brand-900 mb-4;
+}
+
+.jsonField {
+  @apply w-full p-4 rounded-lg border border-border-default bg-surface-sunken text-brand-900;
+  font-family: monospace;
+  font-size: 0.8125rem;
+  min-height: 320px;
+  resize: vertical;
+}
+
+.jsonField:focus-visible {
+  outline: none;
+  @apply border-brand-500;
+  box-shadow: 0 0 0 3px rgba(100, 116, 139, 0.25);
+}
+
+.modalActions {
+  @apply flex items-center justify-end gap-4 mt-4;
+}
+
+.modalError {
+  @apply text-sm text-error-500 mb-4;
+  white-space: pre-wrap;
+}
+
+.cancelButton {
+  @apply px-4 py-2 rounded-lg text-sm font-bold cursor-pointer transition-colors duration-150;
+  background: none;
+  border: 1px solid var(--color-border-default, #e2e8f0);
+  color: var(--color-brand-700, #334155);
+}
+
+.cancelButton:hover {
+  @apply bg-brand-100;
+}
+
+.cancelButton:focus-visible {
+  outline: 2px solid #64748b;
+  outline-offset: 2px;
+}
+
+/* ── Dark mode ─────────────────────────────────────────────── */
+
+:global(html.dark) .tableHeader {
+  color: #b9bbbe;
+  border-bottom-color: rgba(255, 255, 255, 0.06);
+}
+
+:global(html.dark) .tableRow {
+  border-bottom-color: rgba(255, 255, 255, 0.04);
+}
+
+:global(html.dark) .tableCell {
+  color: #dbdee1;
+}
+
+:global(html.dark) .taskName {
+  color: #dbdee1;
+}
+
+:global(html.dark) .taskDescription {
+  color: #b9bbbe;
+}
+
+:global(html.dark) .actionButton {
+  background-color: rgba(255, 255, 255, 0.04);
+  border-color: rgba(255, 255, 255, 0.06);
+  color: #dbdee1;
+}
+
+:global(html.dark) .actionButton:hover {
+  background-color: rgba(255, 255, 255, 0.08);
+}
+
+:global(html.dark) .actionDanger {
+  color: #f87171;
+  border-color: rgba(239, 68, 68, 0.4);
+}
+
+:global(html.dark) .newButton {
+  background-color: #3ba55d;
+  color: #fff;
+}
+
+:global(html.dark) .newButton:hover {
+  background-color: #4cba6e;
+}
+
+:global(html.dark) .emptyState {
+  color: #b9bbbe;
+}
+
+:global(html.dark) .detailPanel {
+  background-color: #1e1f22;
+  border-color: rgba(255, 255, 255, 0.06);
+}
+
+:global(html.dark) .detailTitle {
+  color: #dbdee1;
+}
+
+:global(html.dark) .runRow {
+  border-bottom-color: rgba(255, 255, 255, 0.04);
+}
+
+:global(html.dark) .runMeta {
+  color: #b9bbbe;
+}
+
+:global(html.dark) .runSummary {
+  color: #dbdee1;
+}
+
+:global(html.dark) .modalContent {
+  background: #2b2d31;
+}
+
+:global(html.dark) .modalTitle {
+  color: #dbdee1;
+}
+
+:global(html.dark) .jsonField {
+  background-color: #1e1f22;
+  border-color: rgba(255, 255, 255, 0.06);
+  color: #dbdee1;
+}
+
+:global(html.dark) .jsonField:focus-visible {
+  border-color: #3ba55d;
+  box-shadow: 0 0 0 3px rgba(59, 165, 93, 0.15);
+}
+
+:global(html.dark) .cancelButton {
+  background-color: rgba(255, 255, 255, 0.04);
+  border-color: rgba(255, 255, 255, 0.06);
+  color: #dbdee1;
+}
+
+:global(html.dark) .cancelButton:hover {
+  background-color: rgba(255, 255, 255, 0.08);
+}
+
+:global(html.dark) .badge_idle {
+  background-color: rgba(255, 255, 255, 0.06);
+  color: #b9bbbe;
+}
+
+:global(html.dark) .badge_running {
+  background-color: rgba(99, 102, 241, 0.15);
+  color: #a5b4fc;
+}
+
+:global(html.dark) .badge_failed {
+  background-color: rgba(239, 68, 68, 0.1);
+  color: #f87171;
+}
+
+:global(html.dark) .badge_success {
+  background-color: rgba(59, 165, 93, 0.15);
+  color: #4ade80;
+}

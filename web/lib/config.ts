@@ -333,6 +333,17 @@ export function validateConfig(): void {
     throw new Error("DEV_AUTH_BYPASS must not be enabled outside of development — aborting.");
   }
 
+  if (
+    process.env.SCHEDULED_TASK_POLLER_DEV_BYPASS === "true" &&
+    process.env.NODE_ENV !== "development"
+  ) {
+    throw new Error(
+      "SCHEDULED_TASK_POLLER_DEV_BYPASS must not be enabled outside of development — aborting. " +
+        "This bypass disables Managed Identity verification on /api/internal/scheduled-tasks/poll, " +
+        "which runs the agent loop with admin role over every scheduled task.",
+    );
+  }
+
   // Mirror the DEV_AUTH_BYPASS guard for MOCK_MODE. In production, mock
   // mode silently swallows tool calls and re-activates the API-key file
   // fallback (web/lib/api-key-store.ts). Failing fast at boot is the
