@@ -34,6 +34,7 @@ const ALL_REQUIRED = [
   "api-keys",
   "skills",
   "instance-shared",
+  "scheduledTasks",
 ];
 
 describe("assertCosmosContainers", () => {

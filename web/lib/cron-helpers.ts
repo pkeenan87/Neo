@@ -40,14 +40,15 @@ export function validateCronExpression(
     throw new CronValidationError("Timezone must be a non-empty IANA name");
   }
 
-  let interval: ReturnType<typeof parser.parseExpression>;
-  try {
-    interval = parser.parseExpression(expression, { tz: timezone });
-  } catch (err) {
-    throw new CronValidationError(
-      `Invalid cron expression or timezone: ${(err as Error).message}`,
-    );
-  }
+  const interval = (() => {
+    try {
+      return parser.parseExpression(expression, { tz: timezone });
+    } catch (err) {
+      throw new CronValidationError(
+        `Invalid cron expression or timezone: ${(err as Error).message}`,
+      );
+    }
+  })();
 
   // Compare next two fires. If they're closer than the poll interval,
   // the poller can't reliably catch every fire — reject at validation.
