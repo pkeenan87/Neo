@@ -18,7 +18,9 @@ import { logger } from "./logger";
 import { computeNextRunTime } from "./cron-helpers";
 import { DESTRUCTIVE_TOOLS, TOOLS } from "./tools";
 import { recordRunResult } from "./scheduled-task-store";
-import { routeOutput } from "./scheduled-task-routing";
+import { dispatchRoutingTool, routeOutput } from "./scheduled-task-routing";
+import { ROUTING_ALLOWED_TOOLS } from "./scheduled-task-validators";
+import { summarize } from "./scheduled-task-summary";
 import { postToChannel } from "./teams-channel";
 import {
   DEFAULT_CIRCUIT_BREAKER_THRESHOLD,
@@ -30,7 +32,6 @@ import {
 } from "./scheduled-task-types";
 import type { Message } from "./types";
 
-const OUTPUT_SUMMARY_MAX = 2000;
 const SCHEDULED_TASK_PREFIX = `
 ## SCHEDULED-TASK MODE
 You are running headlessly on a cron schedule, not in a conversation. Rules:
@@ -42,8 +43,16 @@ You are running headlessly on a cron schedule, not in a conversation. Rules:
 
 function computeAllowedTools(taskAllowedTools: string[]): string[] {
   const allToolNames = new Set(TOOLS.map((t) => t.name));
+  // Strip destructive tools (no human gate available in a scheduled
+  // run) and routing-destination tools (the routing layer is the only
+  // legitimate dispatch site for those — letting the agent loop also
+  // call them would produce duplicate notifications with inconsistent
+  // audit attribution). See ultra-review F2.
   return taskAllowedTools.filter(
-    (name) => allToolNames.has(name) && !DESTRUCTIVE_TOOLS.has(name),
+    (name) =>
+      allToolNames.has(name) &&
+      !DESTRUCTIVE_TOOLS.has(name) &&
+      !ROUTING_ALLOWED_TOOLS.has(name),
   );
 }
 
@@ -68,11 +77,6 @@ function substituteVariables(
   return template.replace(/\{\{\s*([a-zA-Z0-9_]+)\s*\}\}/g, (_full, key) => {
     return String(merged[key]);
   });
-}
-
-function summarize(text: string): string {
-  if (text.length <= OUTPUT_SUMMARY_MAX) return text;
-  return text.slice(0, OUTPUT_SUMMARY_MAX) + "\n…[truncated]";
 }
 
 function isTimeoutError(err: unknown): boolean {
@@ -310,10 +314,17 @@ async function notifyCircuitBreaker(
     lastReason,
   });
 
-  // If the task routes to Teams, post the breaker alert to the same
-  // channel — that's the closest thing to an "admin channel" Phase 1
-  // has without a dedicated config field. Phase 2 introduces a
-  // tenant-wide NEO_ADMIN_TEAMS_CHANNEL env var.
+  // Notify via the task's own destination so the operator sees the
+  // auto-disable on the same surface they normally watch.
+  //   - teams-channel: post directly via Graph
+  //   - tool: dispatch via the same routing tool (send_teams_message
+  //     / send_email) the task uses on a successful run, but with
+  //     status=failure and a clear breaker body. This won't help if
+  //     the Logic App is itself the failing dependency, but neither
+  //     does the teams-channel path when Graph is the failing
+  //     dependency — symmetric trade-off. See ultra-review F6.
+  //   - cosmos-log / email: no external channel to post to today;
+  //     operator must watch run history.
   if (
     task.routing.destination === "teams-channel" &&
     task.routing.teamsTeamId &&
@@ -324,6 +335,22 @@ async function notifyCircuitBreaker(
         teamId: task.routing.teamsTeamId,
         channelId: task.routing.teamsChannelId,
         text: `**Scheduled task auto-disabled**\n\nTask "${task.name}" has been disabled after ${consecutiveFailures} consecutive failures. Last error: ${lastReason ?? "unknown"}.`,
+      });
+    } catch (err) {
+      logger.warn("scheduled_task.circuit_breaker_notify_failed", "scheduled-task-runner", {
+        taskId: task.id,
+        errorMessage: (err as Error).message,
+      });
+    }
+  } else if (task.routing.destination === "tool" && task.routing.toolName) {
+    try {
+      // Title is just task.name so it can't exceed the 200-char cap
+      // enforced by the notification executor. The "auto-disabled"
+      // framing lives in the body where length is permissive.
+      await dispatchRoutingTool(task, {
+        title: task.name,
+        status: "failure",
+        body: `Scheduled task auto-disabled.\n\nTask "${task.name}" has been disabled after ${consecutiveFailures} consecutive failures. Last error: ${lastReason ?? "unknown"}.`,
       });
     } catch (err) {
       logger.warn("scheduled_task.circuit_breaker_notify_failed", "scheduled-task-runner", {

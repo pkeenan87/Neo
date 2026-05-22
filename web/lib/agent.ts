@@ -46,7 +46,7 @@ const SKILL_INVOCATION_PREFIX = "[SKILL INVOCATION:";
  * fields not on SAFE_METADATA_FIELDS are dropped before reaching
  * Event Hub regardless of what this returns.
  */
-function extractToolAuditExtras(result: unknown): Record<string, unknown> {
+export function extractToolAuditExtras(result: unknown): Record<string, unknown> {
   if (!result || typeof result !== "object" || Array.isArray(result)) return {};
   const r = result as Record<string, unknown>;
   const extras: Record<string, unknown> = {};

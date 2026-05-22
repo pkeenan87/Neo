@@ -14,7 +14,7 @@ export const MAX_DURATION_SECONDS_CAP = 600;
 
 export type ScheduledTaskStatus = "idle" | "running" | "failed";
 export type ScheduledTaskRunResult = "success" | "failure" | "timeout";
-export type ScheduledTaskDestination = "teams-channel" | "cosmos-log" | "email";
+export type ScheduledTaskDestination = "teams-channel" | "cosmos-log" | "email" | "tool";
 
 export interface ScheduledTaskSchedule {
   cronExpression: string;
@@ -34,6 +34,12 @@ export interface ScheduledTaskRouting {
   teamsTeamId?: string;
   teamsChannelId?: string;
   emailTo?: string;
+  // Name of the Neo tool to invoke when destination === "tool".
+  // The routing layer auto-populates the tool's args from task context
+  // ({ title: task.name, status: "success", body: <summarised output> }),
+  // so there is no per-task toolArgs field. Allowlist + non-destructive
+  // checks live in scheduled-task-validators.ts (ROUTING_ALLOWED_TOOLS).
+  toolName?: string;
   fallbackDestination?: ScheduledTaskDestination;
 }
 
@@ -66,7 +72,21 @@ export interface ScheduledTask {
   id: string;
   name: string;
   description: string;
+  // Internal owner identifier. For Entra ID users (browser session,
+  // CLI PKCE, bearer token) this is the AAD object ID (a GUID), not
+  // an email. For API-key callers, this is the key label. Use
+  // `createdByEmail` (below) when you need an email/UPN.
   createdBy: string;
+  // Entra UPN / email of the creator, captured at task-create time
+  // from identity.email. Optional because:
+  //   (a) legacy tasks created before this field was introduced
+  //       won't have it.
+  //   (b) API-key and service-principal callers may not have an
+  //       email-shaped identity.
+  // The routing layer populates LogIdentityContext.userEmail from
+  // this field so audit attribution carries an email when one is
+  // available, never the bare GUID. See ultra-review F7.
+  createdByEmail?: string;
   enabled: boolean;
   dryRun: boolean;
   circuitBreakerThreshold?: number;

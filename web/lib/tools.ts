@@ -1577,6 +1577,69 @@ export const TOOLS: Tool[] = [
       required: ["reportedDomain"],
     },
   },
+  // ───────────────────────────────────────────────────────────
+  // Information Security Incident Response Logic App
+  //   — notification workflows
+  //
+  // Non-destructive notification dispatch via the same Logic App
+  // that hosts the six remediation tools. The Logic App workflow
+  // owns the actual Teams channel / mailing-list routing; Neo
+  // hands it a short envelope and the workflow decides where it
+  // goes. Primary use case: scheduled-task routing destination
+  // "tool" (see scheduled-task-routing.ts). These tools are also
+  // callable from interactive chat for ad-hoc notifications.
+  //
+  // Neo-side schema (title/status/body) is decoupled from the
+  // Logic App wire contract (taskName/status/summary) so the
+  // model UX reads cleanly and the executor mapping isolates
+  // any future schema drift.
+  // ───────────────────────────────────────────────────────────
+  {
+    name: "send_teams_message",
+    description:
+      "Dispatch a Microsoft Teams notification via the Information Security Incident Response Logic App. The Logic App workflow owns the target channel — this tool does NOT post directly via Graph and cannot pick the channel per call. Use for proactive status notifications (e.g. scheduled-task results). Non-destructive.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        title: {
+          type: "string",
+          description: "Short headline (≤ 200 chars). Maps to the Logic App's `taskName` field — typically a task or workflow name.",
+        },
+        status: {
+          type: "string",
+          description: "Short status indicator (≤ 64 chars), e.g. \"success\", \"warning\", \"failure\". The Logic App may use this to colour-code the Teams card.",
+        },
+        body: {
+          type: "string",
+          description: "Notification body. Plain text. Maps to the Logic App's `summary` field. Caller is responsible for length — the routing layer caps at 2000 chars for scheduled-task dispatch.",
+        },
+      },
+      required: ["title", "status", "body"],
+    },
+  },
+  {
+    name: "send_email",
+    description:
+      "Dispatch an email notification via the Information Security Incident Response Logic App. The Logic App workflow owns the recipient list — this tool does NOT take a `to` field and cannot send arbitrary mail. Use for proactive status notifications (e.g. scheduled-task results). Non-destructive.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        title: {
+          type: "string",
+          description: "Short headline (≤ 200 chars). Maps to the Logic App's `taskName` field — typically a task or workflow name.",
+        },
+        status: {
+          type: "string",
+          description: "Short status indicator (≤ 64 chars), e.g. \"success\", \"warning\", \"failure\". The Logic App may use this in the subject line or body formatting.",
+        },
+        body: {
+          type: "string",
+          description: "Email body. Plain text. Maps to the Logic App's `summary` field. Caller is responsible for length — the routing layer caps at 2000 chars for scheduled-task dispatch.",
+        },
+      },
+      required: ["title", "status", "body"],
+    },
+  },
 ];
 
 export const DESTRUCTIVE_TOOLS = new Set([

@@ -62,7 +62,8 @@ function statusLabel(state: ScheduledTaskState): string {
 const DEFAULT_NEW_TASK = JSON.stringify(
   {
     name: 'Weekly lateral movement hunt',
-    description: 'Proactive cross-tenant lateral movement hunt.',
+    description:
+      'Proactive cross-tenant lateral movement hunt. Notifies via the Information Security Incident Response Logic App Teams workflow on success.',
     enabled: false,
     dryRun: true,
     schedule: { cronExpression: '0 8 * * 1', timezone: 'America/New_York' },
@@ -73,7 +74,11 @@ const DEFAULT_NEW_TASK = JSON.stringify(
       allowedTools: ['run_sentinel_kql', 'run_defender_hunting_query'],
       maxDurationSeconds: 120,
     },
-    routing: { destination: 'cosmos-log', fallbackDestination: 'cosmos-log' },
+    routing: {
+      destination: 'tool',
+      toolName: 'send_teams_message',
+      fallbackDestination: 'cosmos-log',
+    },
   },
   null,
   2,

@@ -315,7 +315,7 @@ export const INTEGRATIONS: IntegrationInfo[] = [
     iconName: "ShieldAlert",
     imageSrc: "/microsoft-logo.png",
     description:
-      "Network-layer remediation via the Information Security Incident Response Logic App. Six destructive tools (block-domain, block-email, block-globalprotect, block-hash, block-ipaddress, request-sslbypass). Every call routes through Neo's destructive-action confirmation gate; admin role only. Service-account auth via Entra ID OAuth2 client_credentials against the Logic App's app registration.",
+      "Remediation and notification dispatch via the Information Security Incident Response Logic App. Six destructive remediation tools (block-domain, block-email, block-globalprotect, block-hash, block-ipaddress, request-sslbypass) — every call routes through Neo's destructive-action confirmation gate; admin role only. Two non-destructive notification tools (send-teams-message, send-email) — used as scheduled-task routing destinations and for ad-hoc admin notifications. Service-account auth via Entra ID OAuth2 client_credentials against the Logic App's app registration.",
     capabilities: [
       "block_domain",
       "block_email",
@@ -323,6 +323,8 @@ export const INTEGRATIONS: IntegrationInfo[] = [
       "block_hash",
       "block_ipaddress",
       "request_sslbypass",
+      "send_teams_message",
+      "send_email",
     ],
     secrets: [
       {
