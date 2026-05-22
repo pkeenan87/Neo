@@ -3764,6 +3764,18 @@ const INFOSEC_HASH_LENGTHS = new Set([32, 40, 64]); // MD5, SHA1, SHA256
 // log-injection / audit-poisoning out of values forwarded to the
 // Logic App and recorded in its audit trail.
 const INFOSEC_CONTROL_CHAR_RE = /[\x00-\x1F\x7F]/;
+// Same set PLUS Unicode formatting attack chars: zero-width
+// (U+200B–U+200D, U+FEFF), line/paragraph separators (U+2028–U+2029),
+// and BiDi overrides (U+202A–U+202E, U+2066–U+2069). These bytes
+// don't belong in a notification title/status — they would let an
+// LLM-relayed Sentinel field visually spoof the rendered Teams card
+// (e.g. a U+202E flips left-to-right rendering of "status:success"
+// into something that reads as "failure"). Kept separate from the
+// ASCII-only regex above so the existing destructive-tool input
+// validators (which target identifiers, not human-rendered text)
+// don't change behaviour. See ultra-review F8.
+const INFOSEC_FORMATTING_ATTACK_RE =
+  /[\u0000-\u001F\u007F\u200B-\u200D\u2028\u2029\u202A-\u202E\u2066-\u2069\uFEFF]/;
 // Strict ISO-8601 (`YYYY-MM-DD` or `YYYY-MM-DDTHH:MM:SS[.fff]Z|±HH:MM`).
 // We do a regex match first to reject obviously-malformed inputs,
 // then a round-trip parse-and-reformat below to catch valid-looking
@@ -3924,6 +3936,72 @@ async function block_ipaddress(input: InfosecBlockInput): Promise<unknown> {
   return callInfosecLogicAppTool("block_ipaddress", "block-ipaddress", { responder, ioc, notes });
 }
 
+// ── Notification workflows (non-destructive) ────────────────
+
+interface InfosecNotificationInput {
+  title?: string;
+  status?: string;
+  body?: string;
+}
+
+const INFOSEC_NOTIFICATION_TITLE_MAX = 200;
+const INFOSEC_NOTIFICATION_STATUS_MAX = 64;
+
+function validateNotificationInput(
+  toolName: string,
+  input: InfosecNotificationInput,
+): { title: string; status: string; body: string } {
+  const title = input.title?.trim();
+  const status = input.status?.trim();
+  const body = input.body?.trim();
+  if (!title) throw new Error(`${toolName}: missing required 'title' field`);
+  if (!status) throw new Error(`${toolName}: missing required 'status' field`);
+  if (!body) throw new Error(`${toolName}: missing required 'body' field`);
+  // Length caps — defence against an upstream bug stuffing huge strings
+  // into the Logic App payload. Body is intentionally uncapped here
+  // because the routing layer already passes summarised text (2000 cap);
+  // ad-hoc interactive calls inherit the Logic App's own limits.
+  if (title.length > INFOSEC_NOTIFICATION_TITLE_MAX) {
+    throw new Error(`${toolName}: 'title' exceeds ${INFOSEC_NOTIFICATION_TITLE_MAX} characters`);
+  }
+  if (status.length > INFOSEC_NOTIFICATION_STATUS_MAX) {
+    throw new Error(`${toolName}: 'status' exceeds ${INFOSEC_NOTIFICATION_STATUS_MAX} characters`);
+  }
+  // Title/status are rendered into Teams cards and email subject
+  // lines. Reject ASCII control chars (fragment audit lines) AND
+  // Unicode formatting attack chars (BiDi overrides, zero-width
+  // chars) which can spoof rendered identity / status. Body may
+  // legitimately contain newlines and is intentionally less strict.
+  if (INFOSEC_FORMATTING_ATTACK_RE.test(title)) {
+    throw new Error(`${toolName}: 'title' contains control or formatting characters`);
+  }
+  if (INFOSEC_FORMATTING_ATTACK_RE.test(status)) {
+    throw new Error(`${toolName}: 'status' contains control or formatting characters`);
+  }
+  return { title, status, body };
+}
+
+async function send_teams_message(input: InfosecNotificationInput): Promise<unknown> {
+  const { title, status, body } = validateNotificationInput("send_teams_message", input);
+  // Map Neo schema (title/status/body) → Logic App wire contract
+  // (taskName/status/summary). No `responder` — the Logic App's
+  // send-teams-message schema doesn't declare one.
+  return callInfosecLogicAppTool("send_teams_message", "send-teams-message", {
+    taskName: title,
+    status,
+    summary: body,
+  });
+}
+
+async function send_email(input: InfosecNotificationInput): Promise<unknown> {
+  const { title, status, body } = validateNotificationInput("send_email", input);
+  return callInfosecLogicAppTool("send_email", "send-email", {
+    taskName: title,
+    status,
+    summary: body,
+  });
+}
+
 async function request_sslbypass(input: InfosecRequestSslbypassInput): Promise<unknown> {
   const reportedDomain = input.reportedDomain?.trim();
   if (!reportedDomain) throw new Error("request_sslbypass: missing required 'reportedDomain' field");
@@ -4031,6 +4109,9 @@ const executors: Record<string, (input: Record<string, unknown>) => Promise<unkn
   block_hash: (input) => block_hash(input as InfosecBlockInput),
   block_ipaddress: (input) => block_ipaddress(input as InfosecBlockInput),
   request_sslbypass: (input) => request_sslbypass(input as InfosecRequestSslbypassInput),
+  // Notification workflows on the same Logic App — non-destructive.
+  send_teams_message: (input) => send_teams_message(input as InfosecNotificationInput),
+  send_email: (input) => send_email(input as InfosecNotificationInput),
 };
 
 export interface ExecuteToolContext {

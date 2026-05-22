@@ -163,7 +163,9 @@ Tasks that route to a Teams channel post via Microsoft Graph
 `POST /teams/{teamId}/channels/{channelId}/messages`. The existing Neo
 app registration needs the `ChannelMessage.Send` **Application** permission
 consented. Skip this step if every task you plan to create uses
-`destination: cosmos-log` only.
+`destination: cosmos-log` or `destination: tool` only — the `tool`
+destination delegates Teams/email posting to the Information Security
+Incident Response Logic App, which owns its own credentials.
 
 Grant + consent via Azure CLI:
 
@@ -453,9 +455,16 @@ template the modal pre-fills with is a sane starting point — adjust:
   even if listed.
 - **`task.maxDurationSeconds`** — per-run timeout. Capped at 600 s.
 - **`routing.destination`** — `teams-channel` | `cosmos-log` | `email`
-  (email is Phase 2).
+  | `tool`. `email` is Phase 2; `tool` delegates notification dispatch
+  to a named Neo tool (see [Routing destinations](#routing-destinations)
+  below).
+- **`routing.toolName`** — required when `destination === "tool"`. Must
+  be a member of `ROUTING_ALLOWED_TOOLS` (currently `send_teams_message`,
+  `send_email`). The routing layer auto-populates the tool's args from
+  task context — no per-task arguments to configure here.
 - **`routing.fallbackDestination`** — destination used on primary
-  failure. Defaults to `cosmos-log`.
+  failure. Defaults to `cosmos-log`. May NOT be `tool` (recursion
+  guard) — use `cosmos-log` as the safe fallback.
 - **`dryRun`** — when `true`, the run executes the full pipeline but
   routes to a synthetic `dry-run-log` instead of posting. Recommended
   default until the prompt is validated.
@@ -516,12 +525,54 @@ no in-context drift can break. Add explicit tools — there's no implicit
 | `teams-channel` | Posts via Graph `POST /teams/{teamId}/channels/{channelId}/messages` with `contentType: "text"`. Requires `teamsTeamId` (GUID) and `teamsChannelId`. Channel IDs look like `19:abc@thread.tacv2`. |
 | `cosmos-log` | No-op — the durable record is the `runHistory[]` entry on the task document. Useful when you only want the result to land in Neo's audit trail. |
 | `email` | **Phase 2** — current implementation throws and routes to `fallbackDestination`. |
+| `tool` | Dispatches via a named Neo tool. Requires `toolName` ∈ `ROUTING_ALLOWED_TOOLS` (currently `send_teams_message`, `send_email` — both backed by the Information Security Incident Response Logic App). The routing layer auto-populates the tool's args from task context (see field mapping below) — Teams channel / email recipient routing lives in the Logic App workflow, not on the task document. Use this destination to let the operator's team iterate on notification logic without redeploying Neo. |
 | `dry-run-log` | Set automatically when `task.dryRun === true`. Logs the *would-have-sent* payload via `logger.info` and records `routedTo: "dry-run-log"`. |
 
 If the primary destination fails (HTTP 4xx/5xx, network), routing falls
 back to `fallbackDestination` (default `cosmos-log`). The run is still
 recorded as success from the agent's perspective — the failure reason
-appears in `runHistory[].reason`.
+appears in `runHistory[].reason`. `tool` is **not** valid as a
+`fallbackDestination`.
+
+#### Routing destination: `tool`
+
+When `destination === "tool"`, the routing layer builds a fixed three-
+field envelope from task context and dispatches it through the named
+Neo tool's local executor. The Neo-side schema decouples from the
+Logic App's wire contract:
+
+| Routing-layer arg (Neo schema) | Source | Logic App wire field |
+|---|---|---|
+| `title` | `task.name` | `taskName` |
+| `status` | `"success"` (hardcoded — routing only fires on agent-loop success today) | `status` |
+| `body` | `summarize(agentOutput)` (capped at 2000 chars, matching `runHistory[].outputSummary`) | `summary` |
+
+The Logic App workflow owns the actual Teams channel or email
+recipient list — `toolArgs` is **not** a field on the task document by
+design. The `tool_execution` audit event for the dispatch is wrapped
+in a log-context envelope using the task's `createdBy` so the audit
+trail records the responsible admin.
+
+`routedTo` on the resulting `runHistory[]` entry is set to the tool
+name (e.g. `send_teams_message`), not the generic `tool` string.
+
+##### Adding a new notification workflow
+
+Steps for the operator's Logic App team plus the Neo developer:
+
+1. Define a new Logic App workflow exposing an MCP tool with a stable
+   kebab-case name (e.g. `send-slack-message`). The current contract
+   is `{ taskName: string, status: string, summary: string }`; document
+   any divergence in `_specs/infosec-incident-response-mcp.md`.
+2. In Neo, add the tool schema to `web/lib/tools.ts` (Neo-side names
+   `title`/`status`/`body`) and an executor in `web/lib/executors.ts`
+   that maps Neo schema → Logic App wire fields.
+3. Add the Neo tool name to `ROUTING_ALLOWED_TOOLS` in
+   `web/lib/scheduled-task-validators.ts`.
+4. Add the tool name to the integration's `capabilities` in
+   `web/lib/integration-registry.ts` and to `ADMIN_ONLY_TOOLS` in
+   `web/lib/permissions.ts` (notifications stay admin-only).
+5. Ship.
 
 ---
 
@@ -746,6 +797,31 @@ The watchdog reclaims tasks where `state.status == "running"` AND
 - If you must intervene: delete and recreate the task. There is
   intentionally no admin-API to write `state` directly — the watchdog
   is the supported recovery mechanism.
+
+### `tool` destination falls back to `cosmos-log` every run
+
+The `tool` destination invokes the named Neo tool's executor — for the
+two notification tools, that's a JSON-RPC call to the Information
+Security Incident Response Logic App. If the Logic App returns a 4xx
+or 5xx, or the MCP handshake fails, the executor throws and the
+routing layer falls back to whatever `fallbackDestination` is set
+(default `cosmos-log`). To diagnose:
+
+1. Confirm `INFOSEC_LOGIC_APP_MCP_URL` is set on the Web App and is
+   in `INFOSEC_LOGIC_APP_URL_ALLOWLIST` (see `web/lib/mcp-client.ts`).
+2. Confirm `AGENT_CLIENT_ID`, `AGENT_CLIENT_SECRET`, and
+   `INFOSEC_LOGIC_APP_API_ID` are configured under **Settings →
+   Integrations → Information Security Incident Response**.
+3. Hit the integration probe at
+   `/api/integrations/infosec-incident-response/test` — distinct
+   errors for token-mint vs handshake.
+4. Open the Logic App's run history in the Azure portal and find the
+   workflow run named `send-teams-message` / `send-email` matching the
+   `workflowRunId` from the Neo audit event.
+5. If `routedTo` shows the tool name (e.g. `send_teams_message`) but
+   `reason` says "is not in ROUTING_ALLOWED_TOOLS", the task document
+   has a stale tool name — likely the allowlist shrank after the task
+   was persisted. Update the task or extend the allowlist.
 
 ### `cron-parser` install fails
 

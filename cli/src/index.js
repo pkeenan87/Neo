@@ -662,6 +662,13 @@ function printScheduleUsage() {
     neo schedule delete <id>          Delete a task (no confirmation prompt)
     neo schedule run <id>             Trigger an out-of-band run now
     neo schedule create --file <p>    Create a task from a JSON file
+
+  Routing destinations supported in the task JSON:
+    teams-channel  Posts via Microsoft Graph (requires ChannelMessage.Send)
+    cosmos-log     No-op; run-history is the durable record
+    email          Phase 2; falls back today
+    tool           Dispatches via a named Neo tool — set routing.toolName
+                   to send_teams_message or send_email (Logic App-backed)
 `);
 }
 

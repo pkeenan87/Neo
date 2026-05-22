@@ -52,6 +52,7 @@ function getContainer(): Container | null {
 export async function createTask(
   input: CreateScheduledTaskInput,
   createdBy: string,
+  createdByEmail?: string,
 ): Promise<ScheduledTask> {
   const container = getContainer();
   if (!container) {
@@ -70,6 +71,7 @@ export async function createTask(
     name: input.name,
     description: input.description,
     createdBy,
+    createdByEmail,
     enabled: input.enabled ?? false,
     dryRun: input.dryRun ?? false,
     circuitBreakerThreshold: input.circuitBreakerThreshold,

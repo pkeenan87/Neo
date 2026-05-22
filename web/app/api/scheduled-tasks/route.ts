@@ -13,6 +13,7 @@ import {
   validateCircuitBreakerThreshold,
   validateRoutingShape,
   validateScheduleShape,
+  validateTaskName,
   validateTaskShape,
 } from "@/lib/scheduled-task-validators";
 
@@ -24,7 +25,8 @@ function validateCreatePayload(body: unknown): CreateScheduledTaskInput | string
   if (!body || typeof body !== "object") return "Body must be a JSON object";
   const b = body as Record<string, unknown>;
 
-  if (typeof b.name !== "string" || !b.name.trim()) return "name is required";
+  const nameErr = validateTaskName(b.name);
+  if (nameErr) return nameErr;
   if (typeof b.description !== "string") return "description is required";
 
   const scheduleErr = validateScheduleShape(b.schedule);
@@ -47,7 +49,7 @@ function validateCreatePayload(body: unknown): CreateScheduledTaskInput | string
   const routing = b.routing as Record<string, unknown>;
 
   return {
-    name: b.name.trim(),
+    name: (b.name as string).trim(),
     description: b.description,
     enabled: b.enabled === true,
     dryRun: b.dryRun === true,
@@ -69,6 +71,7 @@ function validateCreatePayload(body: unknown): CreateScheduledTaskInput | string
       teamsTeamId: routing.teamsTeamId as string | undefined,
       teamsChannelId: routing.teamsChannelId as string | undefined,
       emailTo: routing.emailTo as string | undefined,
+      toolName: routing.toolName as string | undefined,
       fallbackDestination: routing.fallbackDestination as ScheduledTaskDestination | undefined,
     },
     auth: (b.auth as { scopedPermissions?: string[]; keyVaultSecretRefs?: string[] }) ?? undefined,
@@ -114,7 +117,7 @@ export async function POST(request: NextRequest) {
     throw err;
   }
 
-  const created = await createTask(parsed, identity.ownerId);
+  const created = await createTask(parsed, identity.ownerId, identity.email);
   logger.info("scheduled_task.created", "scheduled-tasks-api", {
     taskId: created.id,
     name: created.name,

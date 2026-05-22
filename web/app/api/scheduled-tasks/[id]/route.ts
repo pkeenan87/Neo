@@ -18,6 +18,7 @@ import {
   validateCircuitBreakerThreshold,
   validateRoutingShape,
   validateScheduleShape,
+  validateTaskName,
   validateTaskShape,
 } from "@/lib/scheduled-task-validators";
 
@@ -40,8 +41,9 @@ function validatePatchPayload(body: unknown): UpdateScheduledTaskInput | string 
   const out: UpdateScheduledTaskInput = { expectedEtag: b.expectedEtag };
 
   if (b.name !== undefined) {
-    if (typeof b.name !== "string" || !b.name.trim()) return "name must be a non-empty string";
-    out.name = b.name.trim();
+    const nameErr = validateTaskName(b.name);
+    if (nameErr) return nameErr;
+    out.name = (b.name as string).trim();
   }
   if (b.description !== undefined) {
     if (typeof b.description !== "string") return "description must be a string";

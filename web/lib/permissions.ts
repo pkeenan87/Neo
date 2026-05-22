@@ -26,6 +26,17 @@ const ROLE_PERMISSIONS: Record<Role, RolePermissions> = {
   triage: { canUseDestructiveTools: false, allowedReadOnlyTools: "all" },
 };
 
+// Non-destructive tools that should still be admin-only. The default
+// "all" allowlist above keeps every non-destructive tool reachable by
+// every role, which is the right call for read-only investigative
+// tools — but the Infosec notification tools dispatch to a shared
+// Logic App workflow that fans out to Teams/email. Restrict to admin
+// to keep proactive notifications a deliberate, audited surface.
+const ADMIN_ONLY_TOOLS: ReadonlySet<string> = new Set([
+  "send_teams_message",
+  "send_email",
+]);
+
 // ─────────────────────────────────────────────────────────────
 //  Errors
 // ─────────────────────────────────────────────────────────────
@@ -72,6 +83,9 @@ export function canUseTool(role: Role, toolName: string): boolean {
   if (DESTRUCTIVE_TOOLS.has(toolName)) {
     return perms.canUseDestructiveTools;
   }
+  if (ADMIN_ONLY_TOOLS.has(toolName) && role !== "admin") {
+    return false;
+  }
   if (perms.allowedReadOnlyTools === "all") return true;
   return perms.allowedReadOnlyTools.has(toolName);
 }
@@ -80,6 +94,7 @@ export function getToolsForRole(role: Role): Anthropic.Messages.Tool[] {
   const perms = ROLE_PERMISSIONS[role];
   return TOOLS.filter((tool) => {
     if (DESTRUCTIVE_TOOLS.has(tool.name)) return perms.canUseDestructiveTools;
+    if (ADMIN_ONLY_TOOLS.has(tool.name) && role !== "admin") return false;
     if (perms.allowedReadOnlyTools === "all") return true;
     return perms.allowedReadOnlyTools.has(tool.name);
   });
