@@ -30,6 +30,13 @@ updates:
     schedule:
       interval: weekly
     open-pull-requests-limit: 5
+    ignore:
+      # marked-terminal@7.3.0 peer-deps marked <16, and no newer
+      # marked-terminal release supports marked v16+. Pin to 15.x
+      # until upstream catches up.
+      # Tracking: https://github.com/mikaelbr/marked-terminal/issues/375
+      - dependency-name: marked
+        versions: [">=16"]
 
   - package-ecosystem: npm
     directory: /functions/csv-cleanup
