@@ -52,7 +52,7 @@
     "remark-gfm": "4.0.1",
     "sql.js": "1.14.1",
     "tailwindcss": "4.2.4",
-    "typescript": "5.9.3"
+    "typescript": "6.0.3"
   },
   "devDependencies": {
     "@testing-library/jest-dom": "6.9.1",
