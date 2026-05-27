@@ -9,6 +9,11 @@ For the broader Neo deployment, see [`deployment.md`](./deployment.md). This
 doc focuses on the additional Cosmos container, Graph permission, Azure
 Function, and configuration required to turn scheduled tasks on.
 
+> **Looking for how to use scheduled tasks day-to-day?**
+> See [`scheduled-tasks-user-guide.md`](./scheduled-tasks-user-guide.md)
+> — the team-facing guide covers creating, testing, debugging, and
+> operating tasks. This document is infrastructure setup only.
+
 ## Table of Contents
 
 - [What this gets you](#what-this-gets-you)
@@ -404,15 +409,22 @@ In the Web UI go to **Settings → Scheduled Tasks → New task** and paste:
   "dryRun": true,
   "schedule": { "cronExpression": "*/3 * * * *", "timezone": "UTC" },
   "task": {
-    "promptTemplate": "Say hello and report the date.",
+    "promptTemplate": "Say hello and report today's date ({{today}}).",
     "variables": {},
-    "allowedTools": [],
+    "allowedTools": ["searchKnowledgeBase"],
     "maxDurationSeconds": 30
   },
   "routing": { "destination": "cosmos-log" },
   "circuitBreakerThreshold": 3
 }
 ```
+
+> The runner refuses to start the agent loop with an empty `allowedTools`
+> array (the run records `failure` with `reason: no_allowed_tools`).
+> Include a benign read-only tool like `searchKnowledgeBase` even if the
+> prompt doesn't actually need it — it just satisfies the non-empty-
+> allowlist check. The `{{today}}` placeholder substitutes to the current
+> date as `YYYY-MM-DD`.
 
 Then:
 
