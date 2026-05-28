@@ -321,6 +321,16 @@ async function createWithOptionalMcp(
   const modelId = typeof params.model === "string" ? params.model : "";
   const needsMcp = mcpServers.length > 0;
 
+  // The `[1m]` suffix on the model id is a Neo-internal sentinel for
+  // the 1M-context Opus 4.7 tier; the Anthropic API only knows the
+  // bare `claude-opus-4-7` id, and unlocks the 1M context via the
+  // `context-1m-2025-08-07` beta header (attached by resolveBetas
+  // when the sentinel matches). Strip the suffix at the API boundary
+  // so the upstream call doesn't 404. The sentinel still drives
+  // beta-header selection upstream because resolveBetas is called
+  // with the original `modelId` before stripping.
+  const apiModelId = modelId.endsWith("[1m]") ? modelId.slice(0, -4) : modelId;
+
   // Every call routes through the beta API now — we always attach
   // `extended-cache-ttl-2025-04-11` to enable the 1-hour cache TTL
   // on system + tools breakpoints. The beta endpoint is a strict
@@ -335,6 +345,7 @@ async function createWithOptionalMcp(
 
   const betaParams: Anthropic.Beta.Messages.MessageCreateParamsNonStreaming = {
     ...params,
+    model: apiModelId,
     messages: safeMessages,
     ...(needsMcp ? { mcp_servers: mcpServers } : {}),
     betas: resolveBetas(modelId, needsMcp),
