@@ -513,12 +513,15 @@ describe("prepareMessages ceiling integration", () => {
     ];
     const result = await prepareMessages(messages, 5000, 0, { conversationId: "conv_hfail" });
     expect(result.trimmed).toBe(true);
-    // The placeholder summary should appear somewhere — it replaces
-    // the middle slice on Haiku failure.
+    // The compression-failure notice should appear somewhere — it
+    // replaces the middle slice on Haiku failure. The notice is now
+    // wrapped in a <system_notice type="context_compression_failed">
+    // envelope (was a bare "[Earlier conversation context was removed
+    // ...]" string before the P2 review).
     const hasPlaceholder = result.messages.some(
       (m) =>
         typeof m.content === "string" &&
-        m.content.includes("Earlier conversation context was removed"),
+        m.content.includes('<system_notice type="context_compression_failed"'),
     );
     expect(hasPlaceholder).toBe(true);
   });

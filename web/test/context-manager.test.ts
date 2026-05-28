@@ -212,7 +212,13 @@ describe("prepareMessages", () => {
     expect(result.messages.length).toBeLessThan(messages.length);
   });
 
-  it("uses assistant role for summary message (not user)", async () => {
+  it("wraps the compressed summary in a <system_notice> envelope as a user-role message", async () => {
+    // Earlier design used role: "assistant" to "prevent injection",
+    // but that caused the downstream model to read the bullet
+    // summary as its own remembered reasoning and confidently
+    // extrapolate. The trust-boundary pattern is the right defence:
+    // role: "user" + an XML envelope that the system prompt
+    // teaches the model to treat as a lossy reminder.
     const messages: Message[] = [
       { role: "user", content: "Start investigation" },
     ];
@@ -223,10 +229,13 @@ describe("prepareMessages", () => {
 
     const result = await prepareMessages(messages, 170_000, 2000);
 
-    // The summary message should be role: "assistant" to prevent injection
     const summaryMsg = result.messages[1];
-    expect(summaryMsg.role).toBe("assistant");
-    expect(summaryMsg.content).toContain("[Context compressed");
+    expect(summaryMsg.role).toBe("user");
+    expect(summaryMsg.content).toContain('<system_notice type="context_compressed"');
+    expect(summaryMsg.content).toContain("dropped_messages=");
+    expect(summaryMsg.content).toContain("</system_notice>");
+    // The actual Haiku-produced summary text should be present inside the envelope.
+    expect(summaryMsg.content).toContain("TOR exit node 185.220.101.47");
   });
 
   it("falls back gracefully when summarization fails", async () => {
@@ -247,10 +256,76 @@ describe("prepareMessages", () => {
     expect(result.method).toBe("summary");
     // Should still compress even if summarization fails (fallback path)
     expect(result.messages.length).toBeLessThan(messages.length);
-    // Fallback message should use assistant role
+    // Fallback notice uses user-role + system_notice envelope and tells
+    // the model explicitly that it has NO record of earlier turns.
     const fallbackMsg = result.messages[1];
-    expect(fallbackMsg.role).toBe("assistant");
-    expect(fallbackMsg.content).toContain("removed to stay within token limits");
+    expect(fallbackMsg.role).toBe("user");
+    expect(fallbackMsg.content).toContain('<system_notice type="context_compression_failed"');
+    expect(fallbackMsg.content).toContain("ASK THE USER to restate");
+    expect(fallbackMsg.content).toContain("Do NOT infer");
+  });
+
+  it("invokes Haiku with max_tokens=4096 and the IDENTIFIERS-first prompt", async () => {
+    // Regression guard: the previous 1024-token cap + 3-5 bullets prompt
+    // was the primary source of post-compaction hallucinations because
+    // Haiku had to aggregate specific identifiers into vague phrases.
+    mockCreate.mockClear();
+
+    const messages: Message[] = [
+      { role: "user", content: "Start investigation" },
+    ];
+    for (let i = 0; i < 20; i++) {
+      messages.push({ role: "assistant", content: `Finding ${i}` });
+      messages.push({ role: "user", content: `Follow up ${i}` });
+    }
+
+    await prepareMessages(messages, 170_000, 2000);
+
+    // Find the compression call (not the anchor-summary call).
+    const compressionCall = mockCreate.mock.calls.find(
+      (call) => (call[0] as { system?: string }).system?.includes("IDENTIFIERS")
+    );
+    expect(compressionCall).toBeDefined();
+    const params = compressionCall![0] as { max_tokens: number; system: string };
+    expect(params.max_tokens).toBe(4096);
+    // The compression prompt MUST demand a verbatim IDENTIFIERS section.
+    expect(params.system).toContain("## IDENTIFIERS");
+    expect(params.system).toContain("Do NOT aggregate");
+    // The 'unverified' marker pattern lets the parent model
+    // distinguish direct evidence from inferred conclusions.
+    expect(params.system).toContain("(unverified)");
+  });
+
+  it("does NOT cap middle messages at the old 30-message limit", async () => {
+    // Previously MAX_MIDDLE_MESSAGES_FOR_SUMMARY=30 silently dropped
+    // history past 30 messages before Haiku saw it. The token-based
+    // pre-trim handles overflow; the count cap was lossy with no
+    // benefit. Build 60 middle messages (well above the old cap) and
+    // verify Haiku is called with all of them (modulo tool-pair
+    // safe-slicing).
+    mockCreate.mockClear();
+
+    const messages: Message[] = [
+      { role: "user", content: "Start investigation" },
+    ];
+    // 60 turn pairs in the middle (well above the old 30-message cap).
+    for (let i = 0; i < 60; i++) {
+      messages.push({ role: "assistant", content: `Finding ${i}` });
+      messages.push({ role: "user", content: `Follow up ${i}` });
+    }
+
+    await prepareMessages(messages, 170_000, 2000);
+
+    const compressionCall = mockCreate.mock.calls.find(
+      (call) => (call[0] as { system?: string }).system?.includes("IDENTIFIERS")
+    );
+    expect(compressionCall).toBeDefined();
+    // Number of messages passed to Haiku = full middle slice minus the
+    // trailing "Please summarise" prompt. With anchor (1) + preserved
+    // recent (default 10) we'd see ~110 middle messages going in.
+    // The old code would have silently capped this at 30.
+    const haikuMessages = (compressionCall![0] as { messages: Message[] }).messages;
+    expect(haikuMessages.length).toBeGreaterThan(30);
   });
 
   it("preserves tool_use/tool_result pairs when compressing", async () => {
@@ -607,7 +682,10 @@ describe("materializeMcpBlocksAsText — adversarial-payload handling", () => {
         tool: "wiz_get_issues",
         injection_detected: false,
       },
-      data: "z".repeat(10_000),
+      // 20K payload (above the 16K HAIKU_MCP_DATA_PREVIEW_CHARS cap).
+      // Previously the cap was 2K; raised to 16K to stop erasing
+      // legitimate MCP results before Haiku ever saw them.
+      data: "z".repeat(20_000),
     });
     const messages: Message[] = [
       {
@@ -619,7 +697,8 @@ describe("materializeMcpBlocksAsText — adversarial-payload handling", () => {
     ];
     const [out] = materializeMcpBlocksAsText(messages);
     const blocks = out.content as unknown as Array<{ type: string; text: string }>;
-    expect(blocks[0].text.length).toBeLessThan(10_500);
+    // 16K cap + envelope framing + "…[truncated for compression]" suffix.
+    expect(blocks[0].text.length).toBeLessThan(16_500);
     expect(blocks[0].text).toContain("truncated");
   });
 });
