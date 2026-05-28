@@ -31,6 +31,7 @@ vi.mock("@anthropic-ai/sdk", () => {
   return {
     default: class MockAnthropic {
       messages = { create: anthropicCreateMock };
+      beta = { messages: { create: anthropicCreateMock } };
     },
   };
 });

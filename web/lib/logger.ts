@@ -122,6 +122,10 @@ const SAFE_METADATA_FIELDS = new Set([
   "outputTokens",
   "cacheCreationTokens",
   "cacheReadTokens",
+  // Derived ratio (cache_read / (cache_read + cache_creation + uncached_input))
+  // emitted alongside cacheCreationTokens / cacheReadTokens so operators
+  // can monitor cache health without re-computing per query. See P4.
+  "cacheHitRate",
   "estimatedCostUsd",
   "model",
   // Tier-lock divergence audit (api/agent route): the requested model

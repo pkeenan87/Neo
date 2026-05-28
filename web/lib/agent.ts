@@ -26,6 +26,12 @@ const MCP_CLIENT_BETA = "mcp-client-2025-11-20" as const;
 // Beta header required to unlock Opus 4.7's 1M-token context window.
 // Attached only when the active model id ends in `[1m]`.
 const CONTEXT_1M_BETA = "context-1m-2025-08-07" as const;
+// Beta header that enables 1-hour TTL on prompt-cache breakpoints
+// (the default is 5 minutes). 2× write cost but dramatically better
+// cache-hit rate on SOC workflows where an analyst pauses between
+// turns to read findings. We attach it unconditionally — every cache
+// marker in this codebase uses `ttl: "1h"`. See P4 plan.
+const EXTENDED_CACHE_TTL_BETA = "extended-cache-ttl-2025-04-11" as const;
 
 /**
  * Compute the betas[] array for a given model + MCP state. Centralises
@@ -33,7 +39,7 @@ const CONTEXT_1M_BETA = "context-1m-2025-08-07" as const;
  * MCP-enabled path nor the stable path duplicates the model-id sniffing.
  */
 function resolveBetas(model: string, mcpEnabled: boolean): string[] {
-  const betas: string[] = [];
+  const betas: string[] = [EXTENDED_CACHE_TTL_BETA];
   if (mcpEnabled) betas.push(MCP_CLIENT_BETA);
   if (model.endsWith("[1m]")) betas.push(CONTEXT_1M_BETA);
   return betas;
@@ -102,9 +108,73 @@ function detectSkillInvocation(messages: Message[]): boolean {
 
 const client = new Anthropic({ apiKey: env.ANTHROPIC_API_KEY });
 
-/** Extends the SDK text block type with prompt caching support. */
+/** Extends the SDK text block type with prompt caching support.
+ *  `ttl` is optional (default 5m); set to "1h" on prefixes that
+ *  should survive between user turns. Requires the
+ *  `extended-cache-ttl-2025-04-11` beta header, which resolveBetas
+ *  always attaches. */
 interface CacheableTextBlock extends Anthropic.Messages.TextBlockParam {
-  cache_control: { type: "ephemeral" };
+  cache_control: { type: "ephemeral"; ttl?: "5m" | "1h" };
+}
+
+/**
+ * Returns a shallow-cloned messages array with a cache_control
+ * breakpoint stamped on the LAST content block of the LAST message.
+ * The marker creates a cache lane that the next API call (next
+ * tool-use iteration within this turn, or the next user turn) can
+ * hit — saving the input-token cost of replaying the whole
+ * conversation history each time.
+ *
+ * Default 5m TTL is correct: each turn's suffix is mostly invalidated
+ * by the next user turn anyway, and the system+tools 1h cache covers
+ * cross-turn pauses. See P4 plan.
+ *
+ * Safe-no-ops on:
+ *   - empty messages array
+ *   - last message with no content blocks
+ *   - last message whose content is already a cache_control-bearing
+ *     block (idempotent across retries)
+ */
+export function stampCacheBreakpointOnLastMessage(
+  messages: Message[],
+): Message[] {
+  if (messages.length === 0) return messages;
+  const lastIdx = messages.length - 1;
+  const last = messages[lastIdx];
+
+  // String content → wrap into a single text block we can stamp on.
+  if (typeof last.content === "string") {
+    if (last.content.length === 0) return messages;
+    const stamped: Message = {
+      ...last,
+      content: [
+        {
+          type: "text",
+          text: last.content,
+          cache_control: { type: "ephemeral" },
+        } as CacheableTextBlock,
+      ],
+    };
+    return [...messages.slice(0, lastIdx), stamped];
+  }
+
+  if (!Array.isArray(last.content) || last.content.length === 0) {
+    return messages;
+  }
+
+  const lastBlockIdx = last.content.length - 1;
+  const lastBlock = last.content[lastBlockIdx] as { cache_control?: unknown };
+  // Already stamped (e.g. by a retry that came through the same path).
+  if (lastBlock.cache_control) return messages;
+
+  const newContent = [
+    ...last.content.slice(0, lastBlockIdx),
+    { ...lastBlock, cache_control: { type: "ephemeral" } },
+  ] as typeof last.content;
+  return [
+    ...messages.slice(0, lastIdx),
+    { ...last, content: newContent },
+  ];
 }
 
 const MAX_RETRIES = 3;
@@ -249,28 +319,23 @@ async function createWithOptionalMcp(
 ): Promise<{ message: Anthropic.Messages.Message; durationMs: number }> {
   const start = Date.now();
   const modelId = typeof params.model === "string" ? params.model : "";
-  const needs1mBeta = modelId.endsWith("[1m]");
   const needsMcp = mcpServers.length > 0;
 
-  // Stable-API path: no MCP AND no 1M-context beta. The MCP-blocks-in-
-  // history materialiser still runs so a model swap (MCP→non-MCP)
-  // mid-conversation doesn't 400 the stable endpoint.
-  if (!needsMcp && !needs1mBeta) {
-    const safeMessages = hasAnyMcpBlocks(params.messages)
-      ? (materializeMcpBlocksAsText(params.messages as Message[]) as typeof params.messages)
-      : params.messages;
-    const safeParams = safeMessages === params.messages
-      ? params
-      : { ...params, messages: safeMessages };
-    const message = await createWithRetry(safeParams, signal);
-    return { message, durationMs: Date.now() - start };
-  }
+  // Every call routes through the beta API now — we always attach
+  // `extended-cache-ttl-2025-04-11` to enable the 1-hour cache TTL
+  // on system + tools breakpoints. The beta endpoint is a strict
+  // superset of the stable one for messages.create; non-MCP /
+  // non-1M-context turns are unaffected except for the betas[] header.
+  // Pre-flight materialises any MCP blocks in history into text stubs
+  // when MCP isn't active for this turn, so MCP→non-MCP transitions
+  // (mid-conversation role swap, secret rotation) don't 400.
+  const safeMessages = !needsMcp && hasAnyMcpBlocks(params.messages)
+    ? (materializeMcpBlocksAsText(params.messages as Message[]) as typeof params.messages)
+    : params.messages;
 
-  // Beta-API path: needed when MCP is in scope (mcp-client beta header)
-  // OR when the model is the 1M-context Opus variant (context-1m beta
-  // header). resolveBetas merges both flags into a single header array.
   const betaParams: Anthropic.Beta.Messages.MessageCreateParamsNonStreaming = {
     ...params,
+    messages: safeMessages,
     ...(needsMcp ? { mcp_servers: mcpServers } : {}),
     betas: resolveBetas(modelId, needsMcp),
   } as Anthropic.Beta.Messages.MessageCreateParamsNonStreaming;
@@ -651,7 +716,13 @@ export async function runAgentLoop(
 
   const cachedTools = filteredTools.map((tool, i) =>
     i === filteredTools.length - 1
-      ? { ...tool, cache_control: { type: "ephemeral" as const } }
+      ? {
+          ...tool,
+          // 1h TTL on the tools breakpoint: tool schemas are stable
+          // for the role's whole session, and an analyst pausing
+          // between turns shouldn't lose the cache. See P4.
+          cache_control: { type: "ephemeral" as const, ttl: "1h" as const },
+        }
       : tool
   );
 
@@ -733,13 +804,21 @@ export async function runAgentLoop(
     const systemBlock: CacheableTextBlock = {
       type: "text",
       text: systemPrompt,
-      cache_control: { type: "ephemeral" },
+      // 1h TTL: the system prompt + org context is stable for the
+      // whole role/session. The default 5m TTL evicts during typical
+      // SOC pauses (analyst reads findings, types follow-up) and the
+      // next turn pays full input-cache cost on ~6K tokens of prompt.
+      // See P4 plan.
+      cache_control: { type: "ephemeral", ttl: "1h" },
     };
 
     // Plan-resumption addendum — only on the first iteration so the
     // model doesn't see the hint repeatedly in the same turn. Separate
     // block with its own ephemeral cache so it doesn't invalidate the
-    // main system-prompt cache on clean (no-plan) turns.
+    // main system-prompt cache on clean (no-plan) turns. Default 5m
+    // TTL here is correct: plan resumption is conditional and short-
+    // lived; a 1h cache would write a per-conversation lane we'd
+    // rarely hit again.
     const systemBlocks: CacheableTextBlock[] = [systemBlock];
     if (iterationCount === 0 && inProgressPlan) {
       systemBlocks.push({
@@ -760,7 +839,19 @@ export async function runAgentLoop(
     // that might produce empty content after prepareMessages returns
     // (e.g., future mid-loop mutations) and guarantees the Anthropic API
     // never sees an empty user message.
-    const sdkMessages = sanitizeEmptyUserMessages(prepared.messages);
+    const sanitizedMessages = sanitizeEmptyUserMessages(prepared.messages);
+
+    // 4th cache_control breakpoint — stamped on the last block of the
+    // last message so successive iterations within this turn's
+    // tool-use loop hit the cache on everything up to (and including)
+    // the previous iteration. Default 5m TTL is correct here: each
+    // turn's suffix is mostly invalidated by the next user turn
+    // anyway, and the system+tools 1h cache already covers cross-turn
+    // pauses. Anthropic permits up to 4 cache_control markers per
+    // request — system block + plan-resumption addendum + tools last
+    // item + this one = 4 (or 3 on clean turns without a plan). See
+    // P4 plan.
+    const sdkMessages = stampCacheBreakpointOnLastMessage(sanitizedMessages);
 
     const apiParams: Anthropic.Messages.MessageCreateParamsNonStreaming = {
       model,
@@ -818,11 +909,22 @@ export async function runAgentLoop(
       cache_creation_input_tokens: usageRaw.cache_creation_input_tokens,
       cache_read_input_tokens: usageRaw.cache_read_input_tokens,
     };
+    // Derived cache-hit rate so operators can monitor cache health
+    // directly off the token_usage event without re-computing in
+    // every dashboard query. Denominator is the FULL set of input
+    // tokens for the call (cache-read + cache-write + un-cached
+    // input). Returns 0 when nothing is cached so the field never
+    // contains NaN. See P4 plan.
+    const cacheReadTokens = usage.cache_read_input_tokens ?? 0;
+    const cacheCreationTokens = usage.cache_creation_input_tokens ?? 0;
+    const cacheTotalIn = cacheReadTokens + cacheCreationTokens + usage.input_tokens;
+    const cacheHitRate = cacheTotalIn > 0 ? cacheReadTokens / cacheTotalIn : 0;
     logger.emitEvent("token_usage", "API usage", "agent", {
       inputTokens: usage.input_tokens,
       outputTokens: usage.output_tokens,
       cacheCreationTokens: usage.cache_creation_input_tokens,
       cacheReadTokens: usage.cache_read_input_tokens,
+      cacheHitRate,
       model,
     });
     if (callbacks.onUsage) callbacks.onUsage(usage, model);

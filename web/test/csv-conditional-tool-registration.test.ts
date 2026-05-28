@@ -7,6 +7,7 @@ const createMock = vi.fn();
 vi.mock("@anthropic-ai/sdk", () => ({
   default: class MockAnthropic {
     messages = { create: (params: unknown) => createMock(params) };
+    beta = { messages: { create: (params: unknown) => createMock(params) } };
   },
 }));
 
