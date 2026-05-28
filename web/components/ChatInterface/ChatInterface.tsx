@@ -27,7 +27,7 @@ import Link from 'next/link'
 import { useTheme } from '@/context/ThemeContext'
 import { useConversationCache } from '@/context/ConversationCacheContext'
 import { useToast } from '@/context/ToastContext'
-import { MarkdownRenderer, MessageActions, ThinkingBubble, UserAvatar, FileAttachmentBar } from '@/components'
+import { ContextTierSelector, MarkdownRenderer, MessageActions, ThinkingBubble, UserAvatar, FileAttachmentBar, modelIdForTier, tierForModelId, type ContextTier } from '@/components'
 import { useFileUpload } from '@/hooks/useFileUpload'
 import styles from './ChatInterface.module.css'
 import type { Conversation, ConversationMeta, PendingTool, ToolTrace } from '@/lib/types'
@@ -513,6 +513,12 @@ export function ChatInterface({
     initialConversation?.id ?? null
   )
   const [conversations, setConversations] = useState<ConversationMeta[]>(initialConversations)
+  // Context tier selected for THIS conversation. Locked the moment the
+  // user sends a first message; server re-checks against the persisted
+  // Session.model so a hand-crafted request can't switch tiers either.
+  const [contextTier, setContextTier] = useState<ContextTier>(() =>
+    tierForModelId(initialConversation?.model)
+  )
   const [editingTitleId, setEditingTitleId] = useState<string | null>(null)
   const [editingTitleValue, setEditingTitleValue] = useState('')
   const [pendingConfirmation, setPendingConfirmation] = useState<PendingTool | null>(
@@ -627,6 +633,8 @@ export function ChatInterface({
     setPendingConfirmation(conv.pendingConfirmation ?? null)
     const chatMessages = conversationToChatMessages(conv)
     setMessages(chatMessages.length > 0 ? chatMessages : INITIAL_MESSAGES)
+    // Restore the locked tier from the conversation's persisted model.
+    setContextTier(tierForModelId(conv.model))
     window.history.pushState({}, '', `/chat/${id}`)
     document.title = conv.title ? `${conv.title} — Neo` : 'Neo'
   }, [])
@@ -663,6 +671,9 @@ export function ChatInterface({
     setActiveConversationId(null)
     setMessages(INITIAL_MESSAGES)
     setPendingConfirmation(null)
+    // New conversation — default back to the 200K tier so a 1M-tier
+    // selection on a prior conversation doesn't silently carry over.
+    setContextTier('200k')
     window.history.pushState({}, '', '/chat')
     document.title = 'Neo'
   }
@@ -1049,12 +1060,20 @@ export function ChatInterface({
     const controller = new AbortController()
     abortControllerRef.current = controller
 
+    // Resolve the active model from the current tier selection. The
+    // server treats this as a *request* on the first turn (it gets
+    // persisted on the Session); on subsequent turns the server
+    // ignores body.model and uses the locked Session.model. Sending
+    // it every turn keeps the request consistent and lets the server
+    // emit a `model is locked` warn if the two ever diverge.
+    const requestModel = modelIdForTier(contextTier)
     try {
       let res: Response
       if (currentFiles.length > 0) {
         // Multipart upload when files are attached
         const formData = new FormData()
         formData.append('message', userMessage)
+        formData.append('model', requestModel)
         if (activeConversationIdRef.current) {
           formData.append('sessionId', activeConversationIdRef.current)
         }
@@ -1070,6 +1089,7 @@ export function ChatInterface({
           body: JSON.stringify({
             sessionId: activeConversationIdRef.current,
             message: userMessage,
+            model: requestModel,
           }),
           signal: controller.signal,
         })
@@ -1730,6 +1750,12 @@ export function ChatInterface({
                     <Paperclip className="w-4 h-4" />
                   </button>
                   <div className={styles.inputActionsSpacer} />
+                  <ContextTierSelector
+                    value={contextTier}
+                    onChange={setContextTier}
+                    locked={messages.some((m) => m.role === 'user')}
+                    disabled={isLoading}
+                  />
                   {isLoading ? (
                     <button
                       ref={stopBtnRef}

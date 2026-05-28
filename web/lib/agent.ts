@@ -23,6 +23,21 @@ import type { Message, AgentLoopResult, AgentCallbacks, PendingTool, ModelPrefer
 // Anthropic beta-API headers required by the MCP-connector path.
 // Newer header supersedes mcp-client-2025-04-04; both still work.
 const MCP_CLIENT_BETA = "mcp-client-2025-11-20" as const;
+// Beta header required to unlock Opus 4.7's 1M-token context window.
+// Attached only when the active model id ends in `[1m]`.
+const CONTEXT_1M_BETA = "context-1m-2025-08-07" as const;
+
+/**
+ * Compute the betas[] array for a given model + MCP state. Centralises
+ * the "which beta headers should this call carry" logic so neither the
+ * MCP-enabled path nor the stable path duplicates the model-id sniffing.
+ */
+function resolveBetas(model: string, mcpEnabled: boolean): string[] {
+  const betas: string[] = [];
+  if (mcpEnabled) betas.push(MCP_CLIENT_BETA);
+  if (model.endsWith("[1m]")) betas.push(CONTEXT_1M_BETA);
+  return betas;
+}
 
 // Cheap heuristic: detect whether a turn started from a skill invocation
 // so we can pick the larger MAX_TOKENS_SKILL budget. The skill handler in
@@ -233,14 +248,14 @@ async function createWithOptionalMcp(
   signal?: AbortSignal,
 ): Promise<{ message: Anthropic.Messages.Message; durationMs: number }> {
   const start = Date.now();
-  if (mcpServers.length === 0) {
-    // History may still carry mcp_tool_use / mcp_tool_result blocks
-    // from an earlier turn when MCP was configured for this role.
-    // The stable messages.create endpoint does not recognise those
-    // block types and would 400 the entire request. Materialise the
-    // blocks as text stubs (lossy but coherent) so the conversation
-    // can continue even after secrets rotate or MOCK_MODE flips on
-    // mid-session. See review M1.
+  const modelId = typeof params.model === "string" ? params.model : "";
+  const needs1mBeta = modelId.endsWith("[1m]");
+  const needsMcp = mcpServers.length > 0;
+
+  // Stable-API path: no MCP AND no 1M-context beta. The MCP-blocks-in-
+  // history materialiser still runs so a model swap (MCP→non-MCP)
+  // mid-conversation doesn't 400 the stable endpoint.
+  if (!needsMcp && !needs1mBeta) {
     const safeMessages = hasAnyMcpBlocks(params.messages)
       ? (materializeMcpBlocksAsText(params.messages as Message[]) as typeof params.messages)
       : params.messages;
@@ -250,10 +265,14 @@ async function createWithOptionalMcp(
     const message = await createWithRetry(safeParams, signal);
     return { message, durationMs: Date.now() - start };
   }
-  const betaParams = {
+
+  // Beta-API path: needed when MCP is in scope (mcp-client beta header)
+  // OR when the model is the 1M-context Opus variant (context-1m beta
+  // header). resolveBetas merges both flags into a single header array.
+  const betaParams: Anthropic.Beta.Messages.MessageCreateParamsNonStreaming = {
     ...params,
-    mcp_servers: mcpServers,
-    betas: [MCP_CLIENT_BETA],
+    ...(needsMcp ? { mcp_servers: mcpServers } : {}),
+    betas: resolveBetas(modelId, needsMcp),
   } as Anthropic.Beta.Messages.MessageCreateParamsNonStreaming;
   const message = await createBetaWithRetry(betaParams, signal);
   return { message, durationMs: Date.now() - start };
@@ -698,10 +717,13 @@ export async function runAgentLoop(
 
     if (callbacks.onThinking) callbacks.onThinking();
 
-    // Prepare messages: truncate oversized tool results, compress if near limit
+    // Prepare messages: truncate oversized tool results, compress if near limit.
+    // Pass the active model so prepareMessages picks the right context budget
+    // (standard 200K thresholds vs 1M-tier overrides for `claude-opus-4-7[1m]`).
     const prepared = await prepareMessages(localMessages, lastInputTokens, systemPromptTokenEstimate, {
       conversationId: sessionId,
       ownerId: options.ownerId,
+      model,
     });
 
     if (prepared.trimmed && callbacks.onContextTrimmed) {

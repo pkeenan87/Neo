@@ -899,6 +899,7 @@ function rootToSession(root: ConversationV2Root, turns: TurnDoc[]): Session {
     messageCount: root.turnCount,
     pendingConfirmation: root.pendingConfirmation,
     inProgressPlan: root.inProgressPlan ?? null,
+    ...(root.model ? { model: root.model } : {}),
   };
 }
 
@@ -926,8 +927,8 @@ function rootToSession(root: ConversationV2Root, turns: TurnDoc[]): Session {
  *   through the SessionStore wrapper.
  */
 export class CosmosV2SessionStore implements SessionStore {
-  async create(role: Role, ownerId: string, channel: Channel = "web"): Promise<string> {
-    return createConversationV2(ownerId, role, channel);
+  async create(role: Role, ownerId: string, channel: Channel = "web", model?: string): Promise<string> {
+    return createConversationV2(ownerId, role, channel, model);
   }
 
   async get(id: string): Promise<Session | undefined> {

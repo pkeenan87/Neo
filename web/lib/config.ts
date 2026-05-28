@@ -41,6 +41,51 @@ export const NEO_CONTEXT_MAX_INPUT_TOKENS = parsePositiveInt("NEO_CONTEXT_MAX_IN
 export const HAIKU_INPUT_MAX_TOKENS = parsePositiveInt("HAIKU_INPUT_MAX_TOKENS", 160_000);
 export const FIRST_MESSAGE_MAX_TOKENS = parsePositiveInt("FIRST_MESSAGE_MAX_TOKENS", 100_000);
 
+// 1M-context tier (Opus 4.7 [1m]) overrides. Each constant is the
+// equivalent of the standard-tier value scaled to the 1M window with
+// ~100K headroom for system prompt + tool schemas + output budget.
+// HAIKU_INPUT_MAX is intentionally NOT raised here — Haiku itself is
+// still a 200K-window model, so its pre-trim ceiling stays at 160K.
+// PER_TOOL_RESULT_TOKEN_CAP doubles so KQL pivots can stay inline
+// without forcing the blob-offload roundtrip on every long query.
+export const ONE_MILLION_CONTEXT_BUDGET = Object.freeze({
+  neoContextMaxInputTokens: parsePositiveInt("NEO_CONTEXT_MAX_INPUT_TOKENS_1M", 900_000),
+  trimTriggerThreshold: parsePositiveInt("TRIM_TRIGGER_THRESHOLD_1M", 800_000),
+  firstMessageMaxTokens: parsePositiveInt("FIRST_MESSAGE_MAX_TOKENS_1M", 500_000),
+  perToolResultTokenCap: parsePositiveInt("PER_TOOL_RESULT_TOKEN_CAP_1M", 100_000),
+});
+
+/**
+ * Effective context budget for a given model id. Standard models
+ * (Sonnet, Opus 4.6, Opus 4.7 200K) use the default constants; the
+ * 1M-context Opus 4.7 variant uses ONE_MILLION_CONTEXT_BUDGET. Used
+ * by prepareMessages in context-manager.ts to select per-call
+ * thresholds without invasive const rewrites at every callsite.
+ */
+export interface ContextBudget {
+  neoContextMaxInputTokens: number;
+  trimTriggerThreshold: number;
+  firstMessageMaxTokens: number;
+  perToolResultTokenCap: number;
+}
+
+export function getContextBudget(model: string): ContextBudget {
+  if (model.endsWith("[1m]")) {
+    return {
+      neoContextMaxInputTokens: ONE_MILLION_CONTEXT_BUDGET.neoContextMaxInputTokens,
+      trimTriggerThreshold: ONE_MILLION_CONTEXT_BUDGET.trimTriggerThreshold,
+      firstMessageMaxTokens: ONE_MILLION_CONTEXT_BUDGET.firstMessageMaxTokens,
+      perToolResultTokenCap: ONE_MILLION_CONTEXT_BUDGET.perToolResultTokenCap,
+    };
+  }
+  return {
+    neoContextMaxInputTokens: NEO_CONTEXT_MAX_INPUT_TOKENS,
+    trimTriggerThreshold: TRIM_TRIGGER_THRESHOLD,
+    firstMessageMaxTokens: FIRST_MESSAGE_MAX_TOKENS,
+    perToolResultTokenCap: PER_TOOL_RESULT_TOKEN_CAP,
+  };
+}
+
 // ── Destructive-batch preflight ──────────────────────────────
 // Upper bound on explicit `messages` arrays passed to
 // remediate_abnormal_messages before the executor rejects the tool call
@@ -218,7 +263,20 @@ export const DEFAULT_MODEL = (process.env.CLAUDE_DEFAULT_MODEL || "claude-sonnet
 export const SUPPORTED_MODELS: Record<string, ModelPreference> = {
   "Sonnet (default)": (process.env.CLAUDE_SONNET_MODEL || "claude-sonnet-4-6") as ModelPreference,
   "Opus": (process.env.CLAUDE_OPUS_MODEL || "claude-opus-4-6") as ModelPreference,
+  // Opus 4.7 with 1M-token context. Surfaced as an opt-in tier in the
+  // chat UI (a 200K / 1M selector next to the send button) because the
+  // 1M tier is priced at 2× the standard rate. The selector is locked
+  // after the first message so a long-running conversation can't
+  // accidentally switch tiers mid-investigation.
+  "Opus 4.7 (1M context)": (process.env.CLAUDE_OPUS_1M_MODEL || "claude-opus-4-7[1m]") as ModelPreference,
 };
+
+// True when the given model id is the 1M-context Opus 4.7 variant.
+// Used to (a) attach the context-1m beta header, (b) switch context-
+// manager thresholds, and (c) skip the standard boot guard.
+export function isOneMillionContextModel(model: string): boolean {
+  return model.endsWith("[1m]");
+}
 
 export const HAIKU_MODEL = process.env.CLAUDE_HAIKU_MODEL || "claude-haiku-4-5-20251001";
 

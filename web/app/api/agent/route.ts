@@ -152,16 +152,40 @@ async function handleAgentPost(request: NextRequest, identity: ResolvedAuth): Pr
     sessionId = body.sessionId;
   } else {
     const channel = isChannel(body.channel) ? body.channel : "web";
-    sessionId = await sessionStore.create(identity.role, identity.ownerId, channel);
+    // Pass the requested model on create so it's persisted on the
+    // conversation root and locked for the rest of the conversation.
+    // Validated against SUPPORTED_MODEL_IDS to reject hand-crafted ids
+    // before they reach Cosmos.
+    const initialModel =
+      body.model && SUPPORTED_MODEL_IDS.has(body.model) ? body.model : undefined;
+    sessionId = await sessionStore.create(identity.role, identity.ownerId, channel, initialModel);
   }
 
   const session = (await sessionStore.get(sessionId) ?? await sessionStore.getExpired(sessionId))!;
 
-  // Resolve model preference: request body → default
-  const model: ModelPreference =
-    body.model && SUPPORTED_MODEL_IDS.has(body.model)
-      ? body.model
-      : DEFAULT_MODEL;
+  // Resolve model preference with lock semantics:
+  // - If the session already has messages AND a persisted model, use it
+  //   (the user can't switch tiers mid-conversation — protects against
+  //   billing surprises when a 200K conversation suddenly becomes 1M).
+  // - Otherwise honour body.model if present and valid, else DEFAULT_MODEL.
+  // The frontend disables the selector once messages exist, so this
+  // enforcement is defence-in-depth against a hand-crafted request.
+  let model: ModelPreference;
+  if (session.messageCount > 0 && session.model) {
+    model = session.model;
+    if (body.model && body.model !== session.model) {
+      logger.warn("Ignoring body.model — session model is locked", "api/agent", {
+        sessionId,
+        requestedModel: body.model,
+        lockedModel: session.model,
+      });
+    }
+  } else {
+    model =
+      body.model && SUPPORTED_MODEL_IDS.has(body.model)
+        ? body.model
+        : DEFAULT_MODEL;
+  }
 
   // Set up logging context for the rest of this request
   const channel = isChannel(body.channel) ? body.channel : "web";
