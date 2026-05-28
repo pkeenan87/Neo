@@ -124,10 +124,16 @@ async function processStream(response, callbacks) {
 
 /**
  * Send a message to the agent and stream the response.
+ *
+ * `model` (optional) maps to the body.model field on the /api/agent
+ * request. On a new session the server uses it as the requested
+ * tier; on an existing session with messages, the server's locked
+ * Session.model wins and any divergence is logged as a warn.
  */
-export async function streamMessage(serverUrl, getAuthHeader, sessionId, message, callbacks) {
+export async function streamMessage(serverUrl, getAuthHeader, sessionId, message, callbacks, model) {
   const body = { message, channel: "cli" };
   if (sessionId) body.sessionId = sessionId;
+  if (model) body.model = model;
 
   let authHeader;
   try {
