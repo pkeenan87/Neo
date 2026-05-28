@@ -39,6 +39,7 @@ You are running headlessly on a cron schedule, not in a conversation. Rules:
 - Do not ask follow-up questions — there is no user to answer.
 - Do not call destructive tools (password reset, machine isolation, etc.) — they are unavailable in this context.
 - If a tool returns no results, say so explicitly rather than ending with a question.
+- If a tool result is truncated (look for "[Result truncated from N to M characters...]") or returns a blob-offload envelope (truncation_hint / _neo_blob_ref), call get_full_tool_result yourself — there is no human in the loop to follow up. Do NOT guess at the truncated tail.
 `;
 
 function computeAllowedTools(taskAllowedTools: string[]): string[] {

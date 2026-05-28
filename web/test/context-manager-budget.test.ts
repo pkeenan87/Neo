@@ -171,6 +171,11 @@ describe("offloadLargeToolResultsInPrompt", () => {
     expect(typeof firstResult.content).toBe("string");
     expect(firstResult.content).toContain("_neo_trust_boundary");
     expect(firstResult.content).toContain("tool_offload_inflight");
+    // P3: the envelope MUST surface a top-level truncation_hint string
+    // so the model can act on it without parsing _neo_blob_ref.
+    expect(firstResult.content).toContain("truncation_hint");
+    expect(firstResult.content).toContain("get_full_tool_result");
+    expect(firstResult.content).toContain("tu_1");
     // Last-turn tool_result is untouched.
     const lastResult = (result.messages[5].content as unknown as Array<Record<string, unknown>>)[0];
     expect(lastResult.content).toBe(oversized);

@@ -137,6 +137,55 @@ describe("truncateToolResult", () => {
     const content = "y".repeat(3500); // exactly 1000 tokens * 3.5 chars
     expect(truncateToolResult(content, 1000)).toBe(content);
   });
+
+  it("cuts at a JSON object boundary instead of mid-key (P3)", () => {
+    // Pad to exactly the boundary-lookback window before the cap so
+    // findCleanTruncationPoint discovers the closing brace and prefers
+    // it over a hard char-level slice. Without boundary awareness the
+    // cut would land mid-key on the row at position 3500 and the model
+    // would interpret the result as malformed JSON.
+    const rows: string[] = [];
+    for (let i = 0; i < 200; i++) {
+      rows.push(JSON.stringify({ id: i, value: "x".repeat(80) }));
+    }
+    const content = "[" + rows.join(",\n") + "]";
+    const result = truncateToolResult(content, 1000); // 3500 char cap
+
+    // The portion before the truncation marker must end on a clean
+    // JSON-row boundary — closing brace, closing bracket, or a
+    // comma-newline (row separator).
+    const beforeMarker = result.split("\n\n[Result truncated")[0];
+    const lastChar = beforeMarker[beforeMarker.length - 1];
+    expect(["}", "]", ",", "\n"]).toContain(lastChar);
+    expect(result).toContain("[Result truncated from");
+    expect(result).toContain("get_full_tool_result");
+  });
+
+  it("cuts at a newline boundary for line-structured (CSV / NDJSON) output", () => {
+    // Build content with no JSON braces — just lines. The boundary
+    // search should fall through to newlines and prefer that cut over
+    // a mid-line slice.
+    const lines: string[] = [];
+    for (let i = 0; i < 500; i++) {
+      lines.push(`row-${i},value-${"y".repeat(40)}`);
+    }
+    const content = lines.join("\n");
+    const result = truncateToolResult(content, 1000);
+
+    const beforeMarker = result.split("\n\n[Result truncated")[0];
+    // Last char of the visible portion should be a newline (boundary)
+    // rather than truncating mid-row.
+    expect(beforeMarker.endsWith("\n")).toBe(true);
+  });
+
+  it("falls back to a hard char cap when no boundary is found within the lookback window", () => {
+    // Pure-blob content with no special characters: the boundary
+    // search returns the original cap, so the existing message
+    // ("truncated from 10000 to 3500") still applies.
+    const content = "x".repeat(10_000);
+    const result = truncateToolResult(content, 1000);
+    expect(result).toContain("[Result truncated from 10000 to 3500");
+  });
 });
 
 // ── prepareMessages ──────────────────────────────────────────
