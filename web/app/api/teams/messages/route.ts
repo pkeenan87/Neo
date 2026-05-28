@@ -7,7 +7,7 @@ import {
   type TurnContext,
   type Attachment,
 } from "botbuilder";
-import { env } from "@/lib/config";
+import { env, DEFAULT_MODEL } from "@/lib/config";
 import { sessionStore } from "@/lib/session-factory";
 import { runAgentLoop, resumeAfterConfirmation, summarizeConversation } from "@/lib/agent";
 import { canUseTool } from "@/lib/permissions";
@@ -333,7 +333,11 @@ async function handleTurn(context: TurnContext): Promise<void> {
       confirmed,
       {},
       session.role,
-      neoSessionId
+      neoSessionId,
+      // Honour the conversation's locked model. Cross-channel
+      // sessions (web → Teams) may have been created on the 1M tier;
+      // without this the Teams turn silently downgrades to Sonnet.
+      session.model ?? DEFAULT_MODEL,
     );
 
     session.messages = result.messages;
@@ -599,7 +603,9 @@ async function handleTurn(context: TurnContext): Promise<void> {
     sessionId: resolvedSessionId,
   };
   const result = await setLogContext(teamsLogContext, () =>
-    runAgentLoop(apiMessages, {}, session.role, resolvedSessionId, undefined, undefined, {
+    // Honour the conversation's locked model — see the confirm-handler
+    // comment above for rationale.
+    runAgentLoop(apiMessages, {}, session.role, resolvedSessionId, session.model ?? DEFAULT_MODEL, undefined, {
       // Forward identity for Anthropic per-user attribution. session.ownerId
       // is either the AAD object id (DM) or the synthetic teams-thread:<id>
       // (channel/thread). hashPii handles either input deterministically.

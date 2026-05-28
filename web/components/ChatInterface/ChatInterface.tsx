@@ -1160,6 +1160,11 @@ export function ChatInterface({
           setActiveConversationId(null)
           setMessages(INITIAL_MESSAGES)
           setPendingConfirmation(null)
+          // Reset tier alongside the rest so a user who navigates
+          // back from a 1M-tier conversation doesn't silently start
+          // a new 200K conversation on the 1M tier. Matches the
+          // explicit reset in handleNewConversation.
+          setContextTier('200k')
         }
       }
     }

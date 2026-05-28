@@ -10,6 +10,7 @@ import { logger, hashPii, setLogContext } from "@/lib/logger";
 import { isChannel, CsvAttachmentCapError } from "@/lib/types";
 import type { AgentRequest, ModelPreference, TokenUsage, LogIdentityContext, FileAttachment, CSVReference, InProgressPlan } from "@/lib/types";
 import { DEFAULT_MODEL, SUPPORTED_MODELS } from "@/lib/config";
+import { resolveAgentModel } from "@/lib/agent-model-lock";
 import { checkBudget, createReservation, deleteReservation, recordUsage } from "@/lib/usage-tracker";
 import { isMultipartRequest, parseMultipart } from "@/lib/multipart-parser";
 import { buildContentBlocks, buildMediaBlocks, buildPersistedContent } from "@/lib/content-blocks";
@@ -163,28 +164,26 @@ async function handleAgentPost(request: NextRequest, identity: ResolvedAuth): Pr
 
   const session = (await sessionStore.get(sessionId) ?? await sessionStore.getExpired(sessionId))!;
 
-  // Resolve model preference with lock semantics:
-  // - If the session already has messages AND a persisted model, use it
-  //   (the user can't switch tiers mid-conversation — protects against
-  //   billing surprises when a 200K conversation suddenly becomes 1M).
-  // - Otherwise honour body.model if present and valid, else DEFAULT_MODEL.
-  // The frontend disables the selector once messages exist, so this
-  // enforcement is defence-in-depth against a hand-crafted request.
-  let model: ModelPreference;
-  if (session.messageCount > 0 && session.model) {
-    model = session.model;
-    if (body.model && body.model !== session.model) {
-      logger.warn("Ignoring body.model — session model is locked", "api/agent", {
-        sessionId,
-        requestedModel: body.model,
-        lockedModel: session.model,
-      });
-    }
-  } else {
-    model =
-      body.model && SUPPORTED_MODEL_IDS.has(body.model)
-        ? body.model
-        : DEFAULT_MODEL;
+  // Resolve model preference via the shared lock helper. See
+  // web/lib/agent-model-lock.ts for the full branch documentation.
+  const lockResult = resolveAgentModel({
+    sessionModel: session.model,
+    messageCount: session.messageCount,
+    bodyModel: body.model,
+    supportedModelIds: SUPPORTED_MODEL_IDS,
+    defaultModel: DEFAULT_MODEL,
+  });
+  const model: ModelPreference = lockResult.model;
+  if (lockResult.divergence) {
+    const msg =
+      lockResult.divergence.reason === "session_locked"
+        ? "Ignoring body.model — session model is locked"
+        : "Ignoring body.model — legacy session locked to DEFAULT_MODEL";
+    logger.warn(msg, "api/agent", {
+      sessionId,
+      requestedModel: lockResult.divergence.requestedModel,
+      lockedModel: lockResult.divergence.lockedModel,
+    });
   }
 
   // Set up logging context for the rest of this request
