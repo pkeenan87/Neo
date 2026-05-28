@@ -213,6 +213,27 @@ describe("agent loop — MCP routing", () => {
     const params = capturedBetaCalls[capturedBetaCalls.length - 1] as { betas?: string[] };
     expect(params.betas).toContain("extended-cache-ttl-2025-04-11");
   });
+
+  it("strips the `[1m]` sentinel from the model id before calling the API but keeps the context-1m beta", async () => {
+    // The `[1m]` suffix is a Neo-internal sentinel; the Anthropic
+    // API only knows the bare `claude-opus-4-7` id and unlocks
+    // the 1M context via the `context-1m-2025-08-07` beta header.
+    // Without the strip, the API returns 404 not_found_error.
+    mcpServersReturn.current = [];
+    await runAgentLoop(
+      [{ role: "user", content: "hi" }],
+      {},
+      "admin",
+      "session-1",
+      "claude-opus-4-7[1m]",
+    );
+    const params = capturedBetaCalls[capturedBetaCalls.length - 1] as { model: string; betas?: string[] };
+    // Bare model id reaches the API.
+    expect(params.model).toBe("claude-opus-4-7");
+    // 1M-context beta is still attached based on the original sentinel.
+    expect(params.betas).toContain("context-1m-2025-08-07");
+    expect(params.betas).toContain("extended-cache-ttl-2025-04-11");
+  });
 });
 
 // ── Audit ────────────────────────────────────────────────────
