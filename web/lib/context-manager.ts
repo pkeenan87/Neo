@@ -139,14 +139,60 @@ export function estimateTokens(messages: Message[]): number {
 
 // ── Tool result truncation ───────────────────────────────────
 
+// How far back from the cap we're willing to look for a clean
+// boundary. ~2% of the cap keeps the cost negligible while
+// catching almost every JSON / CSV row boundary near the cut.
+const BOUNDARY_LOOKBACK_CHARS = 2_000;
+
+/**
+ * Find a clean truncation point at-or-before `index` for JSON / CSV /
+ * line-structured content. Cutting `content.slice(0, charCap)` mid-key
+ * or mid-cell produces invalid output that the model interprets as
+ * "the tool returned malformed data" — strictly worse than truncating
+ * one entry earlier at a sane boundary. We look back up to
+ * BOUNDARY_LOOKBACK_CHARS for a closing brace/bracket, a JSON-row
+ * comma, or a newline (CSV / line-delimited output), and cut there.
+ * Falls through to the original char-cap when no boundary is found.
+ */
+function findCleanTruncationPoint(content: string, charCap: number): number {
+  const minSearch = Math.max(0, charCap - BOUNDARY_LOOKBACK_CHARS);
+  // Prefer JSON object/array boundaries first (most common shape for
+  // tool results in this codebase). Then JSON row separators. Then
+  // newlines as the last resort.
+  for (let i = charCap - 1; i >= minSearch; i--) {
+    const ch = content[i];
+    if (ch === "}" || ch === "]") {
+      // Include the closing brace/bracket so the visible slice is a
+      // syntactically-complete fragment.
+      return i + 1;
+    }
+  }
+  for (let i = charCap - 1; i >= minSearch; i--) {
+    const ch = content[i];
+    // Comma followed by a newline / whitespace = a row boundary in
+    // pretty-printed JSON. Cut AFTER the comma so the model sees a
+    // valid array element ended.
+    if (ch === "," && /[\s\n]/.test(content[i + 1] ?? "")) {
+      return i + 1;
+    }
+  }
+  for (let i = charCap - 1; i >= minSearch; i--) {
+    if (content[i] === "\n") {
+      return i + 1;
+    }
+  }
+  return charCap;
+}
+
 export function truncateToolResult(content: string, capTokens: number): string {
   const charCap = capTokens * CHARS_PER_TOKEN;
   if (content.length <= charCap) return content;
 
-  const truncated = content.slice(0, charCap);
+  const cutPoint = findCleanTruncationPoint(content, charCap);
+  const truncated = content.slice(0, cutPoint);
   return (
     truncated +
-    `\n\n[Result truncated from ${content.length} to ${charCap} characters. ` +
+    `\n\n[Result truncated from ${content.length} to ${cutPoint} characters. ` +
     `Use get_full_tool_result with the tool_use_id to retrieve the complete output.]`
   );
 }
@@ -959,6 +1005,11 @@ export async function offloadLargeToolResultsInPrompt(
         // resolvers treat it identically. MCP-sourced blocks tag
         // `source: "mcp_offload_inflight"` so audit / debug can
         // distinguish them from local tool offloads.
+        //
+        // truncation_hint is surfaced as a top-level string so the
+        // model can act on it without parsing _neo_blob_ref. The
+        // system prompt's "## TRUNCATED TOOL RESULTS" section
+        // teaches the model what to do when this field is present.
         const envelope = JSON.stringify(
           {
             _neo_trust_boundary: {
@@ -966,6 +1017,11 @@ export async function offloadLargeToolResultsInPrompt(
               tool: tr.tool_use_id ?? "unknown",
               injection_detected: preservedInjectionFlag,
             },
+            truncation_hint:
+              `Full tool result was offloaded to blob storage. ` +
+              `If the question depends on details not visible in this envelope, ` +
+              `call get_full_tool_result with tool_use_id "${tr.tool_use_id ?? "unknown"}" ` +
+              `to retrieve the complete payload.`,
             data: outcome,
           },
           null,
