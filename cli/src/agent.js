@@ -10,12 +10,17 @@ import { streamMessage, streamConfirm } from "./server-client.js";
 /**
  * Send a user message to the server agent and return the result.
  *
+ * `model` (optional) selects the Anthropic model id. On the first
+ * turn the server persists it on the session; subsequent turns are
+ * locked to the persisted model so the CLI can pass the same value
+ * every turn without risk of switching tiers mid-conversation.
+ *
  * Returns:
  *   { type: "response", text, sessionId }
  *   { type: "confirmation_required", tool, sessionId }
  */
-export async function runAgentLoop(message, sessionId, callbacks, getAuthHeader, serverUrl) {
-  return streamMessage(serverUrl, getAuthHeader, sessionId, message, callbacks);
+export async function runAgentLoop(message, sessionId, callbacks, getAuthHeader, serverUrl, model) {
+  return streamMessage(serverUrl, getAuthHeader, sessionId, message, callbacks, model);
 }
 
 /**

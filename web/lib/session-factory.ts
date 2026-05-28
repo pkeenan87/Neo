@@ -105,17 +105,17 @@ export class DispatchingSessionStore implements SessionStore {
   private readonly v1 = new CosmosSessionStore();
   private readonly v2 = new CosmosV2SessionStore();
 
-  async create(role: Role, ownerId: string, channel: Channel = "web"): Promise<string> {
+  async create(role: Role, ownerId: string, channel: Channel = "web", model?: string): Promise<string> {
     const mode = getActiveStoreMode();
-    if (mode === "v2") return this.v2.create(role, ownerId, channel);
-    if (mode === "dual-read") return this.v2.create(role, ownerId, channel);
+    if (mode === "v2") return this.v2.create(role, ownerId, channel, model);
+    if (mode === "dual-read") return this.v2.create(role, ownerId, channel, model);
     // v1 and dual-write both go through CosmosSessionStore.create →
     // module-level createConversation, which itself dispatches to v1
     // and (under dual-write) mirrors to v2 via createConversationV2WithId.
     // A second v2 call here would 409 on every conversation and
     // poison the conversation_dual_write_divergence log signal that
     // operators rely on for the rollout gate. See ultrareview bug_007.
-    return this.v1.create(role, ownerId, channel);
+    return this.v1.create(role, ownerId, channel, model);
   }
 
   async get(id: string): Promise<Session | undefined> {

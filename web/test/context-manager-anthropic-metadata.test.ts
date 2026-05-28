@@ -47,6 +47,13 @@ vi.mock("../lib/config", () => ({
   HAIKU_MODEL: "claude-haiku-4-5-20251001",
   CONTEXT_TOKEN_LIMIT: 180_000,
   env: { ANTHROPIC_API_KEY: "sk-test", MOCK_MODE: false },
+  // Mock returns the same constants so the cascade still fires.
+  getContextBudget: () => ({
+    neoContextMaxInputTokens: 180_000,
+    trimTriggerThreshold: 10,
+    firstMessageMaxTokens: 1,
+    perToolResultTokenCap: 50_000,
+  }),
 }));
 
 beforeEach(() => {

@@ -31,6 +31,15 @@ vi.mock("../lib/config", () => ({
   NEO_CONTEXT_MAX_INPUT_TOKENS: 1500,
   HAIKU_INPUT_MAX_TOKENS: 800,
   FIRST_MESSAGE_MAX_TOKENS: 200,
+  // Model-aware budget helper. The mock returns the same tight
+  // values as the constants above so the cascade tests still exercise
+  // their target tiers at low input sizes.
+  getContextBudget: () => ({
+    neoContextMaxInputTokens: 1500,
+    trimTriggerThreshold: 1000,
+    firstMessageMaxTokens: 200,
+    perToolResultTokenCap: 50_000,
+  }),
 }));
 
 const { mockEmitEvent, mockWarn, mockError, mockInfo } = vi.hoisted(() => ({

@@ -413,8 +413,8 @@ export class MockConversationStore implements SessionStore {
   // ownerId, so we embed it in the stored Conversation and treat the
   // first create() call as binding the ownerId.
 
-  async create(role: Role, ownerId: string, channel: Channel = "web"): Promise<string> {
-    return this.createConversation(ownerId, role, channel);
+  async create(role: Role, ownerId: string, channel: Channel = "web", model?: string): Promise<string> {
+    return this.createConversation(ownerId, role, channel, model);
   }
 
   async get(id: string): Promise<Session | undefined> {
@@ -430,6 +430,7 @@ export class MockConversationStore implements SessionStore {
       lastActivityAt: new Date(conv.updatedAt),
       messageCount: conv.messageCount,
       pendingConfirmation: conv.pendingConfirmation,
+      ...(conv.model ? { model: conv.model } : {}),
     };
   }
 

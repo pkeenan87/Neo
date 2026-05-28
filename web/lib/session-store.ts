@@ -12,7 +12,7 @@ const SWEEP_INTERVAL_MS = 60 * 1000; // 1 minute
 // ─────────────────────────────────────────────────────────────
 
 export interface SessionStore {
-  create(role: Role, ownerId: string, channel?: Channel): Promise<string>;
+  create(role: Role, ownerId: string, channel?: Channel, model?: string): Promise<string>;
   get(id: string): Promise<Session | undefined>;
   /** Return the session even if idle-expired (for resume scenarios).
    *  Note: InMemorySessionStore may return undefined if the periodic
@@ -45,7 +45,7 @@ export class InMemorySessionStore implements SessionStore {
     setInterval(() => this.sweep(), SWEEP_INTERVAL_MS);
   }
 
-  async create(role: Role, ownerId: string): Promise<string> {
+  async create(role: Role, ownerId: string, _channel?: Channel, model?: string): Promise<string> {
     const id = crypto.randomUUID();
     this.sessions.set(id, {
       id,
@@ -57,8 +57,9 @@ export class InMemorySessionStore implements SessionStore {
       messageCount: 0,
       pendingConfirmation: null,
       inProgressPlan: null,
+      ...(model ? { model } : {}),
     });
-    logger.info("Session created", "session-store", { sessionId: id, role, ownerIdHash: hashPii(ownerId) });
+    logger.info("Session created", "session-store", { sessionId: id, role, ownerIdHash: hashPii(ownerId), model });
     return id;
   }
 

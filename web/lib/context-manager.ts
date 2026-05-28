@@ -1,14 +1,13 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { env } from "./config";
 import {
-  TRIM_TRIGGER_THRESHOLD,
   PER_TOOL_RESULT_TOKEN_CAP,
   PRESERVED_RECENT_MESSAGES,
   HAIKU_MODEL,
-  NEO_CONTEXT_MAX_INPUT_TOKENS,
   HAIKU_INPUT_MAX_TOKENS,
-  FIRST_MESSAGE_MAX_TOKENS,
+  getContextBudget,
 } from "./config";
+import type { ContextBudget } from "./config";
 import { logger, hashPii } from "./logger";
 import type { Message } from "./types";
 
@@ -588,6 +587,7 @@ async function compressOlderMessages(
   messages: Message[],
   preserveCount: number,
   systemPromptTokenEstimate: number,
+  budget: ContextBudget,
   ownerId?: string,
 ): Promise<Message[]> {
   // Both early-return paths below skip the summarization branch but
@@ -597,7 +597,7 @@ async function compressOlderMessages(
   // over NEO_CONTEXT_MAX_INPUT_TOKENS → 400 from Anthropic with
   // `prompt is too long`. See review M4 + verified finding.
   if (messages.length <= preserveCount + 1) {
-    return enforceCeiling(messages, NEO_CONTEXT_MAX_INPUT_TOKENS, systemPromptTokenEstimate);
+    return enforceCeiling(messages, budget.neoContextMaxInputTokens, systemPromptTokenEstimate);
   }
 
   // Find the first user message to use as the anchor (may not be messages[0]
@@ -619,7 +619,7 @@ async function compressOlderMessages(
   const recent = messages.slice(safeRecentStart);
 
   if (middle.length === 0) {
-    return enforceCeiling(messages, NEO_CONTEXT_MAX_INPUT_TOKENS, systemPromptTokenEstimate);
+    return enforceCeiling(messages, budget.neoContextMaxInputTokens, systemPromptTokenEstimate);
   }
 
   // The token-based pre-trim loop below is the source of truth for
@@ -700,7 +700,7 @@ async function compressOlderMessages(
       },
     );
     result = [...anchor, buildCompressionFailureNotice(droppedMessagesCount), ...recent];
-    return enforceCeiling(result, NEO_CONTEXT_MAX_INPUT_TOKENS, systemPromptTokenEstimate);
+    return enforceCeiling(result, budget.neoContextMaxInputTokens, systemPromptTokenEstimate);
   }
 
   try {
@@ -765,7 +765,7 @@ async function compressOlderMessages(
   // After summarization, run the ceiling-enforcement pass to guarantee
   // the result fits under NEO_CONTEXT_MAX_INPUT_TOKENS. enforceCeiling
   // returns a pair-aware, already shape-validated array.
-  return enforceCeiling(result, NEO_CONTEXT_MAX_INPUT_TOKENS, systemPromptTokenEstimate);
+  return enforceCeiling(result, budget.neoContextMaxInputTokens, systemPromptTokenEstimate);
 }
 
 /**
@@ -1071,6 +1071,7 @@ export async function offloadLargeToolResultsInPrompt(
  */
 async function maybeSummarizeAnchor(
   messages: Message[],
+  firstMessageMaxTokens: number,
   ownerId?: string,
 ): Promise<Message[]> {
   if (messages.length === 0) return messages;
@@ -1089,12 +1090,12 @@ async function maybeSummarizeAnchor(
   if (typeof anchor.content !== "string") return messages;
 
   const anchorTokens = Math.ceil(anchor.content.length / CHARS_PER_TOKEN);
-  if (anchorTokens <= FIRST_MESSAGE_MAX_TOKENS) return messages;
+  if (anchorTokens <= firstMessageMaxTokens) return messages;
 
   logger.emitEvent("context_engineering", "Anchor exceeds FIRST_MESSAGE_MAX_TOKENS — summarising", "context-manager", {
     reason: "anchor_oversize",
     originalTokens: anchorTokens,
-    ceiling: FIRST_MESSAGE_MAX_TOKENS,
+    ceiling: firstMessageMaxTokens,
   });
 
   let summarised: string;
@@ -1138,7 +1139,7 @@ async function maybeSummarizeAnchor(
     logger.warn("Anchor summarisation failed — using hard truncation fallback", "context-manager", {
       errorMessage: (err as Error).message,
     });
-    const charCap = FIRST_MESSAGE_MAX_TOKENS * CHARS_PER_TOKEN;
+    const charCap = firstMessageMaxTokens * CHARS_PER_TOKEN;
     summarised =
       anchor.content.slice(0, charCap) +
       `\n\n[anchor truncated — original was ${anchor.content.length} chars]`;
@@ -1236,6 +1237,13 @@ export interface PrepareMessagesContext {
    *  hashed `metadata.user_id` so vendor-side trust-and-safety
    *  enforcement can be user-scoped. Optional. */
   ownerId?: string;
+  /** Active model id. When the model is the 1M-context Opus 4.7
+   *  variant (suffix `[1m]`), prepareMessages switches its internal
+   *  thresholds (trim trigger, ceiling, per-tool-result cap, anchor
+   *  cap) to the 1M-tier overrides defined in config.ts. Standard-
+   *  tier models keep the existing 200K-window thresholds. Defaults
+   *  to the standard tier when omitted. */
+  model?: string;
 }
 
 export async function prepareMessages(
@@ -1244,14 +1252,22 @@ export async function prepareMessages(
   systemPromptTokenEstimate: number,
   ctx: PrepareMessagesContext = {},
 ): Promise<PrepareResult> {
+  // Compute the effective budget once. For standard-tier models this
+  // returns the existing constants; for [1m] it returns the
+  // ONE_MILLION_CONTEXT_BUDGET overrides. Threading a budget value
+  // through every helper avoids the alternative of either (a)
+  // making the consts mutable globals or (b) duplicating the
+  // const-vs-budget branching at every callsite.
+  const budget = getContextBudget(ctx.model ?? "");
+
   // Step 1: Anchor summary — if the very first user message alone is
-  // already larger than FIRST_MESSAGE_MAX_TOKENS, replace with a
+  // already larger than budget.firstMessageMaxTokens, replace with a
   // Haiku-generated summary in-place. Without this, the anchor is
   // never dropped and dominates every subsequent turn's budget.
-  const anchorSummarised = await maybeSummarizeAnchor(messages, ctx.ownerId);
+  const anchorSummarised = await maybeSummarizeAnchor(messages, budget.firstMessageMaxTokens, ctx.ownerId);
 
   // Step 2: Truncate individual oversized tool results (per-result cap)
-  const { messages: truncatedMessages, anyTruncated } = truncateToolResults(anchorSummarised);
+  const { messages: truncatedMessages, anyTruncated } = truncateToolResults(anchorSummarised, budget.perToolResultTokenCap);
 
   // Step 3: Estimate total context size
   // When lastInputTokens comes from response.usage.input_tokens, it already
@@ -1270,11 +1286,12 @@ export async function prepareMessages(
   let afterOffload = truncatedMessages;
   if (
     ctx.conversationId &&
-    totalEstimate > NEO_CONTEXT_MAX_INPUT_TOKENS
+    totalEstimate > budget.neoContextMaxInputTokens
   ) {
     const offloaded = await offloadLargeToolResultsInPrompt(truncatedMessages, {
       conversationId: ctx.conversationId,
       skipLastTurn: true,
+      thresholdTokens: budget.perToolResultTokenCap,
     });
     afterOffload = offloaded.messages;
   }
@@ -1282,12 +1299,12 @@ export async function prepareMessages(
   // Step 4: Compress if over the trim trigger threshold. compressOlderMessages
   // internally runs enforceCeiling as its final step, so a successful
   // compression return is already guaranteed to fit under
-  // NEO_CONTEXT_MAX_INPUT_TOKENS.
-  if (totalEstimate > TRIM_TRIGGER_THRESHOLD) {
+  // budget.neoContextMaxInputTokens.
+  if (totalEstimate > budget.trimTriggerThreshold) {
     logger.info("Context trimming triggered", "context-manager", {
       estimatedTokens: totalEstimate,
-      threshold: TRIM_TRIGGER_THRESHOLD,
-      ceiling: NEO_CONTEXT_MAX_INPUT_TOKENS,
+      threshold: budget.trimTriggerThreshold,
+      ceiling: budget.neoContextMaxInputTokens,
       messageCount: afterOffload.length,
     });
 
@@ -1295,6 +1312,7 @@ export async function prepareMessages(
       afterOffload,
       PRESERVED_RECENT_MESSAGES,
       systemPromptTokenEstimate,
+      budget,
       ctx.ownerId,
     );
     const sanitized = sanitizeEmptyUserMessages(compressed);
@@ -1314,10 +1332,10 @@ export async function prepareMessages(
   // turn and the current estimate is close to (but below) the threshold,
   // AND the anchor + recent window still exceeds the hard ceiling.
   // Rarely fires in practice but cheap when it doesn't.
-  if (totalEstimate > NEO_CONTEXT_MAX_INPUT_TOKENS) {
+  if (totalEstimate > budget.neoContextMaxInputTokens) {
     const enforced = enforceCeiling(
       afterOffload,
-      NEO_CONTEXT_MAX_INPUT_TOKENS,
+      budget.neoContextMaxInputTokens,
       systemPromptTokenEstimate,
     );
     const sanitized = sanitizeEmptyUserMessages(enforced);

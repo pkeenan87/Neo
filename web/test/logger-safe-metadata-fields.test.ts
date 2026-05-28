@@ -53,4 +53,27 @@ describe("logger SAFE_METADATA_FIELDS — Infosec audit fields", () => {
 
     logSpy.mockRestore();
   });
+
+  it("preserves requestedModel / lockedModel in emitted metadata (tier-lock divergence audit)", () => {
+    // Regression: when the api/agent route logs `Ignoring body.model
+    // — session model is locked` the metadata must include both model
+    // ids so SIEM rules detecting tier-switch attempts have something
+    // to key on. Without these on the allowlist the warn arrives at
+    // Event Hub with only sessionId — useless for forensics.
+    const logSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    logger.warn("Ignoring body.model — session model is locked", "api/agent", {
+      sessionId: "conv_abc-uuid",
+      requestedModel: "claude-opus-4-7[1m]",
+      lockedModel: "claude-sonnet-4-6",
+    });
+
+    expect(logSpy).toHaveBeenCalledTimes(1);
+    const line = logSpy.mock.calls[0][0] as string;
+    expect(line).toContain('"requestedModel":"claude-opus-4-7[1m]"');
+    expect(line).toContain('"lockedModel":"claude-sonnet-4-6"');
+    expect(line).toContain('"sessionId":"conv_abc-uuid"');
+
+    logSpy.mockRestore();
+  });
 });

@@ -395,6 +395,12 @@ export interface Session {
   /** See Conversation.inProgressPlan — optional so pre-feature
    *  sessions that predate this field round-trip safely. */
   inProgressPlan?: InProgressPlan | null;
+  /** The Anthropic model id this conversation is locked to. Captured
+   *  on first message and re-applied on every subsequent turn so the
+   *  user can't accidentally swap models (e.g. Opus 4.7 200K → 1M
+   *  tier) mid-conversation. Optional for backward compatibility
+   *  with sessions created before the field existed. */
+  model?: string;
 }
 
 export interface SessionMeta {

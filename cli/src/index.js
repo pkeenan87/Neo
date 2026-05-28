@@ -118,7 +118,33 @@ const MATRIX_QUOTES = [
   "Ignorance is bliss. Not on our watch."
 ];
 
-function printBanner() {
+// ── Context tier selection ───────────────────────────────────
+//
+// Mirrors web/components/ContextTierSelector. The default tier
+// (200K) uses Sonnet; the opt-in 1M tier uses Opus 4.7 [1m] —
+// priced ~10x more, so the user has to ask for it explicitly.
+// Map kept local to the CLI because the cli/ and web/ projects
+// don't share imports (per CLAUDE.md project structure).
+const CONTEXT_TIERS = {
+  "200k": "claude-sonnet-4-6",
+  "1m":   "claude-opus-4-7[1m]",
+};
+
+function resolveContextTier() {
+  const raw = parseFlag("--context");
+  if (!raw) return { tier: "200k", model: CONTEXT_TIERS["200k"] };
+  const tier = raw.toLowerCase();
+  if (!CONTEXT_TIERS[tier]) {
+    process.stderr.write(
+      `neo: unknown --context value "${raw}"\n` +
+        `Valid: ${Object.keys(CONTEXT_TIERS).join(", ")}\n`,
+    );
+    process.exit(2);
+  }
+  return { tier, model: CONTEXT_TIERS[tier] };
+}
+
+function printBanner(contextTier) {
   const quote = MATRIX_QUOTES[Math.floor(Math.random() * MATRIX_QUOTES.length)];
   console.log(chalk.bold.green(`
     ███╗   ██╗███████╗ ██████╗
@@ -130,6 +156,13 @@ function printBanner() {
   `));
   console.log(chalk.green("    [ S E C U R I T Y  A G E N T  v2.0 ]"));
   console.log(chalk.gray(`    [ ${quote.padEnd(38)} ]`));
+  if (contextTier && contextTier !== "200k") {
+    // Surface non-default tier so the cost is visible at every REPL
+    // launch. 200K is the default; 1M is highlighted because it costs
+    // ~10x more per token.
+    const label = contextTier === "1m" ? "1M context (Opus 4.7 \u2014 ~10x cost)" : contextTier;
+    console.log(chalk.yellow(`    [ ${label} ]`));
+  }
   console.log(chalk.gray("\n    exit \u2014 quit  |  clear \u2014 reset context  |  history \u2014 list sessions  |  resume N \u2014 continue one\n"));
 }
 
@@ -292,7 +325,7 @@ async function readStdin() {
 // Flag vocabulary for the `prompt` subcommand. Used by the argv scan
 // below to identify which tokens are flags vs. the positional message.
 const PROMPT_KNOWN_FLAGS = new Set(["--json", "--session-out"]);
-const PROMPT_VALUE_FLAGS = new Set(["--session", "--server", "--api-key"]);
+const PROMPT_VALUE_FLAGS = new Set(["--session", "--server", "--api-key", "--context"]);
 
 /**
  * Scan `process.argv` starting after `neo prompt` for the first token
@@ -348,6 +381,7 @@ async function handlePromptCommand() {
   const jsonMode = hasFlag("--json");
   const sessionOut = hasFlag("--session-out");
   const sessionId = parseFlag("--session");
+  const { model: contextModel } = resolveContextTier();
 
   // Warn when --api-key appears on the argv in prompt mode. The env
   // var form is always preferred for non-interactive callers because
@@ -368,7 +402,7 @@ async function handlePromptCommand() {
   if (extracted.unknownFlag) {
     process.stderr.write(
       `neo prompt: unknown flag "${extracted.unknownFlag}"\n` +
-        `Known flags: --json, --session-out, --session <id>, --server <url>, --api-key <key>\n`,
+        `Known flags: --json, --session-out, --session <id>, --server <url>, --api-key <key>, --context <200k|1m>\n`,
     );
     process.exit(2);
   }
@@ -376,7 +410,7 @@ async function handlePromptCommand() {
   let message;
   const rawMessage = extracted.message;
   if (!rawMessage) {
-    process.stderr.write("Usage: neo prompt <message> [--session <id>] [--json] [--session-out]\n");
+    process.stderr.write("Usage: neo prompt <message> [--session <id>] [--json] [--session-out] [--context <200k|1m>]\n");
     process.stderr.write("       neo prompt - < file.txt      # read message from stdin\n");
     process.exit(2);
   }
@@ -452,7 +486,7 @@ async function handlePromptCommand() {
 
   let result;
   try {
-    result = await runAgentLoop(message, sessionId, callbacks, getAuthHeader, serverUrl);
+    result = await runAgentLoop(message, sessionId, callbacks, getAuthHeader, serverUrl, contextModel);
   } catch (err) {
     // Classify the error for exit-code selection. Auth errors here
     // mean the token refresh failed mid-request (vs the initial
@@ -835,7 +869,12 @@ async function main() {
   // Resolve server config (exits on failure)
   const { serverUrl, getAuthHeader, authMethod } = await resolveServerConfig();
 
-  printBanner();
+  // Resolve the context tier early so the banner can surface a
+  // non-default selection. resolveContextTier() exits on an invalid
+  // --context value, so an error message lands BEFORE the banner.
+  const { tier: contextTier, model: contextModel } = resolveContextTier();
+
+  printBanner(contextTier);
   console.log(chalk.gray(`    Connected to ${serverUrl}\n`));
 
   // ── Check for CLI updates (non-blocking) ────────────────
@@ -883,6 +922,11 @@ async function main() {
   if (sessionId) {
     console.log(chalk.gray(`    Resuming session ${sessionId}\n`));
   }
+  // contextModel is resolved at REPL startup above and re-used on
+  // every runAgentLoop call. The server persists it on the session's
+  // first message and locks the conversation to that model
+  // thereafter, mirroring the web UI's locked-after-first-message
+  // behaviour.
   let lastHistory = [];
 
   const callbacks = {
@@ -998,7 +1042,7 @@ async function main() {
     }
 
     try {
-      let result = await runAgentLoop(userInput, sessionId, callbacks, getAuthHeader, serverUrl);
+      let result = await runAgentLoop(userInput, sessionId, callbacks, getAuthHeader, serverUrl, contextModel);
 
       // Update sessionId from server response
       if (result.sessionId) sessionId = result.sessionId;

@@ -1,6 +1,7 @@
 import { NextRequest } from "next/server";
 import { sessionStore } from "@/lib/session-factory";
 import { resumeAfterConfirmation } from "@/lib/agent";
+import { DEFAULT_MODEL } from "@/lib/config";
 import { getCsvAttachments } from "@/lib/conversation-store";
 import { createNDJSONStream, encodeNDJSON, writeAgentResult } from "@/lib/stream";
 import { resolveAuth, type ResolvedAuth } from "@/lib/auth-helpers";
@@ -162,7 +163,13 @@ async function handleConfirmPost(request: NextRequest, identity: ResolvedAuth): 
           },
           session.role,
           body.sessionId,
-          undefined,
+          // Honour the conversation's locked model (set at create
+          // time, never changes mid-conversation). Without this the
+          // destructive-confirmation turn silently runs against
+          // DEFAULT_MODEL even for a 1M-tier session — wrong model,
+          // wrong context budget, missing the context-1m beta header,
+          // and 400 prompt-too-long on > 200K histories.
+          session.model ?? DEFAULT_MODEL,
           {
             csvAttachments,
             // Forward identity for Anthropic per-user attribution.

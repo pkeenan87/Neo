@@ -774,6 +774,7 @@ function conversationToSession(conv: Conversation): Session {
     messageCount: conv.messageCount,
     pendingConfirmation: conv.pendingConfirmation,
     inProgressPlan: conv.inProgressPlan ?? null,
+    ...(conv.model ? { model: conv.model } : {}),
   };
 }
 
@@ -787,8 +788,8 @@ export class CosmosSessionStore implements SessionStore {
   private static readonly MAX_CACHE_SIZE = 1000;
   private ownerCache = new Map<string, string>();
 
-  async create(role: Role, ownerId: string, channel: Channel = "web"): Promise<string> {
-    const id = await createConversation(ownerId, role, channel);
+  async create(role: Role, ownerId: string, channel: Channel = "web", model?: string): Promise<string> {
+    const id = await createConversation(ownerId, role, channel, model);
     this.cacheOwner(id, ownerId);
     return id;
   }

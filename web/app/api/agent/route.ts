@@ -10,6 +10,7 @@ import { logger, hashPii, setLogContext } from "@/lib/logger";
 import { isChannel, CsvAttachmentCapError } from "@/lib/types";
 import type { AgentRequest, ModelPreference, TokenUsage, LogIdentityContext, FileAttachment, CSVReference, InProgressPlan } from "@/lib/types";
 import { DEFAULT_MODEL, SUPPORTED_MODELS } from "@/lib/config";
+import { resolveAgentModel } from "@/lib/agent-model-lock";
 import { checkBudget, createReservation, deleteReservation, recordUsage } from "@/lib/usage-tracker";
 import { isMultipartRequest, parseMultipart } from "@/lib/multipart-parser";
 import { buildContentBlocks, buildMediaBlocks, buildPersistedContent } from "@/lib/content-blocks";
@@ -152,16 +153,38 @@ async function handleAgentPost(request: NextRequest, identity: ResolvedAuth): Pr
     sessionId = body.sessionId;
   } else {
     const channel = isChannel(body.channel) ? body.channel : "web";
-    sessionId = await sessionStore.create(identity.role, identity.ownerId, channel);
+    // Pass the requested model on create so it's persisted on the
+    // conversation root and locked for the rest of the conversation.
+    // Validated against SUPPORTED_MODEL_IDS to reject hand-crafted ids
+    // before they reach Cosmos.
+    const initialModel =
+      body.model && SUPPORTED_MODEL_IDS.has(body.model) ? body.model : undefined;
+    sessionId = await sessionStore.create(identity.role, identity.ownerId, channel, initialModel);
   }
 
   const session = (await sessionStore.get(sessionId) ?? await sessionStore.getExpired(sessionId))!;
 
-  // Resolve model preference: request body → default
-  const model: ModelPreference =
-    body.model && SUPPORTED_MODEL_IDS.has(body.model)
-      ? body.model
-      : DEFAULT_MODEL;
+  // Resolve model preference via the shared lock helper. See
+  // web/lib/agent-model-lock.ts for the full branch documentation.
+  const lockResult = resolveAgentModel({
+    sessionModel: session.model,
+    messageCount: session.messageCount,
+    bodyModel: body.model,
+    supportedModelIds: SUPPORTED_MODEL_IDS,
+    defaultModel: DEFAULT_MODEL,
+  });
+  const model: ModelPreference = lockResult.model;
+  if (lockResult.divergence) {
+    const msg =
+      lockResult.divergence.reason === "session_locked"
+        ? "Ignoring body.model — session model is locked"
+        : "Ignoring body.model — legacy session locked to DEFAULT_MODEL";
+    logger.warn(msg, "api/agent", {
+      sessionId,
+      requestedModel: lockResult.divergence.requestedModel,
+      lockedModel: lockResult.divergence.lockedModel,
+    });
+  }
 
   // Set up logging context for the rest of this request
   const channel = isChannel(body.channel) ? body.channel : "web";

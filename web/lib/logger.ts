@@ -124,6 +124,12 @@ const SAFE_METADATA_FIELDS = new Set([
   "cacheReadTokens",
   "estimatedCostUsd",
   "model",
+  // Tier-lock divergence audit (api/agent route): the requested model
+  // from body.model and the locked model from session.model. Both are
+  // low-cardinality enum strings from SUPPORTED_MODEL_IDS — no PII —
+  // and are needed for SIEM rules detecting tier-switch attempts.
+  "requestedModel",
+  "lockedModel",
   "budgetRemaining",
   "budgetWarning",
   // Enhanced observability fields
