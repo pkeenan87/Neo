@@ -311,10 +311,13 @@ See [`configuration.md`](./configuration.md) for the full list.
 |---|---|---|
 | `ORG_NAME` | "Goodwin Procter LLP" | Appears in the agent system prompt. |
 | `ORG_CONTEXT` | (none) | Domain names, SAM formats, VPN ranges injected into the system prompt. Also editable in Settings → Organization. |
-| `MAX_TOKENS_DEFAULT` | 4096 | Per-turn output budget for plain chat. |
+| `MAX_TOKENS_DEFAULT` | 16384 | Per-turn output budget for plain chat. Raised from 4096 in early 2026 — long publisher / hunt / digest responses were truncating mid-output. |
 | `MAX_TOKENS_SKILL` | 24576 | Larger budget for skill invocations. |
-| `USAGE_LIMIT_2H_INPUT_TOKENS` | 670000 | Per-user 2-hour rolling budget. |
-| `USAGE_LIMIT_WEEKLY_INPUT_TOKENS` | 6700000 | Per-user weekly rolling budget. |
+| `CLAUDE_DEFAULT_MODEL` | `claude-sonnet-4-6` | Default context tier when no explicit selection is made. |
+| `CLAUDE_OPUS_1M_MODEL` | `claude-opus-4-7[1m]` | Model id used by the opt-in 1M-context tier selector. |
+| `NEO_CONTEXT_MAX_INPUT_TOKENS_1M` | 900000 | Hard input ceiling for 1M-tier conversations (env-tunable; standard-tier conversations stay on `NEO_CONTEXT_MAX_INPUT_TOKENS`, default 180K). |
+| `USAGE_LIMIT_2H_INPUT_TOKENS` | 670000 | Per-user 2-hour rolling budget. Calibrated to standard-tier Opus 4.6 pricing ($15/Mtok input). 1M-tier conversations (Opus 4.7 [1m]) cost ~$30/Mtok input, so heavy 1M users burn this cap roughly twice as fast — lower the override if you expect default-1M usage. |
+| `USAGE_LIMIT_WEEKLY_INPUT_TOKENS` | 6700000 | Per-user weekly rolling budget. Same pricing caveat as above. |
 | `INJECTION_GUARD_MODE` | `monitor` | `monitor` logs only; `block` rejects 2+-pattern matches. |
 
 ### What to put in Key Vault

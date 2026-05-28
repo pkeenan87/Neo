@@ -382,16 +382,38 @@ When Neo starts a multi-step batch, it calls an internal `emit_plan` tool to per
 
 Tools that accept an explicit list of items to act on (e.g. `remediate_abnormal_messages`) reject batches larger than `REMEDIATE_MAX_EXPLICIT_MESSAGES` (default 20) with a `BATCH_TOO_LARGE` error. This is deliberate — surprisingly-large batches are the exact symptom of the agent running out of output budget mid-JSON, and the preflight catches it before the vendor API returns a generic 400. Neo will see the error and offer to chunk the batch for you.
 
-### Model Selection
+### Model Selection (Context Tier)
 
-Neo supports two Claude models. You can choose between them per-session:
+Neo offers two context tiers per conversation. The selector lives next to the chat send button in the web UI and as a `--context` flag in the CLI:
 
-- **Sonnet** (default) — Fast, cost-effective, and capable for most investigations.
-- **Opus** — Most capable model for complex multi-step reasoning.
+| Tier | Model | Context window | Pricing (input / output per million tokens) | When to use |
+|------|-------|----------------|----------------------------------------------|-------------|
+| **200K** (default) | Sonnet 4.6 | 200K tokens | $3 / $15 | Standard investigations. Compression kicks in at 140K. |
+| **1M context** | Opus 4.7 (1M) | 1,000,000 tokens | $30 / $150 (~10× the default) | Long investigations that need huge in-context history (multi-hour hunts, large evidence dumps). |
 
-In the web UI, select your preferred model before starting a conversation (model selection UI coming soon). Via the API, pass `"model": "claude-opus-4-6"` in the request body to use Opus; omit it to use Sonnet (the default). You can check your current token usage on the [Settings](#settings) page under the Usage tab.
+**Web UI:** the selector appears next to the send button. Default is 200K. Pick "1M" before sending the first message if you want the bigger window. The selector locks (greys out) once the first message is sent — switching mid-conversation would silently double-bill every subsequent turn, so it's intentionally not allowed.
 
-The model preference applies for the duration of the session and does not affect other users.
+**CLI:**
+
+```bash
+# Default 200K
+neo
+
+# 1M context, interactive REPL
+neo --context 1m
+
+# 1M context, one-shot prompt
+neo prompt --context 1m "long-running analysis prompt..."
+
+# Resume an existing session — the tier was locked at creation
+neo --session conv_abc123
+```
+
+The banner highlights non-default tiers in yellow at REPL startup so the cost surface is visible at every launch.
+
+**API:** pass `"model": "claude-opus-4-7[1m]"` in the `/api/agent` request body on the first turn. The server persists it on the conversation root and ignores divergent `body.model` values on subsequent turns (logged as a warn — defence in depth against a hand-crafted request that tries to swap tiers mid-conversation).
+
+You can check your current token usage on the [Settings](#settings) page under the Usage tab. The per-user 2-hour and weekly budgets are calibrated to standard-tier (Opus 4.6, $15/Mtok input) pricing — heavy 1M-tier usage burns those caps roughly twice as fast. Admins can override via the `USAGE_LIMIT_*` env vars.
 
 ### File Uploads (Web)
 
@@ -920,7 +942,11 @@ Neo includes built-in protection against prompt injection attacks. This is trans
 | Flag | Description |
 |------|-------------|
 | `--server <url>` | Override the server URL |
-| `--api-key <key>` | Override the API key (dev-only) |
+| `--api-key <key>` | Override the API key (dev-only — prefer `NEO_API_KEY` env var for non-interactive callers) |
+| `--session <id>` | Resume a paused conversation by id |
+| `--context <200k\|1m>` | Pick the context tier for this conversation. Default `200k` (Sonnet). `1m` selects Opus 4.7 1M-context (~10× cost). Locked after the first message — see [Model Selection](#model-selection-context-tier). |
+
+The same flags work on the non-interactive `neo prompt` subcommand. Type `neo prompt --help` for the full list.
 
 ### Tool Reference
 
