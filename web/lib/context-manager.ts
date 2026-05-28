@@ -47,6 +47,21 @@ const HAIKU_COMPRESSION_SYSTEM_PROMPT =
   "If you reach the output token limit mid-IDENTIFIERS section, stop there and skip NARRATIVE — " +
   "identifiers are more valuable than narrative for downstream correctness.";
 
+// Defensive sanitiser for Haiku-produced summary text before it's
+// wrapped in the <system_notice> envelope. Haiku is asked to reproduce
+// identifiers verbatim (IPs, hostnames, command lines, URLs), which
+// raises the probability that an adversarial tool result containing
+// the literal substring `</system_notice>` survives into the summary
+// and prematurely closes the envelope from the downstream model's
+// tag-matching perspective — turning the trailing text into apparent
+// system instructions. Neutralise both opener and closer regardless
+// of case + leading-whitespace variations. See ultra-review PLAUSIBLE
+// finding on system_notice envelope injection.
+const SYSTEM_NOTICE_TAG_RE = /<\s*\/?\s*system_notice\b/gi;
+export function sanitizeSummaryText(text: string): string {
+  return text.replace(SYSTEM_NOTICE_TAG_RE, "[redacted-tag]");
+}
+
 // Helper for the hard-truncation fallback message. The text is
 // rewritten as an explicit "the agent has NO record" instruction
 // instead of the old bare "key findings may need to be re-investigated"
@@ -735,10 +750,12 @@ async function compressOlderMessages(
       droppedMessages: droppedMessagesCount,
     });
 
-    const summaryText = response.content
-      .filter((b): b is Anthropic.Messages.TextBlock => b.type === "text")
-      .map((b) => b.text)
-      .join("\n");
+    const summaryText = sanitizeSummaryText(
+      response.content
+        .filter((b): b is Anthropic.Messages.TextBlock => b.type === "text")
+        .map((b) => b.text)
+        .join("\n"),
+    );
 
     const summaryMessage: Message = {
       role: summaryRole,
@@ -1124,10 +1141,12 @@ async function maybeSummarizeAnchor(
       ],
       ...(ownerId ? { metadata: { user_id: hashPii(ownerId) } } : {}),
     });
-    const summaryText = response.content
-      .filter((b): b is Anthropic.Messages.TextBlock => b.type === "text")
-      .map((b) => b.text)
-      .join("\n");
+    const summaryText = sanitizeSummaryText(
+      response.content
+        .filter((b): b is Anthropic.Messages.TextBlock => b.type === "text")
+        .map((b) => b.text)
+        .join("\n"),
+    );
     summarised =
       `<system_notice type="anchor_summarised" original_tokens="${anchorTokens}">\n` +
       `This block is a lossy summary of the user's opening message (the original was too large for the context window). ` +

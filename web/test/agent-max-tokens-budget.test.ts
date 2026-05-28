@@ -6,6 +6,7 @@ import {
   MAX_TOKENS_SKILL,
   MODEL_OUTPUT_CEILINGS,
   TOKEN_PRICING,
+  SUPPORTED_MODELS,
 } from '../lib/config'
 
 describe('resolveMaxTokens', () => {
@@ -82,5 +83,18 @@ describe('config invariants (post output-budget review)', () => {
     const tier1m = TOKEN_PRICING['claude-opus-4-7[1m]']
     expect(tier1m.input).toBe(std.input * 2)
     expect(tier1m.output).toBe(std.output * 2)
+  })
+
+  it('every value in SUPPORTED_MODELS has matching CEILING and PRICING entries', () => {
+    // Drift gap: a model surfaced in the selector / API but missing
+    // from MODEL_OUTPUT_CEILINGS silently falls through resolveMaxTokens
+    // to MAX_TOKENS_DEFAULT without clamping. Missing from TOKEN_PRICING
+    // zero-costs the user's usage. Both maps must contain every value
+    // in SUPPORTED_MODELS. See ultra-review F10.
+    const ids = Object.values(SUPPORTED_MODELS).sort()
+    const missingCeiling = ids.filter((m) => MODEL_OUTPUT_CEILINGS[m] === undefined)
+    const missingPricing = ids.filter((m) => TOKEN_PRICING[m] === undefined)
+    expect(missingCeiling).toEqual([])
+    expect(missingPricing).toEqual([])
   })
 })

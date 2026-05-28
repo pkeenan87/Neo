@@ -552,6 +552,30 @@ export function validateConfig(): void {
     );
   }
 
+  // 1M-tier envelope guard. Same nesting rules as the standard tier
+  // (trim < ceiling < model hard cap) but scaled to the 1M window.
+  // Catches operator misconfigurations like setting trim ABOVE the
+  // ceiling, which would put every 1M-tier turn into emergency
+  // truncation. See ultra-review F9.
+  if (
+    ONE_MILLION_CONTEXT_BUDGET.trimTriggerThreshold >=
+    ONE_MILLION_CONTEXT_BUDGET.neoContextMaxInputTokens
+  ) {
+    console.warn(
+      `TRIM_TRIGGER_THRESHOLD_1M (${ONE_MILLION_CONTEXT_BUDGET.trimTriggerThreshold}) >= ` +
+        `NEO_CONTEXT_MAX_INPUT_TOKENS_1M (${ONE_MILLION_CONTEXT_BUDGET.neoContextMaxInputTokens}) — ` +
+        `1M-tier compression would trigger above the ceiling and immediately drop messages every turn. ` +
+        `Lower TRIM_TRIGGER_THRESHOLD_1M (default 800K leaves 100K headroom).`,
+    );
+  }
+  if (ONE_MILLION_CONTEXT_BUDGET.neoContextMaxInputTokens >= 1_000_000) {
+    console.warn(
+      `NEO_CONTEXT_MAX_INPUT_TOKENS_1M (${ONE_MILLION_CONTEXT_BUDGET.neoContextMaxInputTokens}) >= 1M — ` +
+        `Anthropic's 1M-context hard cap is 1,000,000 and the system prompt + tool schemas add to every call. ` +
+        `Lower NEO_CONTEXT_MAX_INPUT_TOKENS_1M (default 900K leaves 100K headroom).`,
+    );
+  }
+
   if (env.MOCK_MODE) {
     console.warn("Running in MOCK MODE — tool calls return simulated data.");
     console.warn("Set MOCK_MODE=false in .env and add Azure credentials to use real APIs.");

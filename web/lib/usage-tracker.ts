@@ -137,6 +137,7 @@ export async function deleteReservation(
 // ─────────────────────────────────────────────────────────────
 
 interface UsageAggregateRow {
+  model?: string;
   totalInput: number;
   totalOutput: number;
   totalCacheRead: number;
@@ -144,23 +145,50 @@ interface UsageAggregateRow {
   callCount: number;
 }
 
+function pricingFor(model: string | undefined): { input: number; output: number } {
+  // env.MOCK_MODE returns the empty-string lookup so MOCK runs report
+  // $0 cost (matches the historical behaviour). Otherwise prefer the
+  // exact model's pricing, fall back to DEFAULT_MODEL, then to a sane
+  // hardcoded floor so a brand-new (unpriced) model doesn't crash the
+  // summary endpoint.
+  if (env.MOCK_MODE) return { input: 0, output: 0 };
+  if (model && TOKEN_PRICING[model]) return TOKEN_PRICING[model];
+  return TOKEN_PRICING[DEFAULT_MODEL] ?? { input: 3, output: 15 };
+}
+
 function estimateCostFromRow(row: UsageAggregateRow): number {
-  const defaultPricing = TOKEN_PRICING[env.MOCK_MODE ? "" : DEFAULT_MODEL] ?? { input: 3, output: 15 };
+  // Per-model pricing — see ultra-review F8. The aggregate now groups
+  // by c.model, so each row carries an accurate model id. Using the
+  // wrong pricing on a 1M-tier ($30/$150) row vs the standard tier
+  // ($3/$15) understates by 10×; that gap is closed here.
+  const pricing = pricingFor(row.model);
   return (
-    ((row.totalInput ?? 0) / 1_000_000) * defaultPricing.input +
-    ((row.totalOutput ?? 0) / 1_000_000) * defaultPricing.output +
-    ((row.totalCacheCreation ?? 0) / 1_000_000) * defaultPricing.input * 1.25 +
-    ((row.totalCacheRead ?? 0) / 1_000_000) * defaultPricing.input * 0.10
+    ((row.totalInput ?? 0) / 1_000_000) * pricing.input +
+    ((row.totalOutput ?? 0) / 1_000_000) * pricing.output +
+    ((row.totalCacheCreation ?? 0) / 1_000_000) * pricing.input * 1.25 +
+    ((row.totalCacheRead ?? 0) / 1_000_000) * pricing.input * 0.10
   );
 }
 
-function rowToSummary(row: UsageAggregateRow): UsageSummary {
+function rowsToSummary(rows: UsageAggregateRow[]): UsageSummary {
+  let totalInputTokens = 0;
+  let totalOutputTokens = 0;
+  let totalCacheReadTokens = 0;
+  let callCount = 0;
+  let estimatedCostUsd = 0;
+  for (const row of rows) {
+    totalInputTokens += row.totalInput ?? 0;
+    totalOutputTokens += row.totalOutput ?? 0;
+    totalCacheReadTokens += row.totalCacheRead ?? 0;
+    callCount += row.callCount ?? 0;
+    estimatedCostUsd += estimateCostFromRow(row);
+  }
   return {
-    totalInputTokens: row.totalInput ?? 0,
-    totalOutputTokens: row.totalOutput ?? 0,
-    totalCacheReadTokens: row.totalCacheRead ?? 0,
-    callCount: row.callCount,
-    estimatedCostUsd: estimateCostFromRow(row),
+    totalInputTokens,
+    totalOutputTokens,
+    totalCacheReadTokens,
+    callCount,
+    estimatedCostUsd,
   };
 }
 
@@ -184,8 +212,13 @@ export async function getUserUsage(
   try {
     const { resources } = await container.items
       .query<UsageAggregateRow>({
+        // GROUP BY c.model so the cost calculation can apply per-model
+        // pricing. Without this every row was multiplied by Sonnet's
+        // $3/$15 rate, understating 1M-tier ($30/$150) spend by 10×.
+        // See ultra-review F8.
         query: `
           SELECT
+            c.model AS model,
             SUM(c.usage.input_tokens) AS totalInput,
             SUM(c.usage.output_tokens) AS totalOutput,
             SUM(IS_DEFINED(c.usage.cache_read_input_tokens) ? c.usage.cache_read_input_tokens : 0) AS totalCacheRead,
@@ -193,6 +226,7 @@ export async function getUserUsage(
             COUNT(1) AS callCount
           FROM c
           WHERE c.userId = @userId AND c.timestamp >= @since
+          GROUP BY c.model
         `,
         parameters: [
           { name: "@userId", value: userId },
@@ -201,10 +235,10 @@ export async function getUserUsage(
       })
       .fetchAll();
 
-    const row = resources[0];
-    if (!row || row.callCount === 0) return empty;
-
-    return rowToSummary(row);
+    if (resources.length === 0) return empty;
+    const summary = rowsToSummary(resources);
+    if (summary.callCount === 0) return empty;
+    return summary;
   } catch (err) {
     logger.warn("Failed to query usage", "usage-tracker", {
       errorMessage: (err as Error).message,
@@ -446,8 +480,12 @@ export async function getUserUsageWithReset(
   try {
     const { resources } = await container.items
       .query<UsageAggregateRow>({
+        // Same GROUP BY c.model treatment as getUserUsage — applies
+        // per-model pricing instead of a single DEFAULT_MODEL rate.
+        // See ultra-review F8.
         query: `
           SELECT
+            c.model AS model,
             SUM(c.usage.input_tokens) AS totalInput,
             SUM(c.usage.output_tokens) AS totalOutput,
             SUM(IS_DEFINED(c.usage.cache_read_input_tokens) ? c.usage.cache_read_input_tokens : 0) AS totalCacheRead,
@@ -457,6 +495,7 @@ export async function getUserUsageWithReset(
           WHERE c.userId = @userId
             AND c.timestamp >= @since
             AND (NOT IS_DEFINED(c.type) OR c.type != "reset-marker")
+          GROUP BY c.model
         `,
         parameters: [
           { name: "@userId", value: userId },
@@ -465,10 +504,10 @@ export async function getUserUsageWithReset(
       })
       .fetchAll();
 
-    const row = resources[0];
-    if (!row || row.callCount === 0) return empty;
-
-    return rowToSummary(row);
+    if (resources.length === 0) return empty;
+    const summary = rowsToSummary(resources);
+    if (summary.callCount === 0) return empty;
+    return summary;
   } catch (err) {
     logger.warn("Failed to query usage with reset", "usage-tracker", {
       errorMessage: (err as Error).message,
