@@ -132,7 +132,14 @@ export const NEO_CONVERSATIONS_V2_CONTAINER =
 // output than plain chat, so they get a larger budget. Both values
 // are clamped to the active model's published ceiling at runtime via
 // resolveMaxTokens() below.
-export const MAX_TOKENS_DEFAULT = parsePositiveInt("MAX_TOKENS_DEFAULT", 4_096);
+//
+// 16K default chosen so a long publisher / hunt / digest summary
+// (~6K words ≈ 8K output tokens) doesn't hit `stop_reason: max_tokens`
+// mid-output. Sits well under the 32K Opus-4-7 / 64K Sonnet-4-6
+// ceilings; Anthropic does not pre-reserve max_tokens from the input
+// budget on Claude 4.x, and billing tracks actual generated tokens —
+// so raising this cap costs nothing on turns that don't need it.
+export const MAX_TOKENS_DEFAULT = parsePositiveInt("MAX_TOKENS_DEFAULT", 16_384);
 export const MAX_TOKENS_SKILL = parsePositiveInt("MAX_TOKENS_SKILL", 24_576);
 // Optional hard cap regardless of per-model ceilings — useful for cost
 // control in production. Unset (0 / missing) means no override.
@@ -153,6 +160,7 @@ export const MAX_TOKENS_CEILING_OVERRIDE: number | undefined =
 export const MODEL_OUTPUT_CEILINGS: Record<string, number> = {
   "claude-opus-4-6": 32_000,
   "claude-opus-4-7": 32_000,
+  "claude-opus-4-7[1m]": 32_000,
   "claude-sonnet-4-6": 64_000,
   "claude-haiku-4-5-20251001": 8_192,
 };
@@ -218,6 +226,10 @@ export const HAIKU_MODEL = process.env.CLAUDE_HAIKU_MODEL || "claude-haiku-4-5-2
 
 export const TOKEN_PRICING: Record<string, { input: number; output: number }> = {
   "claude-opus-4-6":             { input: 15,   output: 75 },
+  "claude-opus-4-7":             { input: 15,   output: 75 },
+  // 1M-context tier: input and output prices are 2× the standard
+  // Opus 4.7 rate per Anthropic's published pricing.
+  "claude-opus-4-7[1m]":         { input: 30,   output: 150 },
   "claude-sonnet-4-6":           { input: 3,    output: 15 },
   "claude-haiku-4-5-20251001":   { input: 0.80, output: 4 },
 };
