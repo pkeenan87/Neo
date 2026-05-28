@@ -5,6 +5,7 @@ import {
   MAX_TOKENS_DEFAULT,
   MAX_TOKENS_SKILL,
   MODEL_OUTPUT_CEILINGS,
+  TOKEN_PRICING,
 } from '../lib/config'
 
 describe('resolveMaxTokens', () => {
@@ -50,5 +51,36 @@ describe('resolveMaxTokens', () => {
     // value through unchanged.
     const out = resolveMaxTokens('some-future-model-xyz', { skillInvocation: true })
     expect(out).toBe(MAX_TOKENS_SKILL)
+  })
+})
+
+// Regression guards added after a long publisher-analysis response was
+// truncated mid-output because MAX_TOKENS_DEFAULT was 4096 (way below
+// the Opus 4.7 / Sonnet 4.6 output ceilings). Pricing entries were
+// also missing for claude-opus-4-7 and its 1M-context variant, which
+// silently zero-costed those turns in usage-tracker.
+describe('config invariants (post output-budget review)', () => {
+  it('MAX_TOKENS_DEFAULT is at least 16K so multi-page responses do not truncate', () => {
+    expect(MAX_TOKENS_DEFAULT).toBeGreaterThanOrEqual(16_384)
+  })
+
+  it('every model in MODEL_OUTPUT_CEILINGS has a matching TOKEN_PRICING entry', () => {
+    // Drift between these two maps causes usage-tracker to silently
+    // bill 0 for any model present in CEILINGS but missing from PRICING.
+    const ceilingModels = Object.keys(MODEL_OUTPUT_CEILINGS).sort()
+    const missing = ceilingModels.filter((m) => !TOKEN_PRICING[m])
+    expect(missing).toEqual([])
+  })
+
+  it('claude-opus-4-7 and claude-opus-4-7[1m] both have pricing entries', () => {
+    expect(TOKEN_PRICING['claude-opus-4-7']).toBeDefined()
+    expect(TOKEN_PRICING['claude-opus-4-7[1m]']).toBeDefined()
+  })
+
+  it('the 1M-context Opus tier is priced at 2x the standard tier', () => {
+    const std = TOKEN_PRICING['claude-opus-4-7']
+    const tier1m = TOKEN_PRICING['claude-opus-4-7[1m]']
+    expect(tier1m.input).toBe(std.input * 2)
+    expect(tier1m.output).toBe(std.output * 2)
   })
 })
