@@ -172,11 +172,15 @@ import { runAgentLoop } from "../lib/agent";
 // ── Routing ──────────────────────────────────────────────────
 
 describe("agent loop — MCP routing", () => {
-  it("uses the stable messages.create path when no MCP servers are configured", async () => {
+  it("always uses the beta messages.create path (extended-cache-ttl beta is always attached)", async () => {
+    // P4: every call now routes through the beta API because we
+    // unconditionally attach `extended-cache-ttl-2025-04-11` to enable
+    // 1h TTL on cache breakpoints. Previously the stable path was used
+    // when no MCP servers were configured.
     mcpServersReturn.current = [];
     await runAgentLoop([{ role: "user", content: "hi" }], {}, "admin", "session-1");
-    expect(stableCreateMock).toHaveBeenCalledTimes(1);
-    expect(betaCreateMock).not.toHaveBeenCalled();
+    expect(betaCreateMock).toHaveBeenCalledTimes(1);
+    expect(stableCreateMock).not.toHaveBeenCalled();
   });
 
   it("uses the beta messages.create path when MCP servers are configured", async () => {
@@ -188,7 +192,7 @@ describe("agent loop — MCP routing", () => {
     expect(stableCreateMock).not.toHaveBeenCalled();
   });
 
-  it("forwards mcp_servers and the mcp-client beta header on the beta call", async () => {
+  it("forwards mcp_servers and merges mcp-client + extended-cache-ttl betas on the beta call", async () => {
     const servers = [
       { type: "url" as const, name: "wiz", url: "https://wiz.example.com/mcp", authorization_token: "tok" },
     ];
@@ -197,7 +201,17 @@ describe("agent loop — MCP routing", () => {
     expect(capturedBetaCalls).toHaveLength(1);
     const params = capturedBetaCalls[0] as { mcp_servers?: unknown[]; betas?: string[] };
     expect(params.mcp_servers).toEqual(servers);
-    expect(params.betas).toEqual(["mcp-client-2025-11-20"]);
+    // resolveBetas always prepends extended-cache-ttl, then mcp-client
+    // when MCP is in scope. See P4.
+    expect(params.betas).toContain("extended-cache-ttl-2025-04-11");
+    expect(params.betas).toContain("mcp-client-2025-11-20");
+  });
+
+  it("attaches extended-cache-ttl beta even on non-MCP turns", async () => {
+    mcpServersReturn.current = [];
+    await runAgentLoop([{ role: "user", content: "hi" }], {}, "admin", "session-1");
+    const params = capturedBetaCalls[capturedBetaCalls.length - 1] as { betas?: string[] };
+    expect(params.betas).toContain("extended-cache-ttl-2025-04-11");
   });
 });
 
@@ -494,21 +508,17 @@ describe("agent loop — MCP sanitize survives destructive-tool slice (B1)", () 
 
 // ── M1: stable-API path materializes persisted MCP blocks ────────────
 
-describe("agent loop — stable-API turn coexists with stale MCP history (M1)", () => {
+describe("agent loop — non-MCP turn coexists with stale MCP history (M1)", () => {
   it("converts mcp_tool_use / mcp_tool_result blocks to text when this turn has no MCP servers", async () => {
     // First turn — MCP configured, sets the history with MCP blocks.
     // Simulate by passing a history that already contains them.
     mcpServersReturn.current = [];
-    stableCreateMock.mockImplementationOnce(async (params: Anthropic.Messages.MessageCreateParamsNonStreaming) => ({
-      id: "msg_01",
-      type: "message" as const,
-      role: "assistant" as const,
-      model: params.model,
-      content: [{ type: "text", text: "ok" }],
-      stop_reason: "end_turn" as const,
-      stop_sequence: null,
-      usage: { input_tokens: 10, output_tokens: 2 },
-    }));
+    // P4: every call now routes through the beta API (extended-cache-ttl
+    // beta is unconditional). The MCP-blocks-to-text pre-flight still
+    // runs when MCP isn't active for this turn — see
+    // createWithOptionalMcp in agent.ts. The default betaCreateMock
+    // pushes to capturedBetaCalls and returns an end_turn response,
+    // so we don't need a one-shot override here.
 
     const messages = [
       { role: "user", content: "first message" },
@@ -524,15 +534,16 @@ describe("agent loop — stable-API turn coexists with stale MCP history (M1)", 
 
     await runAgentLoop(messages, {}, "admin", "session-m1");
 
-    // The stable client should have been called with messages where
-    // the MCP blocks have been materialized as text. Otherwise the
-    // stable API would 400 on unknown block types.
-    expect(stableCreateMock).toHaveBeenCalledTimes(1);
-    const calledParams = stableCreateMock.mock.calls[0][0] as Anthropic.Messages.MessageCreateParamsNonStreaming;
+    // The beta client should have been called with messages where
+    // the MCP blocks have been materialized as text — otherwise the
+    // API would 400 on unknown block types when MCP isn't active.
+    expect(betaCreateMock).toHaveBeenCalledTimes(1);
+    const calledParams = capturedBetaCalls[0] as Anthropic.Messages.MessageCreateParamsNonStreaming;
     const sentAssistantMsg = calledParams.messages.find((m) => m.role === "assistant");
     expect(sentAssistantMsg).toBeDefined();
     const sentContent = sentAssistantMsg!.content as unknown as Array<Record<string, unknown>>;
-    // No MCP block types should reach the stable API.
+    // No MCP block types should reach the API when MCP servers aren't
+    // configured for this turn.
     for (const block of sentContent) {
       expect(block.type).not.toBe("mcp_tool_use");
       expect(block.type).not.toBe("mcp_tool_result");

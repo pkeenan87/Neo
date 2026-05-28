@@ -54,6 +54,31 @@ describe("logger SAFE_METADATA_FIELDS — Infosec audit fields", () => {
     logSpy.mockRestore();
   });
 
+  it("preserves cacheHitRate in emitted metadata (P4c observability)", () => {
+    // Regression: the agent loop's token_usage event now emits
+    // cacheHitRate = cache_read / (cache_read + cache_creation +
+    // uncached_input) so operators can monitor cache health without
+    // re-computing in every dashboard query. Field must survive
+    // sanitisation.
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+
+    logger.emitEvent("token_usage", "API usage", "agent", {
+      inputTokens: 1000,
+      outputTokens: 500,
+      cacheCreationTokens: 100,
+      cacheReadTokens: 5000,
+      cacheHitRate: 0.819,
+      model: "claude-sonnet-4-6",
+    });
+
+    expect(logSpy).toHaveBeenCalledTimes(1);
+    const line = logSpy.mock.calls[0][0] as string;
+    expect(line).toContain('"cacheHitRate":0.819');
+    expect(line).toContain('"cacheReadTokens":5000');
+
+    logSpy.mockRestore();
+  });
+
   it("preserves requestedModel / lockedModel in emitted metadata (tier-lock divergence audit)", () => {
     // Regression: when the api/agent route logs `Ignoring body.model
     // — session model is locked` the metadata must include both model

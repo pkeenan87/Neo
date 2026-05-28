@@ -17,6 +17,7 @@ vi.mock("@anthropic-ai/sdk", () => {
   return {
     default: class MockAnthropic {
       messages = { create: mockCreate };
+      beta = { messages: { create: mockCreate } };
       constructor(_opts?: unknown) {}
     },
   };
@@ -40,11 +41,11 @@ describe("prompt caching", () => {
     expect(mockCreate).toHaveBeenCalledTimes(1);
     const callArgs = mockCreate.mock.calls[0][0];
 
-    // System should be an array with cache_control
+    // System should be an array with cache_control (P4b: 1h TTL)
     expect(Array.isArray(callArgs.system)).toBe(true);
     expect(callArgs.system[0]).toMatchObject({
       type: "text",
-      cache_control: { type: "ephemeral" },
+      cache_control: { type: "ephemeral", ttl: "1h" },
     });
     expect(typeof callArgs.system[0].text).toBe("string");
     expect(callArgs.system[0].text.length).toBeGreaterThan(0);
@@ -63,9 +64,9 @@ describe("prompt caching", () => {
 
     expect(tools.length).toBeGreaterThan(0);
 
-    // Last tool should have cache_control
+    // Last tool should have cache_control (P4b: 1h TTL)
     const lastTool = tools[tools.length - 1];
-    expect(lastTool.cache_control).toEqual({ type: "ephemeral" });
+    expect(lastTool.cache_control).toEqual({ type: "ephemeral", ttl: "1h" });
 
     // Non-last tools should NOT have cache_control
     if (tools.length > 1) {

@@ -6,6 +6,7 @@ vi.mock('@anthropic-ai/sdk', () => {
   return {
     default: class MockAnthropic {
       messages = { create: mockCreate }
+      beta = { messages: { create: mockCreate } }
       constructor(_opts?: unknown) {}
     },
   }
