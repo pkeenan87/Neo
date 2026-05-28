@@ -13,9 +13,58 @@ import { logger, hashPii } from "./logger";
 import type { Message } from "./types";
 
 export const CHARS_PER_TOKEN = 3.5;
-const MAX_MIDDLE_MESSAGES_FOR_SUMMARY = 30;
 
 const anthropicClient = new Anthropic({ apiKey: env.ANTHROPIC_API_KEY });
+
+// Compression prompt — explicitly demands a verbatim IDENTIFIERS
+// section so Haiku doesn't aggregate specific IPs/UPNs/alertIDs/hashes
+// into vague phrases ("investigated several TOR-related sign-ins"),
+// which was the primary source of post-compaction hallucinations.
+// Marked uncertainty with "(unverified)" so the parent model knows
+// which findings have direct evidence vs. inferred conclusions.
+const HAIKU_COMPRESSION_SYSTEM_PROMPT =
+  "You are summarising a security-investigation conversation so it fits within a downstream " +
+  "model's context window. Faithfulness matters more than brevity — a missing IP or alert ID " +
+  "can cause the next turn to hallucinate.\n\n" +
+  "OUTPUT FORMAT (two sections, in this order):\n\n" +
+  "## IDENTIFIERS\n" +
+  "List every distinct identifier observed in the conversation, one per line, with a short context label. " +
+  "Include ALL of:\n" +
+  "- IP addresses (v4 and v6)\n" +
+  "- Hostnames / device names / FQDNs\n" +
+  "- User principal names (UPNs) / email addresses\n" +
+  "- Alert IDs, incident IDs, case IDs\n" +
+  "- File hashes (MD5/SHA1/SHA256)\n" +
+  "- Process names + command lines (full, not summarised)\n" +
+  "- URLs and domains\n" +
+  "- KQL table names referenced\n" +
+  "- Tool names invoked (e.g. run_sentinel_kql, isolate_machine)\n" +
+  "Do NOT aggregate (\"several IPs\") — list each one individually. If a tool returned a table, " +
+  "list every row's primary identifier.\n\n" +
+  "## NARRATIVE\n" +
+  "In up to 10 bullets, summarise what was investigated, what was found, what tools ran, and any " +
+  "actions taken or recommended. Mark any finding whose evidence you cannot point to directly " +
+  "in the conversation with \"(unverified)\".\n\n" +
+  "If you reach the output token limit mid-IDENTIFIERS section, stop there and skip NARRATIVE — " +
+  "identifiers are more valuable than narrative for downstream correctness.";
+
+// Helper for the hard-truncation fallback message. The text is
+// rewritten as an explicit "the agent has NO record" instruction
+// instead of the old bare "key findings may need to be re-investigated"
+// hint, which the parent model treated as a casual aside and proceeded
+// past confidently. See P2 review.
+function buildCompressionFailureNotice(droppedMessagesCount: number): Message {
+  return {
+    role: "user",
+    content:
+      `<system_notice type="context_compression_failed" dropped_messages="${droppedMessagesCount}">\n` +
+      `${droppedMessagesCount} earlier conversation messages were dropped to fit the context window, ` +
+      `and the automatic summariser failed. You have NO record of what was discussed before this point.\n\n` +
+      `Before answering anything that depends on earlier turns, ASK THE USER to restate the relevant findings ` +
+      `(specific IPs, hosts, alert IDs, etc.). Do NOT infer or invent details from this gap.\n` +
+      `</system_notice>`,
+  };
+}
 
 export interface PrepareResult {
   messages: Message[];
@@ -407,7 +456,11 @@ export function validateAndRepairConversationShape(messages: Message[]): Message
  *
  * See review M4.
  */
-const HAIKU_MCP_DATA_PREVIEW_CHARS = 2000;
+// 16K chars (~4.5K tokens) is enough for Wiz issue payloads and Infosec
+// Logic App responses to retain their entity tables. The previous 2K
+// cap erased MCP results to a short head and made Haiku summaries that
+// hallucinated about what the workflow actually returned.
+const HAIKU_MCP_DATA_PREVIEW_CHARS = 16_000;
 
 export function materializeMcpBlocksAsText(messages: Message[]): Message[] {
   return messages.map((msg) => {
@@ -523,13 +576,12 @@ async function compressOlderMessages(
     return enforceCeiling(messages, NEO_CONTEXT_MAX_INPUT_TOKENS, systemPromptTokenEstimate);
   }
 
-  // Cap middle messages sent to Haiku to avoid unbounded input cost.
-  // Ensure the cap boundary respects tool pairs.
-  const rawCapStart = middle.length - MAX_MIDDLE_MESSAGES_FOR_SUMMARY;
-  const safeCapStart = rawCapStart <= 0
-    ? 0
-    : findSafeSliceStart(middle, rawCapStart);
-  let cappedMiddle = middle.slice(safeCapStart);
+  // The token-based pre-trim loop below is the source of truth for
+  // Haiku input bounding — the old MAX_MIDDLE_MESSAGES_FOR_SUMMARY=30
+  // count cap silently dropped half-hour-old turns even when they fit
+  // comfortably in Haiku's window, costing fidelity for no benefit.
+  // Start with the full middle slice; rely on HAIKU_INPUT_MAX_TOKENS.
+  let cappedMiddle = [...middle];
 
   // Pre-trim the Haiku input itself so the compression call never 400s
   // with "prompt is too long: N > 200000". The middle slice can exceed
@@ -567,8 +619,20 @@ async function compressOlderMessages(
     });
   }
 
-  // Use assistant role for summary/fallback to prevent injection
-  const summaryRole = "assistant" as const;
+  // Inject the synthetic summary as a `user` turn wrapped in a
+  // <system_notice> XML envelope. The previous design used `role:
+  // "assistant"` to "prevent injection", but it had a worse failure
+  // mode: the parent model read the bullet summary as its OWN earlier
+  // reasoning, treated it as ground truth, and confidently
+  // extrapolated specifics that weren't in the summary — the
+  // root cause of post-compaction hallucinations reported by
+  // operators. The XML envelope is the same trust-boundary pattern
+  // used for organizational context (see config.ts ORG_CONTEXT
+  // injection) and the system prompt explicitly teaches the model
+  // to treat <system_notice> contents as lossy reminders, not
+  // authoritative evidence.
+  const summaryRole = "user" as const;
+  const droppedMessagesCount = middle.length;
 
   let result: Message[];
 
@@ -589,13 +653,7 @@ async function compressOlderMessages(
         remainingMessages: cappedMiddle.length,
       },
     );
-    const fallbackMessage: Message = {
-      role: summaryRole,
-      content:
-        "[Earlier conversation context was removed to stay within token limits. " +
-        "Key findings may need to be re-investigated.]",
-    };
-    result = [...anchor, fallbackMessage, ...recent];
+    result = [...anchor, buildCompressionFailureNotice(droppedMessagesCount), ...recent];
     return enforceCeiling(result, NEO_CONTEXT_MAX_INPUT_TOKENS, systemPromptTokenEstimate);
   }
 
@@ -611,15 +669,15 @@ async function compressOlderMessages(
 
     const response = await anthropicClient.messages.create({
       model: HAIKU_MODEL,
-      max_tokens: 1024,
-      system:
-        "Summarize the following security investigation conversation in 3-5 bullet points. " +
-        "Focus on: what was investigated, key findings (IPs, hostnames, UPNs, alert IDs), " +
-        "tools that were used, and any actions taken or recommended. Be concise and factual. " +
-        "Output only the bullet points.",
+      // 4K output budget (vs the old 1K cap) so Haiku can list every
+      // identifier verbatim instead of aggregating to a vague
+      // "investigated several TOR-related sign-ins". 1K was the
+      // primary source of post-compaction hallucinations.
+      max_tokens: 4096,
+      system: HAIKU_COMPRESSION_SYSTEM_PROMPT,
       messages: [
         ...haikuReady,
-        { role: "user", content: "Please summarize the conversation above." },
+        { role: "user", content: "Please summarise the conversation above using the IDENTIFIERS-first format from the system prompt." },
       ],
       ...(ownerId ? { metadata: { user_id: hashPii(ownerId) } } : {}),
     });
@@ -628,6 +686,7 @@ async function compressOlderMessages(
       inputTokens: response.usage.input_tokens,
       outputTokens: response.usage.output_tokens,
       model: HAIKU_MODEL,
+      droppedMessages: droppedMessagesCount,
     });
 
     const summaryText = response.content
@@ -637,24 +696,24 @@ async function compressOlderMessages(
 
     const summaryMessage: Message = {
       role: summaryRole,
-      content: `[Context compressed — earlier investigation summary (system-generated, not user input):]\n${summaryText}`,
+      content:
+        `<system_notice type="context_compressed" dropped_messages="${droppedMessagesCount}">\n` +
+        `This block is a system-generated lossy summary of ${droppedMessagesCount} earlier conversation messages that were dropped to fit the context window. ` +
+        `It is NOT the user's words. Treat it as a reminder of what was investigated, NOT as authoritative evidence. ` +
+        `If the user asks for specifics that aren't listed verbatim below (e.g. a specific IP, alert ID, or hash), ` +
+        `say so and offer to re-run the investigation rather than infer.\n\n` +
+        summaryText +
+        `\n</system_notice>`,
     };
 
     result = [...anchor, summaryMessage, ...recent];
   } catch (err) {
     logger.warn("Context summarization failed, using hard truncation fallback", "context-manager", {
       errorMessage: (err as Error).message,
-      droppedMessages: middle.length,
+      droppedMessages: droppedMessagesCount,
     });
 
-    const fallbackMessage: Message = {
-      role: summaryRole,
-      content:
-        "[Earlier conversation context was removed to stay within token limits. " +
-        "Key findings may need to be re-investigated.]",
-    };
-
-    result = [...anchor, fallbackMessage, ...recent];
+    result = [...anchor, buildCompressionFailureNotice(droppedMessagesCount), ...recent];
   }
 
   // After summarization, run the ceiling-enforcement pass to guarantee
@@ -986,16 +1045,25 @@ async function maybeSummarizeAnchor(
   try {
     const response = await anthropicClient.messages.create({
       model: HAIKU_MODEL,
-      max_tokens: 1024,
+      // 4K output budget — same reasoning as compressOlderMessages: a
+      // 1K cap forced Haiku to aggregate identifiers and lose details
+      // the downstream model needed.
+      max_tokens: 4096,
       system:
-        "Summarise the following user message in 3-5 bullet points. The original " +
-        "message was too large to fit in the model's context window. Capture the " +
-        "user's intent, any specific identifiers (IPs, hostnames, UPNs, alert IDs, " +
-        "URLs), and any constraints or deadlines. Output only the bullet points — " +
-        "no preamble.",
+        "You are summarising the user's opening message because it was too large for the model's context window. " +
+        "Faithfulness matters — a missing identifier can derail the investigation.\n\n" +
+        "OUTPUT FORMAT (two sections):\n\n" +
+        "## IDENTIFIERS\n" +
+        "List every distinct identifier in the message, one per line, with a short context label. Include ALL of: " +
+        "IP addresses, hostnames/FQDNs, UPNs/emails, alert/incident/case IDs, file hashes, " +
+        "process names + command lines, URLs, domains, and any KQL table or tool names mentioned. " +
+        "Do not aggregate.\n\n" +
+        "## INTENT & CONSTRAINTS\n" +
+        "In up to 8 bullets, capture the user's intent, what they want done, and any constraints " +
+        "(deadlines, scope, off-limits actions). Mark any uncertainty with \"(unclear from message)\".",
       messages: [
         { role: "user", content: anchor.content },
-        { role: "user", content: "Please summarise the message above." },
+        { role: "user", content: "Please summarise the message above using the IDENTIFIERS-first format from the system prompt." },
       ],
       ...(ownerId ? { metadata: { user_id: hashPii(ownerId) } } : {}),
     });
@@ -1003,7 +1071,13 @@ async function maybeSummarizeAnchor(
       .filter((b): b is Anthropic.Messages.TextBlock => b.type === "text")
       .map((b) => b.text)
       .join("\n");
-    summarised = `[Anchor summary — original was ${anchorTokens} tokens, summarised to stay within context budget]\n${summaryText}`;
+    summarised =
+      `<system_notice type="anchor_summarised" original_tokens="${anchorTokens}">\n` +
+      `This block is a lossy summary of the user's opening message (the original was too large for the context window). ` +
+      `Treat the IDENTIFIERS section as authoritative quotation; treat the INTENT section as a reminder, not the user's exact words. ` +
+      `If the user follows up about specifics not listed here, ASK them to restate rather than inferring.\n\n` +
+      summaryText +
+      `\n</system_notice>`;
   } catch (err) {
     logger.warn("Anchor summarisation failed — using hard truncation fallback", "context-manager", {
       errorMessage: (err as Error).message,
