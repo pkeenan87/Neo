@@ -516,9 +516,36 @@ export function ChatInterface({
   // Context tier selected for THIS conversation. Locked the moment the
   // user sends a first message; server re-checks against the persisted
   // Session.model so a hand-crafted request can't switch tiers either.
-  const [contextTier, setContextTier] = useState<ContextTier>(() =>
-    tierForModelId(initialConversation?.model)
-  )
+  //
+  // Tier persistence (F12):
+  //   - Resumed conversation: tier comes from the persisted
+  //     session.model (selector is locked anyway).
+  //   - Fresh /chat OR "New conversation" reset: restore the user's
+  //     last-used tier from localStorage so heavy 1M users don't have
+  //     to re-select every time. Falls back to '200k' on first visit.
+  // Helper `readPersistedTier()` is also used by handleNewConversation
+  // and the popstate handler so all three paths agree.
+  const readPersistedTier = (): ContextTier => {
+    if (typeof window === 'undefined') return '200k'
+    const saved = window.localStorage.getItem('neo-context-tier')
+    return saved === '1m' || saved === '200k' ? saved : '200k'
+  }
+  const [contextTier, setContextTierState] = useState<ContextTier>(() => {
+    if (initialConversation?.model) return tierForModelId(initialConversation.model)
+    return readPersistedTier()
+  })
+  const setContextTier = useCallback((next: ContextTier) => {
+    setContextTierState(next)
+    if (typeof window !== 'undefined') {
+      window.localStorage.setItem('neo-context-tier', next)
+    }
+  }, [])
+  // Reset path used by "New conversation" and browser-back to /chat.
+  // Restores the user's last-saved preference rather than dropping to
+  // 200K — see F12 reasoning above.
+  const resetContextTierToPreference = useCallback(() => {
+    setContextTierState(readPersistedTier())
+  }, [])
   const [editingTitleId, setEditingTitleId] = useState<string | null>(null)
   const [editingTitleValue, setEditingTitleValue] = useState('')
   const [pendingConfirmation, setPendingConfirmation] = useState<PendingTool | null>(
@@ -634,7 +661,10 @@ export function ChatInterface({
     const chatMessages = conversationToChatMessages(conv)
     setMessages(chatMessages.length > 0 ? chatMessages : INITIAL_MESSAGES)
     // Restore the locked tier from the conversation's persisted model.
-    setContextTier(tierForModelId(conv.model))
+    // Use the raw setter (not setContextTier) so loading a conversation
+    // doesn't overwrite the user's persisted preference in localStorage
+    // — the lock came from the server, not from an explicit user choice.
+    setContextTierState(tierForModelId(conv.model))
     window.history.pushState({}, '', `/chat/${id}`)
     document.title = conv.title ? `${conv.title} — Neo` : 'Neo'
   }, [])
@@ -671,9 +701,10 @@ export function ChatInterface({
     setActiveConversationId(null)
     setMessages(INITIAL_MESSAGES)
     setPendingConfirmation(null)
-    // New conversation — default back to the 200K tier so a 1M-tier
-    // selection on a prior conversation doesn't silently carry over.
-    setContextTier('200k')
+    // Restore the user's persisted tier preference (not a hard reset
+    // to 200K) so heavy 1M users don't have to re-select every time
+    // they start a new conversation. See F12.
+    resetContextTierToPreference()
     window.history.pushState({}, '', '/chat')
     document.title = 'Neo'
   }
@@ -1060,20 +1091,25 @@ export function ChatInterface({
     const controller = new AbortController()
     abortControllerRef.current = controller
 
-    // Resolve the active model from the current tier selection. The
-    // server treats this as a *request* on the first turn (it gets
-    // persisted on the Session); on subsequent turns the server
-    // ignores body.model and uses the locked Session.model. Sending
-    // it every turn keeps the request consistent and lets the server
-    // emit a `model is locked` warn if the two ever diverge.
-    const requestModel = modelIdForTier(contextTier)
+    // Resolve the active model from the current tier selection.
+    // Only send body.model on the FIRST turn of a conversation (no
+    // prior user messages exist). On subsequent turns the server
+    // enforces the persisted Session.model — sending body.model would
+    // either match (redundant) or mismatch (e.g. legacy Opus 4.6
+    // conversations resume as tier="200k" which maps to Sonnet,
+    // producing a spurious `Ignoring body.model` warn every turn).
+    // Omitting body.model on locked turns also makes the protocol
+    // self-documenting: "this turn is locked to whatever the server
+    // has on file". See ultra-review F7.
+    const isFirstUserMessage = !messages.some((m) => m.role === 'user')
+    const requestModel = isFirstUserMessage ? modelIdForTier(contextTier) : undefined
     try {
       let res: Response
       if (currentFiles.length > 0) {
         // Multipart upload when files are attached
         const formData = new FormData()
         formData.append('message', userMessage)
-        formData.append('model', requestModel)
+        if (requestModel) formData.append('model', requestModel)
         if (activeConversationIdRef.current) {
           formData.append('sessionId', activeConversationIdRef.current)
         }
@@ -1089,7 +1125,7 @@ export function ChatInterface({
           body: JSON.stringify({
             sessionId: activeConversationIdRef.current,
             message: userMessage,
-            model: requestModel,
+            ...(requestModel ? { model: requestModel } : {}),
           }),
           signal: controller.signal,
         })
@@ -1160,18 +1196,18 @@ export function ChatInterface({
           setActiveConversationId(null)
           setMessages(INITIAL_MESSAGES)
           setPendingConfirmation(null)
-          // Reset tier alongside the rest so a user who navigates
-          // back from a 1M-tier conversation doesn't silently start
-          // a new 200K conversation on the 1M tier. Matches the
-          // explicit reset in handleNewConversation.
-          setContextTier('200k')
+          // Restore the user's persisted tier preference. Matches
+          // handleNewConversation; users with a saved '1m' preference
+          // continue to land on 1M after browser-back, while users
+          // who haven't opted in stay on 200K. See F12.
+          resetContextTierToPreference()
         }
       }
     }
 
     window.addEventListener('popstate', handlePopState)
     return () => window.removeEventListener('popstate', handlePopState)
-  }, [loadConversation])
+  }, [loadConversation, resetContextTierToPreference])
 
   return (
     <div className={`${styles.container} ${className ?? ''}`}>

@@ -195,3 +195,98 @@ describe("checkBudget with reset markers", () => {
     }
   });
 });
+
+// ── Per-model cost aggregation (F8) ─────────────────────────
+
+describe("per-model cost aggregation", () => {
+  beforeEach(() => {
+    mockQuery.mockReset();
+  });
+
+  it("groups by model and applies per-model pricing for mixed-tier usage", async () => {
+    // Two rows: 1M input tokens on Sonnet ($3/Mtok = $3) and 1M input
+    // tokens on Opus 4.7 [1m] ($30/Mtok = $30). Total should be $33,
+    // not $6 (which is what the pre-PR DEFAULT_MODEL-pricing path
+    // produced). See ultra-review F8.
+    const rows = [
+      {
+        model: "claude-sonnet-4-6",
+        totalInput: 1_000_000,
+        totalOutput: 0,
+        totalCacheRead: 0,
+        totalCacheCreation: 0,
+        callCount: 5,
+      },
+      {
+        model: "claude-opus-4-7[1m]",
+        totalInput: 1_000_000,
+        totalOutput: 0,
+        totalCacheRead: 0,
+        totalCacheCreation: 0,
+        callCount: 3,
+      },
+    ];
+
+    mockQuery.mockImplementation((spec: { query: string }) => ({
+      fetchAll: async () => {
+        if (spec.query.includes("c.resetAt")) return { resources: [] };
+        return { resources: rows };
+      },
+    }));
+
+    const result = await checkBudget("00000000-0000-4000-8000-000000000003");
+
+    // totalInputTokens sums across both rows.
+    expect(result.twoHourUsage.totalInputTokens).toBe(2_000_000);
+    expect(result.twoHourUsage.callCount).toBe(8);
+    // estimatedCostUsd = (1M * $3) + (1M * $30) = $33 (was $6 before F8).
+    expect(result.twoHourUsage.estimatedCostUsd).toBeCloseTo(33, 5);
+    expect(result.weeklyUsage.estimatedCostUsd).toBeCloseTo(33, 5);
+  });
+
+  it("verifies the aggregate SQL includes GROUP BY c.model", async () => {
+    mockQuery.mockImplementation((spec: { query: string }) => ({
+      fetchAll: async () => {
+        if (spec.query.includes("c.resetAt")) return { resources: [] };
+        return { resources: [] };
+      },
+    }));
+
+    await checkBudget("00000000-0000-4000-8000-000000000004");
+
+    const aggregateCalls = mockQuery.mock.calls.filter(
+      ([callSpec]) => typeof callSpec?.query === "string" && callSpec.query.includes("SUM(c.usage.input_tokens)"),
+    );
+    expect(aggregateCalls.length).toBeGreaterThan(0);
+    for (const [callSpec] of aggregateCalls) {
+      expect(callSpec.query).toContain("GROUP BY c.model");
+      expect(callSpec.query).toContain("c.model AS model");
+    }
+  });
+
+  it("falls back to DEFAULT_MODEL pricing for rows whose model lacks a pricing entry", async () => {
+    // A future model that's persisted on UsageRecord docs but not yet
+    // in TOKEN_PRICING falls back to DEFAULT_MODEL pricing (Sonnet
+    // $3/$15). 1M input tokens → $3, not $0.
+    const rows = [
+      {
+        model: "claude-future-not-in-table",
+        totalInput: 1_000_000,
+        totalOutput: 0,
+        totalCacheRead: 0,
+        totalCacheCreation: 0,
+        callCount: 1,
+      },
+    ];
+
+    mockQuery.mockImplementation((spec: { query: string }) => ({
+      fetchAll: async () => {
+        if (spec.query.includes("c.resetAt")) return { resources: [] };
+        return { resources: rows };
+      },
+    }));
+
+    const result = await checkBudget("00000000-0000-4000-8000-000000000005");
+    expect(result.twoHourUsage.estimatedCostUsd).toBeCloseTo(3, 5);
+  });
+});
