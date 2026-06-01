@@ -133,7 +133,8 @@ INJECTION_GUARD_MODE=monitor
 | `LOG_LEVEL` | No | Minimum log level: `debug`, `info` (default), `warn`, `error` |
 | `INJECTION_GUARD_MODE` | No | `monitor` (default) or `block`. Controls prompt injection response |
 | `ORG_NAME` | No | Organization name shown in the system prompt. Defaults to `Goodwin Procter LLP`. Set to empty for generic `your organization`. |
-| `ORG_CONTEXT` | No | Free-text organizational context injected into the system prompt (domains, SAM formats, VPN ranges, etc.). Supports `\n` for newlines. Also editable by admins in Settings > Organization. |
+| `ORG_CONTEXT` | No | Env-var fallback for the system-prompt org context. Supports `\n` for newlines. The active storage tier is Azure Blob when `NEO_ORG_CONTEXT_CONTAINER` is set, otherwise Key Vault. Admins edit via Settings > Organization. |
+| `NEO_ORG_CONTEXT_CONTAINER` | No | Blob container that stores the org-context addendum. When set together with `CLI_STORAGE_ACCOUNT`, the application cap rises to 100,000 chars (vs the ~25 KB Key Vault ceiling) and large environment fingerprints can be persisted. Managed identity needs `Storage Blob Data Contributor` on the container. |
 | `USAGE_LIMIT_2H_INPUT_TOKENS` | No | Per-user input token cap for the 2-hour rolling window (default: 670,000 — approx. $10 of Opus) |
 | `USAGE_LIMIT_WEEKLY_INPUT_TOKENS` | No | Per-user input token cap for the weekly rolling window (default: 6,700,000 — approx. $100 of Opus) |
 | `ENABLE_USAGE_LIMITS` | No | Set to `false` to disable token budget enforcement globally (default: `true`). Usage is still tracked for dashboards. When disabled, the per-user window overrides above have no effect. |

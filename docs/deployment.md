@@ -310,7 +310,8 @@ See [`configuration.md`](./configuration.md) for the full list.
 | Name | Default | Purpose |
 |---|---|---|
 | `ORG_NAME` | "Goodwin Procter LLP" | Appears in the agent system prompt. |
-| `ORG_CONTEXT` | (none) | Domain names, SAM formats, VPN ranges injected into the system prompt. Also editable in Settings → Organization. |
+| `ORG_CONTEXT` | (none) | Env-var fallback for the system-prompt org context. Larger values should be saved through Settings → Organization, which writes to Azure Blob when `NEO_ORG_CONTEXT_CONTAINER` is set, otherwise Key Vault. |
+| `NEO_ORG_CONTEXT_CONTAINER` | (none) | Blob container for the org-context addendum. When set together with `CLI_STORAGE_ACCOUNT`, the loader prefers blob storage over Key Vault and the application cap rises to 100,000 chars (vs the 25 KB Key Vault ceiling). The App Service managed identity needs `Storage Blob Data Contributor` on this container. |
 | `MAX_TOKENS_DEFAULT` | 16384 | Per-turn output budget for plain chat. Raised from 4096 in early 2026 — long publisher / hunt / digest responses were truncating mid-output. |
 | `MAX_TOKENS_SKILL` | 24576 | Larger budget for skill invocations. |
 | `CLAUDE_DEFAULT_MODEL` | `claude-sonnet-4-6` | Default context tier when no explicit selection is made. |

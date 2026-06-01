@@ -2,8 +2,22 @@ import { NextRequest, NextResponse } from "next/server";
 import { resolveAuth } from "@/lib/auth-helpers";
 import { getToolSecret, setToolSecret } from "@/lib/secrets";
 import { ORG_NAME, clearOrgContextCache } from "@/lib/config";
-import { ORG_CONTEXT_MAX_CHARS } from "@/lib/org-context-constants";
+import {
+  isOrgContextBlobConfigured,
+  loadOrgContextFromBlob,
+  saveOrgContextToBlob,
+} from "@/lib/org-context-blob-store";
+import {
+  ORG_CONTEXT_MAX_CHARS,
+  ORG_CONTEXT_KV_MAX_CHARS,
+} from "@/lib/org-context-constants";
 import { logger } from "@/lib/logger";
+
+type OrgContextBackend = "blob" | "keyvault";
+
+function activeBackend(): OrgContextBackend {
+  return isOrgContextBlobConfigured() ? "blob" : "keyvault";
+}
 
 export async function GET(request: NextRequest) {
   const identity = await resolveAuth(request);
@@ -14,13 +28,17 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
 
+  const backend = activeBackend();
   try {
-    const orgContext = await getToolSecret("ORG_CONTEXT") ?? null;
-    return NextResponse.json({ orgContext, orgName: ORG_NAME });
+    const orgContext = backend === "blob"
+      ? (await loadOrgContextFromBlob()) ?? null
+      : (await getToolSecret("ORG_CONTEXT")) ?? null;
+    return NextResponse.json({ orgContext, orgName: ORG_NAME, backend });
   } catch (err) {
     const message = err instanceof Error ? err.message : "Unknown error";
     logger.error("Failed to fetch org context", "admin-org-context", {
       errorMessage: message,
+      backend,
     });
     return NextResponse.json(
       { error: "Failed to fetch organizational context." },
@@ -78,17 +96,38 @@ export async function PUT(request: NextRequest) {
     );
   }
 
+  const backend = activeBackend();
+  // Key Vault secret values cap out around 25 KB — refuse writes
+  // that would silently fail at the SDK boundary. Blob has no such
+  // ceiling within our application cap.
+  if (backend === "keyvault" && orgContext.length > ORG_CONTEXT_KV_MAX_CHARS) {
+    return NextResponse.json(
+      {
+        error:
+          `Organizational context exceeds the Key Vault tier limit (${ORG_CONTEXT_KV_MAX_CHARS} characters). ` +
+          `Configure NEO_ORG_CONTEXT_CONTAINER + CLI_STORAGE_ACCOUNT to enable blob-backed storage for larger values.`,
+      },
+      { status: 400 },
+    );
+  }
+
   try {
-    await setToolSecret("ORG_CONTEXT", orgContext);
+    if (backend === "blob") {
+      await saveOrgContextToBlob(orgContext);
+    } else {
+      await setToolSecret("ORG_CONTEXT", orgContext);
+    }
     clearOrgContextCache();
     logger.info("Admin updated organizational context", "admin-org-context", {
       contentLength: orgContext.length,
+      backend,
     });
-    return NextResponse.json({ ok: true });
+    return NextResponse.json({ ok: true, backend });
   } catch (err) {
     const message = err instanceof Error ? err.message : "Unknown error";
     logger.error("Failed to save org context", "admin-org-context", {
       errorMessage: message,
+      backend,
     });
     return NextResponse.json(
       { error: "Failed to save organizational context. Check server logs." },

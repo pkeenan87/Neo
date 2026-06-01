@@ -166,6 +166,13 @@ export const NEO_RETENTION_CLASS_DEFAULT: RetentionClass = parseRetentionClass(
 export const NEO_TOOL_RESULT_BLOB_CONTAINER =
   process.env.NEO_TOOL_RESULT_BLOB_CONTAINER || "neo-tool-results";
 
+// Azure Blob Storage container for the organisational-context addendum
+// (system-prompt org_context). When set together with CLI_STORAGE_ACCOUNT,
+// the loader prefers this tier over Key Vault and env var. See
+// lib/org-context-blob-store.ts.
+export const NEO_ORG_CONTEXT_CONTAINER =
+  process.env.NEO_ORG_CONTEXT_CONTAINER || "neo-org-context";
+
 // Cosmos container name for the v2 schema. Lives in the same database
 // as the v1 container; partition key is /conversationId.
 export const NEO_CONVERSATIONS_V2_CONTAINER =
@@ -336,6 +343,7 @@ export const env: EnvConfig = {
   COSMOS_ENDPOINT:              process.env.COSMOS_ENDPOINT,
   CLI_STORAGE_ACCOUNT:          process.env.CLI_STORAGE_ACCOUNT,
   CLI_STORAGE_CONTAINER:        process.env.CLI_STORAGE_CONTAINER || "cli-releases",
+  NEO_ORG_CONTEXT_CONTAINER:    process.env.NEO_ORG_CONTEXT_CONTAINER,
   KEY_VAULT_URL:                process.env.KEY_VAULT_URL,
   KEY_VAULT_KEY_NAME:           process.env.KEY_VAULT_KEY_NAME || "neo-api-key-encryption",
   // Triage API
@@ -615,10 +623,11 @@ function resolveOrgName(): string {
 export const ORG_NAME = resolveOrgName();
 
 // ── Organizational Context ───────────────────────────────────
-// Two-tier resolution: Key Vault (admin UI) > env var.
-// Cached for 60 seconds to avoid Key Vault calls on every turn.
-// Cache is only written on clean reads — transient Key Vault
-// errors fall through to env var without poisoning the cache.
+// Three-tier resolution: Azure Blob (large content) > Key Vault
+// (legacy small contexts) > env var. Cached for 60 seconds to
+// avoid blob/KV calls on every turn. Cache is only written on
+// clean reads — transient blob or Key Vault errors fall through
+// to the next tier without poisoning the cache.
 
 const ORG_CONTEXT_CACHE_MS = 60_000;
 
@@ -637,22 +646,53 @@ async function loadOrgContext(): Promise<string | null> {
   }
 
   let context: string | null = null;
-  let kvResolved = false;
+  // Track transient failures separately from "tier wasn't queried":
+  // a tier that we intentionally skipped because an earlier tier
+  // already returned content is NOT a cache-poison condition.
+  let transientError = false;
 
-  // 1. Key Vault (admin-edited via settings UI)
+  // 1. Azure Blob (admin-edited via settings UI — large content tier)
   try {
-    // Lazy import to avoid circular dependency (secrets imports config indirectly)
-    const { getToolSecret } = await import("./secrets");
-    const kvValue = await getToolSecret("ORG_CONTEXT");
-    kvResolved = true;
-    if (kvValue && kvValue.trim()) {
-      context = kvValue.trim();
+    // Lazy import to defer @azure/storage-blob until needed and to
+    // avoid pulling the SDK into Edge-runtime / build-time graphs.
+    const { isOrgContextBlobConfigured, loadOrgContextFromBlob } = await import(
+      "./org-context-blob-store"
+    );
+    if (isOrgContextBlobConfigured()) {
+      const blobValue = await loadOrgContextFromBlob();
+      if (blobValue && blobValue.trim()) {
+        context = blobValue.trim();
+      }
     }
   } catch {
-    // Key Vault unavailable — fall through to env var, do NOT cache
+    // Blob unavailable — fall through to Key Vault, do NOT cache
+    transientError = true;
   }
 
-  // 2. Env var (supports \n for newlines)
+  // 2. Key Vault (admin-edited via settings UI — legacy small tier).
+  // The KV client returns null when KEY_VAULT_URL is unset, so we
+  // call unconditionally; that keeps cache behaviour symmetric with
+  // the env-var path and matches the pre-blob behaviour.
+  if (!context) {
+    try {
+      // Lazy import to avoid circular dependency (secrets imports config indirectly)
+      const { getToolSecret } = await import("./secrets");
+      const kvValue = await getToolSecret("ORG_CONTEXT");
+      if (kvValue && kvValue.trim()) {
+        context = kvValue.trim();
+      }
+    } catch {
+      // Key Vault unavailable — fall through to env var. Only flag
+      // as a transient error when KV is configured; in dev/test
+      // (no KEY_VAULT_URL) the import-failure path is the no-op
+      // case, not a runtime regression worth invalidating cache for.
+      if (env.KEY_VAULT_URL) {
+        transientError = true;
+      }
+    }
+  }
+
+  // 3. Env var (supports \n for newlines)
   if (!context && process.env.ORG_CONTEXT) {
     const envValue = process.env.ORG_CONTEXT.replace(/\\n/g, "\n").trim();
     if (envValue) {
@@ -674,8 +714,10 @@ async function loadOrgContext(): Promise<string | null> {
     }
   }
 
-  // Only cache when Key Vault resolved cleanly (or is not configured)
-  if (kvResolved || !env.KEY_VAULT_URL) {
+  // Cache when no tier silently errored. A tier we never queried
+  // (because an earlier tier already returned content, or because
+  // it wasn't configured) is not an error.
+  if (!transientError) {
     _orgContextCache = { value: context, expiresAt: Date.now() + ORG_CONTEXT_CACHE_MS };
   }
   return context;

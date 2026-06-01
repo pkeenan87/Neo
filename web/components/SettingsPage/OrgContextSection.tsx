@@ -1,28 +1,38 @@
 'use client'
 
-import { useState, useEffect, useCallback } from 'react'
-import { Check } from 'lucide-react'
+import { useState, useEffect, useCallback, useRef } from 'react'
+import { Check, Upload } from 'lucide-react'
 import { ORG_CONTEXT_MAX_CHARS, ORG_CONTEXT_WARN_CHARS } from '@/lib/org-context-constants'
 import styles from './OrgContextSection.module.css'
 import sharedStyles from './SettingsPage.module.css'
 
+type Backend = 'blob' | 'keyvault'
+
 interface OrgContextResponse {
   orgContext: string | null
   orgName: string
+  backend: Backend
 }
 
 export interface OrgContextSectionProps {
   className?: string
 }
 
+const BACKEND_LABEL: Record<Backend, string> = {
+  blob: 'Azure Blob Storage',
+  keyvault: 'Azure Key Vault',
+}
+
 export function OrgContextSection({ className }: OrgContextSectionProps) {
   const [orgName, setOrgName] = useState<string>('')
   const [context, setContext] = useState('')
   const [savedContext, setSavedContext] = useState('')
+  const [backend, setBackend] = useState<Backend>('keyvault')
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [saved, setSaved] = useState(false)
+  const fileInputRef = useRef<HTMLInputElement | null>(null)
 
   const fetchData = useCallback(async () => {
     setLoading(true)
@@ -34,6 +44,7 @@ export function OrgContextSection({ className }: OrgContextSectionProps) {
       setOrgName(data.orgName)
       setContext(data.orgContext ?? '')
       setSavedContext(data.orgContext ?? '')
+      setBackend(data.backend)
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Could not load data'
       setError(message)
@@ -69,6 +80,25 @@ export function OrgContextSection({ className }: OrgContextSectionProps) {
       setError(message)
     } finally {
       setSaving(false)
+    }
+  }
+
+  const handleUploadClick = () => {
+    fileInputRef.current?.click()
+  }
+
+  const handleFileChange = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0]
+    // Reset the input so re-selecting the same file fires onChange again.
+    event.target.value = ''
+    if (!file) return
+    try {
+      const text = await file.text()
+      setContext(text)
+      setError(null)
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Could not read file'
+      setError(message)
     }
   }
 
@@ -109,9 +139,15 @@ export function OrgContextSection({ className }: OrgContextSectionProps) {
       <h3 className={sharedStyles.subsectionTitle}>Organizational Context</h3>
       <p className={styles.contextDescription}>
         Add context that helps Neo investigate more effectively — domain names, SAM account
-        formats, VPN IP ranges, critical assets, escalation contacts, etc. This is injected
-        into the system prompt for every conversation.
+        formats, VPN IP ranges, critical assets, escalation contacts, or a full environment
+        fingerprint (YAML / Markdown / plain text). This is injected into the system prompt
+        for every conversation.
       </p>
+
+      <div className={styles.backendBadge} role="note" aria-live="polite">
+        <span>Stored in</span>
+        <span className={styles.backendBadgeLabel}>{BACKEND_LABEL[backend]}</span>
+      </div>
 
       {saved && (
         <div className={styles.feedbackSuccess} role="status">
@@ -119,6 +155,28 @@ export function OrgContextSection({ className }: OrgContextSectionProps) {
           Organizational context saved
         </div>
       )}
+
+      <div className={styles.toolbar}>
+        <button
+          type="button"
+          className={styles.uploadButton}
+          onClick={handleUploadClick}
+          disabled={loading}
+          aria-label="Upload a file to populate the organizational context"
+        >
+          <Upload className={styles.feedbackIcon} aria-hidden="true" />
+          Upload file
+        </button>
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept=".yaml,.yml,.md,.txt"
+          className={styles.fileInputHidden}
+          onChange={handleFileChange}
+          aria-hidden="true"
+          tabIndex={-1}
+        />
+      </div>
 
       <textarea
         id="org-context-textarea"
