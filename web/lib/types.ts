@@ -45,6 +45,7 @@ export interface EnvConfig {
   COSMOS_ENDPOINT: string | undefined;
   CLI_STORAGE_ACCOUNT: string | undefined;
   CLI_STORAGE_CONTAINER: string;
+  NEO_ORG_CONTEXT_CONTAINER: string | undefined;
   KEY_VAULT_URL: string | undefined;
   KEY_VAULT_KEY_NAME: string;
   // Triage API

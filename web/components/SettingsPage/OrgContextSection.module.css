@@ -26,8 +26,41 @@
   font-family: monospace;
   font-size: 0.8125rem;
   line-height: 1.5;
-  min-height: 200px;
+  min-height: 400px;
   resize: vertical;
+}
+
+.backendBadge {
+  @apply inline-flex items-center gap-2 mb-4 px-4 py-2 rounded-lg text-sm text-brand-400 bg-surface-sunken;
+  font-size: 0.75rem;
+}
+
+.backendBadgeLabel {
+  @apply font-bold text-brand-900;
+}
+
+.toolbar {
+  @apply flex items-center gap-2 mb-2;
+}
+
+.uploadButton {
+  @apply inline-flex items-center gap-2 px-4 py-2 rounded-lg border border-border-default bg-surface-default text-brand-900 transition-colors duration-150;
+  font-size: 0.8125rem;
+  cursor: pointer;
+}
+
+.uploadButton:hover {
+  @apply bg-brand-50;
+}
+
+.uploadButton:focus-visible {
+  outline: 2px solid transparent;
+  @apply border-brand-500;
+  box-shadow: 0 0 0 3px rgba(100, 116, 139, 0.25);
+}
+
+.fileInputHidden {
+  display: none;
 }
 
 .contextTextarea:focus-visible {
@@ -94,6 +127,31 @@
 
 :global(html.dark) .charCount {
   color: #72767d;
+}
+
+:global(html.dark) .backendBadge {
+  background-color: #1e1f22;
+  color: #72767d;
+}
+
+:global(html.dark) .backendBadgeLabel {
+  color: #dbdee1;
+}
+
+:global(html.dark) .uploadButton {
+  background-color: #2b2d31;
+  border-color: rgba(255, 255, 255, 0.06);
+  color: #dbdee1;
+}
+
+:global(html.dark) .uploadButton:hover {
+  background-color: #1e1f22;
+}
+
+:global(html.dark) .uploadButton:focus-visible {
+  outline: 2px solid transparent;
+  border-color: #3ba55d;
+  box-shadow: 0 0 0 3px rgba(59, 165, 93, 0.15);
 }
 
 :global(html.dark) .feedbackSuccess {
