@@ -1,0 +1,105 @@
+@reference "../../app/globals.css";
+
+.root {
+  @apply flex flex-col gap-2;
+}
+
+.empty {
+  @apply text-sm text-brand-400;
+  font-size: 0.8125rem;
+  font-style: italic;
+}
+
+.row {
+  @apply grid items-center gap-2;
+  grid-template-columns: 1fr 1fr auto;
+}
+
+.input {
+  @apply px-4 py-2 rounded-lg border border-border-default bg-surface-sunken text-brand-900 transition-colors duration-150;
+  font-size: 0.875rem;
+}
+
+.input:focus-visible {
+  outline: none;
+  @apply border-brand-500;
+  box-shadow: 0 0 0 3px rgba(100, 116, 139, 0.25);
+}
+
+.removeButton {
+  @apply text-sm text-brand-500 cursor-pointer transition-colors duration-150;
+  background: none;
+  border: none;
+  padding: 0;
+}
+
+.removeButton:hover {
+  @apply text-error-500;
+}
+
+.removeButton:focus-visible {
+  outline: 2px solid #64748b;
+  outline-offset: 2px;
+}
+
+.addButton {
+  @apply px-4 py-2 rounded-lg text-sm font-bold cursor-pointer transition-colors duration-150;
+  @apply bg-brand-100 text-brand-700;
+  border: none;
+  align-self: flex-start;
+}
+
+.addButton:hover:not(:disabled) {
+  @apply bg-brand-200;
+}
+
+.addButton:focus-visible {
+  outline: 2px solid #64748b;
+  outline-offset: 2px;
+}
+
+.srOnly {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* ── Dark mode ────────────────────────────────────────────── */
+
+:global(html.dark) .input {
+  background-color: #1e1f22;
+  border-color: rgba(255, 255, 255, 0.06);
+  color: #dbdee1;
+}
+
+:global(html.dark) .input:focus-visible {
+  border-color: #3ba55d;
+  box-shadow: 0 0 0 3px rgba(59, 165, 93, 0.15);
+}
+
+:global(html.dark) .empty {
+  color: #72767d;
+}
+
+:global(html.dark) .removeButton {
+  color: #b9bbbe;
+}
+
+:global(html.dark) .removeButton:hover {
+  color: #f87171;
+}
+
+:global(html.dark) .addButton {
+  background: rgba(255, 255, 255, 0.06);
+  color: #dbdee1;
+}
+
+:global(html.dark) .addButton:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.12);
+}
