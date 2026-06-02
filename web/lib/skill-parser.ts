@@ -79,6 +79,63 @@ export function parseSkillMarkdown(id: string, raw: string): Skill {
   return { id, name, description, instructions, requiredTools, requiredRole, parameters };
 }
 
+// ── Serializer (inverse of parseSkillMarkdown) ───────────────
+
+/**
+ * Re-emit a Skill back to the canonical Markdown shape that
+ * parseSkillMarkdown reads. Used by the structured Settings editor
+ * to ship the same { id, content } payload the API has always
+ * accepted, so the server-side prompt-injection scan and content
+ * validators stay on the existing path.
+ *
+ * Round-trip contract: parseSkillMarkdown(id, serializeSkillMarkdown(s))
+ * must produce a Skill deep-equal to `s` for any well-formed input.
+ * Exercised by web/test/skill-parser-serialize.test.ts.
+ */
+export function serializeSkillMarkdown(skill: Skill): string {
+  const lines: string[] = [];
+  lines.push(`# Skill: ${skill.name}`);
+  lines.push("");
+  lines.push("## Description");
+  lines.push("");
+  lines.push(skill.description);
+  lines.push("");
+  lines.push("## Required Tools");
+  lines.push("");
+  for (const t of skill.requiredTools) lines.push(`- ${t}`);
+  if (skill.requiredTools.length === 0) lines.push("");
+  lines.push("");
+  lines.push("## Required Role");
+  lines.push("");
+  lines.push(skill.requiredRole);
+  lines.push("");
+  lines.push("## Parameters");
+  lines.push("");
+  for (const p of skill.parameters) lines.push(`- ${p}`);
+  if (skill.parameters.length === 0) lines.push("");
+  lines.push("");
+  lines.push("## Steps");
+  lines.push("");
+  lines.push(skill.instructions);
+  lines.push("");
+  return lines.join("\n");
+}
+
+/**
+ * Starting state for a new skill. Mirrors the shape the previous
+ * DEFAULT_TEMPLATE string encoded; lives here so the form and any
+ * future tooling share one source of truth.
+ */
+export const DEFAULT_SKILL: Skill = {
+  id: "",
+  name: "New Skill",
+  description: "One-paragraph summary of when this skill applies.",
+  instructions: "### 1. First step\n\nDescribe the first investigation step.",
+  requiredTools: ["run_sentinel_kql"],
+  requiredRole: "reader",
+  parameters: ["example_param"],
+};
+
 // ── Validators ───────────────────────────────────────────────
 
 export function validateSkillId(id: string): string | null {

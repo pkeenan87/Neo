@@ -148,6 +148,68 @@ describe('SkillEditor', () => {
     expect(fetchMock).not.toHaveBeenCalled()
     expect(screen.getByText(/lowercase alphanumeric characters and hyphens/i)).toBeInTheDocument()
   })
+
+  it('serializes structured form fields to canonical markdown and POSTs { id, content }', async () => {
+    queueResponse('POST', '/api/skills', { skill: {} }, 201)
+    const onSaved = vi.fn()
+
+    render(<SkillEditor mode="create" onCancel={() => {}} onSaved={onSaved} />)
+
+    fireEvent.change(screen.getByLabelText(/^id/i), { target: { value: 'my-new-skill' } })
+    fireEvent.change(screen.getByLabelText(/^name$/i), { target: { value: 'My New Skill' } })
+    fireEvent.change(screen.getByLabelText(/^description$/i), {
+      target: { value: 'Triages thing X.' },
+    })
+    fireEvent.change(screen.getByLabelText(/^required role$/i), {
+      target: { value: 'admin' },
+    })
+
+    fireEvent.click(screen.getByRole('button', { name: /create skill/i }))
+
+    await waitFor(() => expect(onSaved).toHaveBeenCalledOnce())
+
+    const call = fetchMock.mock.calls.find(
+      ([url, init]) => url === '/api/skills' && (init as RequestInit)?.method === 'POST',
+    )
+    expect(call).toBeDefined()
+    const body = JSON.parse(((call![1] as RequestInit).body as string) ?? '{}') as {
+      id: string
+      content: string
+    }
+    expect(body.id).toBe('my-new-skill')
+    expect(body.content).toContain('# Skill: My New Skill')
+    expect(body.content).toContain('## Description')
+    expect(body.content).toContain('Triages thing X.')
+    expect(body.content).toContain('## Required Role')
+    expect(body.content).toMatch(/## Required Role\s+admin/)
+  })
+
+  it('hydrates the form from the parsed Skill returned by GET /api/skills/[id]', async () => {
+    queueResponse('GET', '/api/skills/existing', {
+      skill: {
+        id: 'existing',
+        name: 'Existing Skill',
+        description: 'Already saved description.',
+        instructions: '### 1. Step\n\nDo the thing.',
+        requiredTools: ['run_sentinel_kql'],
+        requiredRole: 'reader',
+        parameters: ['upn'],
+      },
+    })
+
+    render(
+      <SkillEditor mode="edit" skillId="existing" onCancel={() => {}} onSaved={() => {}} />,
+    )
+
+    await waitFor(() =>
+      expect((screen.getByLabelText(/^name$/i) as HTMLInputElement).value).toBe('Existing Skill'),
+    )
+    expect((screen.getByLabelText(/^description$/i) as HTMLTextAreaElement).value).toBe(
+      'Already saved description.',
+    )
+    expect((screen.getByLabelText(/^required role$/i) as HTMLSelectElement).value).toBe('reader')
+    expect(screen.getByText('run_sentinel_kql')).toBeInTheDocument()
+  })
 })
 
 import { SkillDeleteConfirmModal } from '../components/SettingsPage/SkillDeleteConfirmModal'

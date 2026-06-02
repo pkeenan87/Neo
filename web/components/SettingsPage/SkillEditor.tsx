@@ -2,37 +2,17 @@
 
 import { useEffect, useMemo, useState } from 'react'
 import {
-  validateSkillId,
-  skillContentByteLength,
+  DEFAULT_SKILL,
   MAX_SKILL_CONTENT_BYTES,
+  TOOL_NAMES,
+  serializeSkillMarkdown,
+  skillContentByteLength,
+  validateSkillId,
 } from '@/lib/skill-parser'
+import type { Skill } from '@/lib/types'
+import type { Role } from '@/lib/permissions'
 import sharedStyles from './SettingsPage.module.css'
 import styles from './SkillsSection.module.css'
-
-const DEFAULT_TEMPLATE = `# Skill: New Skill
-
-## Description
-
-One-paragraph summary of when this skill applies.
-
-## Required Tools
-
-- run_sentinel_kql
-
-## Required Role
-
-reader
-
-## Parameters
-
-- example_param
-
-## Steps
-
-### 1. First step
-
-Describe the first investigation step.
-`
 
 interface SkillEditorPropsCreate {
   mode: 'create'
@@ -49,17 +29,44 @@ interface SkillEditorPropsEdit {
 
 type SkillEditorProps = SkillEditorPropsCreate | SkillEditorPropsEdit
 
+interface SkillFormState {
+  name: string
+  description: string
+  instructions: string
+  requiredTools: string[]
+  requiredRole: Role
+  parameters: string[]
+}
+
+function skillToFormState(skill: Skill): SkillFormState {
+  return {
+    name: skill.name,
+    description: skill.description,
+    instructions: skill.instructions,
+    requiredTools: skill.requiredTools,
+    requiredRole: skill.requiredRole,
+    parameters: skill.parameters,
+  }
+}
+
+const DEFAULT_FORM_STATE: SkillFormState = skillToFormState(DEFAULT_SKILL)
+
+const SORTED_TOOL_OPTIONS: string[] = Array.from(TOOL_NAMES).sort()
+
 export function SkillEditor(props: SkillEditorProps) {
   const isEdit = props.mode === 'edit'
   const [id, setId] = useState(isEdit ? props.skillId : '')
-  const [content, setContent] = useState(isEdit ? '' : DEFAULT_TEMPLATE)
+  const [form, setForm] = useState<SkillFormState>(DEFAULT_FORM_STATE)
   const [loading, setLoading] = useState(isEdit)
   const [submitting, setSubmitting] = useState(false)
   const [idError, setIdError] = useState<string | null>(null)
   const [contentError, setContentError] = useState<string | null>(null)
   const [serverError, setServerError] = useState<string | null>(null)
+  const [toolToAdd, setToolToAdd] = useState<string>('')
 
-  // Hydrate the editor from the existing skill in edit mode.
+  // Hydrate from the existing skill in edit mode. GET /api/skills/[id]
+  // returns the parsed Skill, so we drop straight into form state with
+  // no markdown round-trip required on load.
   useEffect(() => {
     if (!isEdit) return
     let cancelled = false
@@ -72,14 +79,8 @@ export function SkillEditor(props: SkillEditorProps) {
         }
         const data = await res.json()
         if (cancelled) return
-        // GET returns the parsed Skill; we need the raw markdown to edit.
-        // The route currently returns the parsed shape — fall back to
-        // reconstructing from the parsed fields if rawMarkdown is absent.
-        const raw = data.skill?.rawMarkdown
-        if (typeof raw === 'string') {
-          setContent(raw)
-        } else if (data.skill) {
-          setContent(reconstructMarkdownFromSkill(data.skill))
+        if (data.skill) {
+          setForm(skillToFormState(data.skill as Skill))
         }
       } catch {
         if (!cancelled) setServerError('Network error loading skill')
@@ -92,9 +93,56 @@ export function SkillEditor(props: SkillEditorProps) {
     }
   }, [isEdit, props])
 
-  const byteLength = useMemo(() => skillContentByteLength(content), [content])
+  const serialized = useMemo(
+    () =>
+      serializeSkillMarkdown({
+        id: isEdit ? props.skillId : id || 'pending',
+        ...form,
+      }),
+    [form, id, isEdit, props],
+  )
+  const byteLength = useMemo(() => skillContentByteLength(serialized), [serialized])
   const overByteCap = byteLength > MAX_SKILL_CONTENT_BYTES
   const nearByteCap = byteLength > MAX_SKILL_CONTENT_BYTES * 0.8
+
+  const availableTools = useMemo(
+    () => SORTED_TOOL_OPTIONS.filter((t) => !form.requiredTools.includes(t)),
+    [form.requiredTools],
+  )
+
+  function updateForm<K extends keyof SkillFormState>(key: K, value: SkillFormState[K]) {
+    setForm((prev) => ({ ...prev, [key]: value }))
+  }
+
+  function addTool(name: string) {
+    if (!name || form.requiredTools.includes(name)) return
+    updateForm('requiredTools', [...form.requiredTools, name])
+    setToolToAdd('')
+  }
+
+  function removeTool(name: string) {
+    updateForm(
+      'requiredTools',
+      form.requiredTools.filter((t) => t !== name),
+    )
+  }
+
+  function updateParameter(index: number, value: string) {
+    const next = [...form.parameters]
+    next[index] = value
+    updateForm('parameters', next)
+  }
+
+  function removeParameter(index: number) {
+    updateForm(
+      'parameters',
+      form.parameters.filter((_, i) => i !== index),
+    )
+  }
+
+  function addParameter() {
+    updateForm('parameters', [...form.parameters, ''])
+  }
 
   const handleSubmit = async () => {
     setIdError(null)
@@ -114,6 +162,22 @@ export function SkillEditor(props: SkillEditorProps) {
       )
       return
     }
+
+    // Drop empty parameter rows before serializing — the parser would
+    // skip them on read anyway, so persisting them just inflates the
+    // byte count and confuses the diff.
+    const cleanedParameters = form.parameters.map((p) => p.trim()).filter(Boolean)
+
+    const finalSkill: Skill = {
+      id: isEdit ? props.skillId : id,
+      name: form.name,
+      description: form.description,
+      instructions: form.instructions,
+      requiredTools: form.requiredTools,
+      requiredRole: form.requiredRole,
+      parameters: cleanedParameters,
+    }
+    const content = serializeSkillMarkdown(finalSkill)
 
     setSubmitting(true)
     try {
@@ -176,6 +240,7 @@ export function SkillEditor(props: SkillEditorProps) {
             readOnly={isEdit}
             onChange={(e) => setId(e.target.value)}
             placeholder="kebab-case-id"
+            aria-required={!isEdit}
             aria-invalid={idError !== null}
             aria-describedby={idError ? 'skill-id-error' : undefined}
           />
@@ -187,15 +252,144 @@ export function SkillEditor(props: SkillEditorProps) {
         </div>
 
         <div className={sharedStyles.profileField}>
-          <label htmlFor="skill-content" className={sharedStyles.fieldLabel}>
-            Markdown content
+          <label htmlFor="skill-name" className={sharedStyles.fieldLabel}>
+            Name
+          </label>
+          <input
+            id="skill-name"
+            type="text"
+            className={styles.textInput}
+            value={form.name}
+            onChange={(e) => updateForm('name', e.target.value)}
+            placeholder="Human-readable title"
+            aria-required="true"
+          />
+        </div>
+
+        <div className={sharedStyles.profileField}>
+          <label htmlFor="skill-description" className={sharedStyles.fieldLabel}>
+            Description
           </label>
           <textarea
-            id="skill-content"
+            id="skill-description"
+            className={styles.shortTextarea}
+            value={form.description}
+            onChange={(e) => updateForm('description', e.target.value)}
+            rows={3}
+            placeholder="One paragraph: when does this skill apply?"
+            aria-required="true"
+          />
+        </div>
+
+        <fieldset className={styles.fieldGroup}>
+          <legend className={sharedStyles.fieldLabel}>Required Tools</legend>
+          {form.requiredTools.length === 0 && (
+            <p className={styles.fieldHint}>No tools selected yet.</p>
+          )}
+          {form.requiredTools.length > 0 && (
+            <ul className={styles.chipList}>
+              {form.requiredTools.map((tool) => (
+                <li key={tool} className={styles.chip}>
+                  <span className={styles.chipLabel}>{tool}</span>
+                  <button
+                    type="button"
+                    className={styles.chipRemove}
+                    onClick={() => removeTool(tool)}
+                    aria-label={`Remove ${tool}`}
+                  >
+                    ×
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+          <div className={styles.inlineRow}>
+            <label htmlFor="skill-tool-add" className={styles.srOnly}>
+              Add a tool
+            </label>
+            <select
+              id="skill-tool-add"
+              className={styles.select}
+              value={toolToAdd}
+              onChange={(e) => setToolToAdd(e.target.value)}
+            >
+              <option value="">Add a tool…</option>
+              {availableTools.map((t) => (
+                <option key={t} value={t}>
+                  {t}
+                </option>
+              ))}
+            </select>
+            <button
+              type="button"
+              className={styles.inlineAddButton}
+              onClick={() => addTool(toolToAdd)}
+              disabled={!toolToAdd}
+            >
+              Add
+            </button>
+          </div>
+        </fieldset>
+
+        <div className={sharedStyles.profileField}>
+          <label htmlFor="skill-role" className={sharedStyles.fieldLabel}>
+            Required Role
+          </label>
+          <select
+            id="skill-role"
+            className={styles.select}
+            value={form.requiredRole}
+            onChange={(e) => updateForm('requiredRole', e.target.value as Role)}
+          >
+            <option value="reader">reader</option>
+            <option value="admin">admin</option>
+          </select>
+        </div>
+
+        <fieldset className={styles.fieldGroup}>
+          <legend className={sharedStyles.fieldLabel}>Parameters</legend>
+          {form.parameters.length === 0 && (
+            <p className={styles.fieldHint}>No parameters defined.</p>
+          )}
+          {form.parameters.map((param, index) => (
+            <div key={index} className={styles.inlineRow}>
+              <label htmlFor={`skill-param-${index}`} className={styles.srOnly}>
+                Parameter {index + 1}
+              </label>
+              <input
+                id={`skill-param-${index}`}
+                type="text"
+                className={styles.textInput}
+                value={param}
+                onChange={(e) => updateParameter(index, e.target.value)}
+                placeholder="parameter_name"
+              />
+              <button
+                type="button"
+                className={styles.inlineRemoveButton}
+                onClick={() => removeParameter(index)}
+                aria-label={`Remove parameter ${index + 1}`}
+              >
+                Remove
+              </button>
+            </div>
+          ))}
+          <button type="button" className={styles.inlineAddButton} onClick={addParameter}>
+            Add parameter
+          </button>
+        </fieldset>
+
+        <div className={sharedStyles.profileField}>
+          <label htmlFor="skill-steps" className={sharedStyles.fieldLabel}>
+            Steps
+          </label>
+          <textarea
+            id="skill-steps"
             className={styles.contentTextarea}
-            value={content}
-            onChange={(e) => setContent(e.target.value)}
+            value={form.instructions}
+            onChange={(e) => updateForm('instructions', e.target.value)}
             spellCheck={false}
+            placeholder="Use Markdown. ### 1. Step name on its own line, then the body."
             aria-invalid={contentError !== null}
             aria-describedby={contentError ? 'skill-content-error' : undefined}
           />
@@ -234,41 +428,4 @@ export function SkillEditor(props: SkillEditorProps) {
       </div>
     </section>
   )
-}
-
-// Used only as a fallback when GET /api/skills/[id] doesn't return
-// rawMarkdown (legacy file-mode store path). Re-emits the canonical
-// markdown shape so the parser round-trips for editing.
-function reconstructMarkdownFromSkill(skill: {
-  name?: string
-  description?: string
-  instructions?: string
-  requiredTools?: string[]
-  requiredRole?: string
-  parameters?: string[]
-}): string {
-  const lines: string[] = []
-  lines.push(`# Skill: ${skill.name ?? ''}`)
-  lines.push('')
-  lines.push('## Description')
-  lines.push('')
-  lines.push(skill.description ?? '')
-  lines.push('')
-  lines.push('## Required Tools')
-  lines.push('')
-  for (const t of skill.requiredTools ?? []) lines.push(`- ${t}`)
-  lines.push('')
-  lines.push('## Required Role')
-  lines.push('')
-  lines.push(skill.requiredRole ?? 'reader')
-  lines.push('')
-  lines.push('## Parameters')
-  lines.push('')
-  for (const p of skill.parameters ?? []) lines.push(`- ${p}`)
-  lines.push('')
-  lines.push('## Steps')
-  lines.push('')
-  lines.push(skill.instructions ?? '')
-  lines.push('')
-  return lines.join('\n')
 }
