@@ -142,11 +142,6 @@
   @apply flex items-center gap-2;
 }
 
-.kvRow {
-  @apply grid items-center gap-2;
-  grid-template-columns: 1fr 1fr auto;
-}
-
 .inlineAddButton {
   @apply px-4 py-2 rounded-lg text-sm font-bold cursor-pointer transition-colors duration-150;
   @apply bg-brand-100 text-brand-700;
