@@ -22,6 +22,7 @@ import {
   validateTaskShape,
 } from '@/lib/scheduled-task-validators'
 import { DESTRUCTIVE_TOOLS, TOOL_NAMES } from '@/lib/skill-parser'
+import { KeyValueList } from '@/components'
 
 import sharedStyles from './SettingsPage.module.css'
 import styles from './ScheduledTaskEditor.module.css'
@@ -657,78 +658,19 @@ export function ScheduledTaskEditor(props: ScheduledTaskEditorProps) {
 
             <div className={sharedStyles.profileField}>
               <label className={sharedStyles.fieldLabel}>Variables</label>
-              {form.task.variables.length === 0 && (
-                <p className={styles.fieldHint}>No variables defined.</p>
-              )}
-              {form.task.variables.map((row, index) => (
-                <div key={index} className={styles.kvRow}>
-                  <label htmlFor={`var-key-${index}`} className={styles.srOnly}>
-                    Variable {index + 1} name
-                  </label>
-                  <input
-                    id={`var-key-${index}`}
-                    type="text"
-                    className={styles.textInput}
-                    value={row.key}
-                    onChange={(e) =>
-                      patchForm((p) => {
-                        const next = [...p.task.variables]
-                        next[index] = { ...next[index], key: e.target.value }
-                        return { ...p, task: { ...p.task, variables: next } }
-                      })
-                    }
-                    placeholder="key"
-                  />
-                  <label htmlFor={`var-value-${index}`} className={styles.srOnly}>
-                    Variable {index + 1} value
-                  </label>
-                  <input
-                    id={`var-value-${index}`}
-                    type="text"
-                    className={styles.textInput}
-                    value={row.value}
-                    onChange={(e) =>
-                      patchForm((p) => {
-                        const next = [...p.task.variables]
-                        next[index] = { ...next[index], value: e.target.value }
-                        return { ...p, task: { ...p.task, variables: next } }
-                      })
-                    }
-                    placeholder="value"
-                  />
-                  <button
-                    type="button"
-                    className={styles.inlineRemoveButton}
-                    onClick={() =>
-                      patchForm((p) => ({
-                        ...p,
-                        task: {
-                          ...p.task,
-                          variables: p.task.variables.filter((_, i) => i !== index),
-                        },
-                      }))
-                    }
-                    aria-label={`Remove variable ${index + 1}`}
-                  >
-                    Remove
-                  </button>
-                </div>
-              ))}
-              <button
-                type="button"
-                className={styles.inlineAddButton}
-                onClick={() =>
+              <KeyValueList
+                entries={form.task.variables}
+                onChange={(entries) =>
                   patchForm((p) => ({
                     ...p,
-                    task: {
-                      ...p.task,
-                      variables: [...p.task.variables, { key: '', value: '' }],
-                    },
+                    task: { ...p.task, variables: entries },
                   }))
                 }
-              >
-                Add variable
-              </button>
+                keyLabel="Variable"
+                valueLabel="Variable value"
+                addLabel="Add variable"
+                emptyLabel="No variables defined."
+              />
               <p className={styles.fieldHint}>
                 Values are sent as strings; the agent coerces inside the prompt as needed.
               </p>
