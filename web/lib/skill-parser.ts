@@ -79,6 +79,116 @@ export function parseSkillMarkdown(id: string, raw: string): Skill {
   return { id, name, description, instructions, requiredTools, requiredRole, parameters };
 }
 
+// ── Serializer (inverse of parseSkillMarkdown) ───────────────
+
+// Escape any line in a free-text field that begins with `## `, the
+// section-heading marker the parser uses to delimit sections. Without
+// this, a Description / Steps body containing
+//   ## Required Role
+//   admin
+// would shadow the legit `## Required Role` section the form's Role
+// select writes, because extractSection's regex uses first-match
+// semantics. The escape prefixes a backslash; readers see `\## ...`
+// inline. parseSkillMarkdown's regex requires the literal `## ` at
+// line start so the backslash neutralises the match. The Skill author
+// loses the ability to write a literal `## Required Role` heading
+// inside Description / Steps, but that's exactly the structural
+// ambiguity we're closing.
+function escapeMarkdownHeadings(text: string): string {
+  return text.replace(/^(##\s)/gm, "\\$1");
+}
+
+/**
+ * Re-emit a Skill back to the canonical Markdown shape that
+ * parseSkillMarkdown reads. Used by the structured Settings editor
+ * to ship the same { id, content } payload the API has always
+ * accepted, so the server-side prompt-injection scan and content
+ * validators stay on the existing path.
+ *
+ * Round-trip contract: parseSkillMarkdown(id, serializeSkillMarkdown(s))
+ * must produce a Skill deep-equal to `s` for any well-formed input.
+ * Exercised by web/test/skill-parser-serialize.test.ts.
+ */
+export function serializeSkillMarkdown(skill: Skill): string {
+  const lines: string[] = [];
+  lines.push(`# Skill: ${skill.name}`);
+  lines.push("");
+  lines.push("## Description");
+  lines.push("");
+  lines.push(escapeMarkdownHeadings(skill.description));
+  lines.push("");
+  lines.push("## Required Tools");
+  lines.push("");
+  for (const t of skill.requiredTools) lines.push(`- ${t}`);
+  if (skill.requiredTools.length === 0) lines.push("");
+  lines.push("");
+  lines.push("## Required Role");
+  lines.push("");
+  lines.push(skill.requiredRole);
+  lines.push("");
+  lines.push("## Parameters");
+  lines.push("");
+  for (const p of skill.parameters) lines.push(`- ${p}`);
+  if (skill.parameters.length === 0) lines.push("");
+  lines.push("");
+  lines.push("## Steps");
+  lines.push("");
+  lines.push(escapeMarkdownHeadings(skill.instructions));
+  lines.push("");
+  return lines.join("\n");
+}
+
+/**
+ * After parse, verify that re-serializing produces a Skill deep-equal
+ * to the parsed one. A drift means a free-text field smuggled a
+ * heading marker past the escape (or that the parser's heading
+ * extraction returned content from an unintended section). Used by
+ * the POST/PUT route handlers as a write-time integrity check on
+ * admin-supplied content; equality failure must reject the write.
+ */
+export function assertParseRoundTrip(skill: Skill): { ok: true } | { ok: false; reason: string } {
+  const reSerialized = serializeSkillMarkdown(skill);
+  const reParsed = parseSkillMarkdown(skill.id, reSerialized);
+  const fields: Array<keyof Skill> = [
+    "name",
+    "description",
+    "instructions",
+    "requiredRole",
+  ];
+  for (const f of fields) {
+    if (skill[f] !== reParsed[f]) {
+      return { ok: false, reason: `Field "${String(f)}" did not round-trip — likely a stray "## " heading inside a free-text section.` };
+    }
+  }
+  const arrayFields: Array<keyof Pick<Skill, "requiredTools" | "parameters">> = [
+    "requiredTools",
+    "parameters",
+  ];
+  for (const f of arrayFields) {
+    const a = skill[f];
+    const b = reParsed[f];
+    if (a.length !== b.length || a.some((v, i) => v !== b[i])) {
+      return { ok: false, reason: `Field "${String(f)}" did not round-trip — likely a stray "## " heading inside a free-text section.` };
+    }
+  }
+  return { ok: true };
+}
+
+/**
+ * Starting state for a new skill. Mirrors the shape the previous
+ * DEFAULT_TEMPLATE string encoded; lives here so the form and any
+ * future tooling share one source of truth.
+ */
+export const DEFAULT_SKILL: Skill = {
+  id: "",
+  name: "New Skill",
+  description: "One-paragraph summary of when this skill applies.",
+  instructions: "### 1. First step\n\nDescribe the first investigation step.",
+  requiredTools: ["run_sentinel_kql"],
+  requiredRole: "reader",
+  parameters: ["example_param"],
+};
+
 // ── Validators ───────────────────────────────────────────────
 
 export function validateSkillId(id: string): string | null {

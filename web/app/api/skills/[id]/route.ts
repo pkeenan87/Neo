@@ -1,3 +1,4 @@
+import { createHash } from "crypto";
 import { NextRequest, NextResponse } from "next/server";
 import { resolveAuth } from "@/lib/auth-helpers";
 import {
@@ -8,6 +9,7 @@ import {
   validateSkillContent,
   toSkillMeta,
 } from "@/lib/skill-store";
+import { assertParseRoundTrip, parseSkillMarkdown } from "@/lib/skill-parser";
 import { getMappingsForSkill } from "@/lib/triage-mapping-store";
 import { scanUserInput, shouldBlock } from "@/lib/injection-guard";
 import { logger, hashPii } from "@/lib/logger";
@@ -90,6 +92,16 @@ export async function PUT(request: NextRequest, { params }: RouteParams) {
     );
   }
 
+  // Section-injection defence — see POST /api/skills for rationale.
+  const parsedForCheck = parseSkillMarkdown(id, body.content);
+  const rt = assertParseRoundTrip(parsedForCheck);
+  if (!rt.ok) {
+    return NextResponse.json(
+      { error: `Skill content rejected: ${rt.reason}` },
+      { status: 400 },
+    );
+  }
+
   try {
     const skill = await updateSkill(id, body.content);
     logger.emitEvent("skill_modified", "Skill updated", "api/skills", {
@@ -97,6 +109,10 @@ export async function PUT(request: NextRequest, { params }: RouteParams) {
       action: "update",
       ownerIdHash: hashPii(identity.ownerId),
       role: identity.role,
+      parsedRequiredRole: skill.requiredRole,
+      parsedRequiredToolsCount: skill.requiredTools.length,
+      parsedRequiredTools: [...skill.requiredTools].sort().join(","),
+      contentHash: createHash("sha256").update(body.content).digest("hex"),
     });
     return NextResponse.json({ skill: toSkillMeta(skill) });
   } catch (err) {
@@ -168,6 +184,16 @@ export async function DELETE(request: NextRequest, { params }: RouteParams) {
     );
   }
 
+  // Capture the prior parsed role/tools BEFORE delete so the audit
+  // event records what was lost. Useful for forensics on "which
+  // admin removed which admin-only skill". Defensive against
+  // partial Skill shapes — the existence check earlier guarantees
+  // the document exists, but its requiredTools/requiredRole could be
+  // empty/undefined on legacy or malformed records.
+  const priorSkill = await getSkill(id);
+  const priorTools = Array.isArray(priorSkill?.requiredTools)
+    ? priorSkill.requiredTools
+    : [];
   try {
     await deleteSkill(id);
     logger.emitEvent("skill_modified", "Skill deleted", "api/skills", {
@@ -175,6 +201,9 @@ export async function DELETE(request: NextRequest, { params }: RouteParams) {
       action: "delete",
       ownerIdHash: hashPii(identity.ownerId),
       role: identity.role,
+      parsedRequiredRole: priorSkill?.requiredRole,
+      parsedRequiredToolsCount: priorTools.length,
+      parsedRequiredTools: [...priorTools].sort().join(","),
     });
     return NextResponse.json({ deleted: true });
   } catch (err) {

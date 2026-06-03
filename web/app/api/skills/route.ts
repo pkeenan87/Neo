@@ -1,3 +1,4 @@
+import { createHash } from "crypto";
 import { NextRequest, NextResponse } from "next/server";
 import { resolveAuth } from "@/lib/auth-helpers";
 import {
@@ -8,6 +9,7 @@ import {
   validateSkillContent,
   toSkillMeta,
 } from "@/lib/skill-store";
+import { assertParseRoundTrip, parseSkillMarkdown } from "@/lib/skill-parser";
 import { scanUserInput, shouldBlock } from "@/lib/injection-guard";
 import { logger, hashPii } from "@/lib/logger";
 
@@ -78,6 +80,21 @@ export async function POST(request: NextRequest) {
     );
   }
 
+  // Defence against section-injection: parse the content, then assert
+  // that re-serializing produces an identical Skill. A drift means a
+  // free-text field (Description / Steps) smuggled a `## Required
+  // Role` heading that shadows the legit section via the parser's
+  // first-match semantics. Reject these writes so the form widgets
+  // remain the source of truth for requiredRole / requiredTools.
+  const parsedForCheck = parseSkillMarkdown(body.id, body.content);
+  const rt = assertParseRoundTrip(parsedForCheck);
+  if (!rt.ok) {
+    return NextResponse.json(
+      { error: `Skill content rejected: ${rt.reason}` },
+      { status: 400 },
+    );
+  }
+
   try {
     const skill = await createSkill(body.id, body.content);
     logger.emitEvent("skill_modified", "Skill created", "api/skills", {
@@ -85,6 +102,14 @@ export async function POST(request: NextRequest) {
       action: "create",
       ownerIdHash: hashPii(identity.ownerId),
       role: identity.role,
+      // Forensics: parsed role + tools snapshot + content hash so a
+      // role downgrade caused by the parser-shadowing vector (or any
+      // future regression) is detectable in SIEM without re-fetching
+      // the document.
+      parsedRequiredRole: skill.requiredRole,
+      parsedRequiredToolsCount: skill.requiredTools.length,
+      parsedRequiredTools: [...skill.requiredTools].sort().join(","),
+      contentHash: createHash("sha256").update(body.content).digest("hex"),
     });
     return NextResponse.json({ skill: toSkillMeta(skill) }, { status: 201 });
   } catch (err) {
