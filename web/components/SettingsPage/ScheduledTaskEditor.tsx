@@ -1,6 +1,6 @@
 'use client'
 
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 
 import {
   DEFAULT_CIRCUIT_BREAKER_THRESHOLD,
@@ -21,7 +21,7 @@ import {
   validateTaskName,
   validateTaskShape,
 } from '@/lib/scheduled-task-validators'
-import { TOOL_NAMES } from '@/lib/skill-parser'
+import { DESTRUCTIVE_TOOLS, TOOL_NAMES } from '@/lib/skill-parser'
 
 import sharedStyles from './SettingsPage.module.css'
 import styles from './ScheduledTaskEditor.module.css'
@@ -61,6 +61,10 @@ interface FormState {
     variables: VariableRow[]
     allowedTools: string[]
     maxDurationSeconds: number | ''
+    // Preserved as-is from the loaded ScheduledTask so an edit
+    // doesn't drop a skill binding. Editor doesn't expose a UI to
+    // change it — that's a separate workflow on the Skills tab.
+    skillSlug?: string
   }
   routing: {
     destination: ScheduledTaskDestination
@@ -134,6 +138,7 @@ function taskToFormState(task: ScheduledTask): FormState {
       variables,
       allowedTools: task.task.allowedTools,
       maxDurationSeconds: task.task.maxDurationSeconds,
+      skillSlug: task.task.skillSlug,
     },
     routing: {
       destination: task.routing.destination,
@@ -166,22 +171,26 @@ function variablesToRecord(rows: VariableRow[]): Record<string, string> | undefi
  */
 function buildRouting(routing: FormState['routing']): ScheduledTaskRouting {
   const r: ScheduledTaskRouting = { destination: routing.destination }
-  if (routing.destination === 'teams-channel') {
+  // Teams / tool / email IDs are emitted whenever the destination OR
+  // the fallback uses them. The form's conditional rendering hides
+  // the input when neither does, but the form state retains the
+  // value so a round-trip via JSON view can't silently drop it.
+  const usesTeams =
+    routing.destination === 'teams-channel' || routing.fallbackDestination === 'teams-channel'
+  const usesEmail =
+    routing.destination === 'email' || routing.fallbackDestination === 'email'
+  if (usesTeams) {
     if (routing.teamsTeamId.trim()) r.teamsTeamId = routing.teamsTeamId.trim()
     if (routing.teamsChannelId.trim()) r.teamsChannelId = routing.teamsChannelId.trim()
   }
   if (routing.destination === 'tool') {
     if (routing.toolName.trim()) r.toolName = routing.toolName.trim()
   }
-  if (routing.destination === 'email') {
+  if (usesEmail) {
     if (routing.emailTo.trim()) r.emailTo = routing.emailTo.trim()
   }
   if (routing.fallbackDestination !== '') {
     r.fallbackDestination = routing.fallbackDestination
-    if (routing.fallbackDestination === 'teams-channel') {
-      if (routing.teamsTeamId.trim()) r.teamsTeamId = routing.teamsTeamId.trim()
-      if (routing.teamsChannelId.trim()) r.teamsChannelId = routing.teamsChannelId.trim()
-    }
   }
   return r
 }
@@ -203,16 +212,23 @@ function formToCreatePayload(form: FormState): CreateScheduledTaskInput {
       allowedTools: form.task.allowedTools,
       maxDurationSeconds:
         typeof form.task.maxDurationSeconds === 'number' ? form.task.maxDurationSeconds : 0,
+      // Preserve the skill binding through a round-trip edit. The
+      // editor has no UI to mutate this — dropping it from the
+      // payload would orphan any skill-bound task on its first save.
+      ...(form.task.skillSlug ? { skillSlug: form.task.skillSlug } : {}),
     },
     routing: buildRouting(form.routing),
-    auth:
-      form.auth.scopedPermissions.length || form.auth.keyVaultSecretRefs.length
-        ? {
-            executionIdentity: 'managed-identity',
-            scopedPermissions: form.auth.scopedPermissions,
-            keyVaultSecretRefs: form.auth.keyVaultSecretRefs,
-          }
-        : undefined,
+    // Emit auth UNCONDITIONALLY so an admin clearing the textareas
+    // actually persists the empty arrays. Previously the field was
+    // omitted when both arrays were empty, which the PATCH handler
+    // interprets as "leave unchanged" and silently preserves the
+    // old scopedPermissions / keyVaultSecretRefs. Empty arrays are
+    // a legitimate user intent (revoke all scope).
+    auth: {
+      executionIdentity: 'managed-identity',
+      scopedPermissions: form.auth.scopedPermissions,
+      keyVaultSecretRefs: form.auth.keyVaultSecretRefs,
+    },
   }
 }
 
@@ -224,7 +240,14 @@ function formToUpdatePayload(form: FormState, expectedEtag: string): UpdateSched
   }
 }
 
-const SORTED_TOOL_OPTIONS = Array.from(TOOL_NAMES).sort()
+// Filter destructive tools out of the picker — scheduled tasks run
+// without a confirmation gate, and the server validator now rejects
+// them outright. Showing them as selectable would mislead admins
+// into thinking a cron-run task can issue isolate_machine /
+// reset_user_password etc.
+const SORTED_TOOL_OPTIONS = Array.from(TOOL_NAMES)
+  .filter((t) => !DESTRUCTIVE_TOOLS.has(t))
+  .sort()
 const ROUTING_TOOL_OPTIONS = Array.from(ROUTING_ALLOWED_TOOLS).sort()
 
 interface FieldErrors {
@@ -249,6 +272,22 @@ export function ScheduledTaskEditor(props: ScheduledTaskEditorProps) {
   const [view, setView] = useState<'form' | 'json'>('form')
   const [jsonText, setJsonText] = useState('')
   const [authOpen, setAuthOpen] = useState(false)
+
+  // Synchronous re-entry gate for handleSubmit (see SkillEditor for
+  // the same pattern). React's `disabled={submitting}` commits async,
+  // so a fast double-click can land two submits — and on POST that
+  // creates two duplicate Cosmos rows (no server idempotency key).
+  const submitInFlightRef = useRef(false)
+  // Track mount status so async settlers skip setState / props.onSaved
+  // after unmount. Paired with the per-fetch AbortController so the
+  // request is also cancelled.
+  const mountedRef = useRef(true)
+  useEffect(() => {
+    mountedRef.current = true
+    return () => {
+      mountedRef.current = false
+    }
+  }, [])
 
   const availableTools = useMemo(
     () => SORTED_TOOL_OPTIONS.filter((t) => !form.task.allowedTools.includes(t)),
@@ -329,27 +368,67 @@ export function ScheduledTaskEditor(props: ScheduledTaskEditorProps) {
   }
 
   async function handleSubmit() {
+    // Synchronous re-entry gate — see comment on submitInFlightRef.
+    if (submitInFlightRef.current) return
+    submitInFlightRef.current = true
+
     setServerError(null)
     setErrors({})
 
-    // If we're in JSON view, attempt to sync back to form first.
+    // In edit mode, refuse to submit without a real etag rather than
+    // letting the server bounce us with a 400. The server's PATCH
+    // validator treats empty string and missing as equivalent
+    // ("expectedEtag is required") so we'd round-trip a confusing
+    // error instead of guiding the admin to refresh.
+    if (isEdit && !props.task._etag) {
+      setServerError(
+        'This task is missing an optimistic-concurrency token. Refresh the task list and try again.',
+      )
+      submitInFlightRef.current = false
+      return
+    }
+
+    // If we're in JSON view, attempt to parse first so a syntax error
+    // surfaces as an inline JSON-view error rather than a runtime
+    // throw on the subsequent runValidators call.
     if (view === 'json') {
       try {
         JSON.parse(jsonText)
       } catch (err) {
         setErrors({ jsonView: `Invalid JSON: ${(err as Error).message}` })
+        submitInFlightRef.current = false
         return
       }
     }
 
-    const payload = view === 'json' ? (JSON.parse(jsonText) as CreateScheduledTaskInput) : formToCreatePayload(form)
+    const payload =
+      view === 'json'
+        ? (JSON.parse(jsonText) as CreateScheduledTaskInput)
+        : formToCreatePayload(form)
     const validationErrors = runValidators(payload)
     if (Object.keys(validationErrors).length > 0) {
       setErrors(validationErrors)
+      // The per-field <p role="alert"> elements live inside the
+      // form-view branch — in JSON view they would never render and
+      // the admin would see Save silently no-op. Auto-switch back to
+      // the form so the errors are visible. Also synthesize a
+      // jsonView summary so the JSON tab itself isn't blank-looking
+      // (a future redesign that keeps the user in JSON view can rely
+      // on this banner alone).
+      const fieldList = Object.keys(validationErrors).join(', ')
+      if (view === 'json') {
+        setErrors({
+          ...validationErrors,
+          jsonView: `Validation failed in: ${fieldList}. Switched to form view to show details.`,
+        })
+        setView('form')
+      }
+      submitInFlightRef.current = false
       return
     }
 
     setSubmitting(true)
+    const controller = new AbortController()
     try {
       const res = isEdit
         ? await fetch(`/api/scheduled-tasks/${props.task.id}`, {
@@ -360,22 +439,34 @@ export function ScheduledTaskEditor(props: ScheduledTaskEditorProps) {
                 ? { ...(payload as CreateScheduledTaskInput), expectedEtag: props.task._etag ?? '' }
                 : formToUpdatePayload(form, props.task._etag ?? ''),
             ),
+            signal: controller.signal,
           })
         : await fetch('/api/scheduled-tasks', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(payload),
+            signal: controller.signal,
           })
+      if (!mountedRef.current) return
       if (!res.ok) {
         const body = await res.text()
-        setServerError(`Server (${res.status}): ${body}`)
+        if (!mountedRef.current) return
+        // Cap server-response display at 1KB so a 500-page HTML body
+        // can't overflow the modal.
+        const trimmed = body.length > 1024 ? `${body.slice(0, 1024)}…` : body
+        setServerError(`Server (${res.status}): ${trimmed}`)
         return
       }
+      // Hand off OUTSIDE the catch — a throw inside props.onSaved
+      // should not be re-classified as a Network error after a
+      // successful save.
       props.onSaved()
     } catch (err) {
-      setServerError(`Network: ${(err as Error).message}`)
+      if ((err as DOMException)?.name === 'AbortError') return
+      if (mountedRef.current) setServerError(`Network: ${(err as Error).message}`)
     } finally {
-      setSubmitting(false)
+      if (mountedRef.current) setSubmitting(false)
+      submitInFlightRef.current = false
     }
   }
 
@@ -811,7 +902,8 @@ export function ScheduledTaskEditor(props: ScheduledTaskEditorProps) {
               </>
             )}
 
-            {form.routing.destination === 'email' && (
+            {(form.routing.destination === 'email' ||
+              form.routing.fallbackDestination === 'email') && (
               <div className={sharedStyles.profileField}>
                 <label htmlFor="routing-email-to" className={sharedStyles.fieldLabel}>
                   Email recipient

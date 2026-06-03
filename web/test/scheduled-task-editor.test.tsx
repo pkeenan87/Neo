@@ -278,3 +278,96 @@ describe('ScheduledTaskEditor — routing validation', () => {
     expect(fetchMock).not.toHaveBeenCalled()
   })
 })
+
+describe('ScheduledTaskEditor — ultrareview regressions', () => {
+  it('refuses to PATCH when the loaded task has no _etag', async () => {
+    const task = makeTask({ _etag: undefined })
+    render(
+      <ScheduledTaskEditor
+        mode="edit"
+        task={task}
+        onCancel={() => {}}
+        onSaved={() => {}}
+      />,
+    )
+
+    fireEvent.click(screen.getByRole('button', { name: /save changes/i }))
+
+    await waitFor(() =>
+      expect(screen.getByText(/optimistic-concurrency token/i)).toBeInTheDocument(),
+    )
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
+  it('preserves skillSlug through an edit round-trip', async () => {
+    queueResponse('PATCH', '/api/scheduled-tasks/task-1', { task: {} }, 200)
+    const onSaved = vi.fn()
+    const task = makeTask({
+      task: {
+        promptTemplate: 'Investigate {{thing}}',
+        variables: { thing: 'phishing alerts' },
+        allowedTools: ['run_sentinel_kql'],
+        maxDurationSeconds: 90,
+        skillSlug: 'phishing-triage',
+      },
+    })
+
+    render(
+      <ScheduledTaskEditor
+        mode="edit"
+        task={task}
+        onCancel={() => {}}
+        onSaved={onSaved}
+      />,
+    )
+
+    // Touch any field so the form differs from the seeded state.
+    fireEvent.change(screen.getByLabelText(/^name$/i), { target: { value: 'Renamed' } })
+    fireEvent.click(screen.getByRole('button', { name: /save changes/i }))
+
+    await waitFor(() => expect(onSaved).toHaveBeenCalledOnce())
+    const call = fetchMock.mock.calls.find(
+      ([url, init]) =>
+        url === '/api/scheduled-tasks/task-1' && (init as RequestInit)?.method === 'PATCH',
+    )
+    const body = JSON.parse(((call![1] as RequestInit).body as string) ?? '{}') as {
+      task: { skillSlug?: string }
+    }
+    expect(body.task.skillSlug).toBe('phishing-triage')
+  })
+
+  it('emits explicit empty arrays on auth when admin cleared scopedPermissions', async () => {
+    queueResponse('PATCH', '/api/scheduled-tasks/task-1', { task: {} }, 200)
+    const onSaved = vi.fn()
+    const task = makeTask({
+      auth: {
+        executionIdentity: 'managed-identity',
+        scopedPermissions: ['SecurityIncident.Read.All'],
+        keyVaultSecretRefs: [],
+      },
+    })
+
+    render(
+      <ScheduledTaskEditor
+        mode="edit"
+        task={task}
+        onCancel={() => {}}
+        onSaved={onSaved}
+      />,
+    )
+
+    fireEvent.click(screen.getByRole('button', { name: /save changes/i }))
+    await waitFor(() => expect(onSaved).toHaveBeenCalledOnce())
+    const call = fetchMock.mock.calls.find(
+      ([url, init]) =>
+        url === '/api/scheduled-tasks/task-1' && (init as RequestInit)?.method === 'PATCH',
+    )
+    const body = JSON.parse(((call![1] as RequestInit).body as string) ?? '{}') as {
+      auth: { scopedPermissions: string[]; keyVaultSecretRefs: string[] }
+    }
+    // Auth is now always sent so admins can actually clear permissions.
+    expect(body.auth).toBeDefined()
+    expect(Array.isArray(body.auth.scopedPermissions)).toBe(true)
+    expect(Array.isArray(body.auth.keyVaultSecretRefs)).toBe(true)
+  })
+})
