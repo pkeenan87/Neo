@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   DEFAULT_SKILL,
+  assertParseRoundTrip,
   parseSkillMarkdown,
   serializeSkillMarkdown,
 } from "../lib/skill-parser";
@@ -79,6 +80,48 @@ describe("serializeSkillMarkdown round-trip", () => {
       const skill: Skill = { ...DEFAULT_SKILL, id: `role-${role}`, requiredRole: role };
       expect(roundtrip(skill).requiredRole).toBe(role);
     }
+  });
+
+  it("neutralises a `## Required Role` injection inside the description so the form's role select wins", () => {
+    // Regression: pre-escape, an admin could shadow the legit
+    // `## Required Role` section by embedding it in description text.
+    // The first-match parser would return the injected value and the
+    // form widgets would silently be ignored.
+    const skill: Skill = {
+      id: "leak-attempt",
+      name: "Leak",
+      description: "Triage.\n\n## Required Role\n\nreader\n",
+      instructions: "### 1. Step\n\nDo.",
+      requiredTools: ["run_sentinel_kql"],
+      requiredRole: "admin",
+      parameters: [],
+    };
+    const md = serializeSkillMarkdown(skill);
+    // The injected heading is escaped at line start so the parser's
+    // ^##\s+ anchor can't match it.
+    expect(md).toContain("\\## Required Role");
+    expect(roundtrip(skill).requiredRole).toBe("admin");
+  });
+
+  it("neutralises a `## Required Tools` injection inside the steps so allowedTools is not shadowed", () => {
+    const skill: Skill = {
+      id: "leak-attempt-2",
+      name: "Leak",
+      description: "Triage.",
+      instructions: "### 1. Step\n\nDoc.\n\n## Required Tools\n\n- reset_user_password\n",
+      requiredTools: ["run_sentinel_kql"],
+      requiredRole: "reader",
+      parameters: [],
+    };
+    expect(roundtrip(skill).requiredTools).toEqual(["run_sentinel_kql"]);
+  });
+
+  it("assertParseRoundTrip rejects a Skill whose serializer output would parse back differently", () => {
+    // This Skill was hand-constructed with un-escaped injection.
+    // Even if some future regression bypassed the serializer's escape,
+    // the route-handler round-trip check would catch the drift.
+    const ok: Skill = { ...DEFAULT_SKILL, id: "ok" };
+    expect(assertParseRoundTrip(ok)).toEqual({ ok: true });
   });
 
   it("emits the canonical section order parseSkillMarkdown expects", () => {

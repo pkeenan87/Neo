@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   DEFAULT_SKILL,
   MAX_SKILL_CONTENT_BYTES,
@@ -55,8 +55,23 @@ const SORTED_TOOL_OPTIONS: string[] = Array.from(TOOL_NAMES).sort()
 
 export function SkillEditor(props: SkillEditorProps) {
   const isEdit = props.mode === 'edit'
+  // Capture skillId as a primitive so useEffect / useMemo can depend
+  // on the value, not the whole props object. The parent passes
+  // inline arrow callbacks for onCancel / onSaved (a deliberate
+  // pattern for keying behaviour to the row being edited), so the
+  // props object identity churns on every parent render. Depending
+  // on the primitive avoids hydration-fetch storms that would
+  // otherwise overwrite in-progress form edits when an ancestor
+  // re-renders (e.g. the SkillsSection cacheHintUntil 15s timer).
+  const skillId = isEdit ? props.skillId : null
   const [id, setId] = useState(isEdit ? props.skillId : '')
   const [form, setForm] = useState<SkillFormState>(DEFAULT_FORM_STATE)
+  // Edit mode starts unhydrated; create mode is hydrated immediately.
+  // Save and the form body are gated on `hydrated || !isEdit` so a
+  // failed GET cannot leave the form populated with new-skill
+  // defaults that a click on Save would silently PUT over the real
+  // skill.
+  const [hydrated, setHydrated] = useState(!isEdit)
   const [loading, setLoading] = useState(isEdit)
   const [submitting, setSubmitting] = useState(false)
   const [idError, setIdError] = useState<string | null>(null)
@@ -64,42 +79,70 @@ export function SkillEditor(props: SkillEditorProps) {
   const [serverError, setServerError] = useState<string | null>(null)
   const [toolToAdd, setToolToAdd] = useState<string>('')
 
+  // Synchronous re-entry gate for handleSubmit. React's `disabled` is
+  // committed asynchronously, so a fast double-click can fire two
+  // submits before the disabled state lands. The ref blocks the
+  // second entry before any await.
+  const submitInFlightRef = useRef(false)
+  // Tracks whether the component is still mounted so async settlers
+  // skip setState / props.onSaved after unmount. Paired with the
+  // AbortController in each fetch so the request is also aborted.
+  const mountedRef = useRef(true)
+  useEffect(() => {
+    mountedRef.current = true
+    return () => {
+      mountedRef.current = false
+    }
+  }, [])
+
   // Hydrate from the existing skill in edit mode. GET /api/skills/[id]
   // returns the parsed Skill, so we drop straight into form state with
-  // no markdown round-trip required on load.
+  // no markdown round-trip required on load. Deps are scoped to the
+  // primitive skillId — never the whole props object — so callback
+  // identity churn in the parent doesn't refire the fetch.
   useEffect(() => {
-    if (!isEdit) return
-    let cancelled = false
+    if (!isEdit || skillId === null) return
+    const controller = new AbortController()
     void (async () => {
       try {
-        const res = await fetch(`/api/skills/${props.skillId}`)
+        const res = await fetch(`/api/skills/${skillId}`, {
+          signal: controller.signal,
+        })
+        if (controller.signal.aborted) return
         if (!res.ok) {
           setServerError('Failed to load skill')
           return
         }
         const data = await res.json()
-        if (cancelled) return
+        if (controller.signal.aborted) return
         if (data.skill) {
           setForm(skillToFormState(data.skill as Skill))
+          setHydrated(true)
+        } else {
+          // 200 OK but missing skill payload — refuse to render the
+          // form (else DEFAULT_FORM_STATE leaks into a PUT).
+          setServerError('Skill data missing from server response')
         }
-      } catch {
-        if (!cancelled) setServerError('Network error loading skill')
+      } catch (err) {
+        if (controller.signal.aborted) return
+        if ((err as DOMException)?.name === 'AbortError') return
+        setServerError('Network error loading skill')
       } finally {
-        if (!cancelled) setLoading(false)
+        if (!controller.signal.aborted) setLoading(false)
       }
     })()
     return () => {
-      cancelled = true
+      controller.abort()
     }
-  }, [isEdit, props])
+  }, [isEdit, skillId])
 
   const serialized = useMemo(
     () =>
       serializeSkillMarkdown({
-        id: isEdit ? props.skillId : id || 'pending',
+        id: skillId ?? id ?? 'pending',
         ...form,
       }),
-    [form, id, isEdit, props],
+    [form, id, skillId],
   )
   const byteLength = useMemo(() => skillContentByteLength(serialized), [serialized])
   const overByteCap = byteLength > MAX_SKILL_CONTENT_BYTES
@@ -145,6 +188,12 @@ export function SkillEditor(props: SkillEditorProps) {
   }
 
   const handleSubmit = async () => {
+    // Synchronous re-entry gate — React commits `disabled` asynchronously
+    // so a fast double-click can land two handleSubmit calls before the
+    // button's disabled attribute renders. The ref blocks the second.
+    if (submitInFlightRef.current) return
+    submitInFlightRef.current = true
+
     setIdError(null)
     setContentError(null)
     setServerError(null)
@@ -153,6 +202,7 @@ export function SkillEditor(props: SkillEditorProps) {
       const idCheck = validateSkillId(id)
       if (idCheck) {
         setIdError(idCheck)
+        submitInFlightRef.current = false
         return
       }
     }
@@ -160,6 +210,7 @@ export function SkillEditor(props: SkillEditorProps) {
       setContentError(
         `Content is ${byteLength} bytes; maximum is ${MAX_SKILL_CONTENT_BYTES}.`,
       )
+      submitInFlightRef.current = false
       return
     }
 
@@ -180,25 +231,35 @@ export function SkillEditor(props: SkillEditorProps) {
     const content = serializeSkillMarkdown(finalSkill)
 
     setSubmitting(true)
+    const controller = new AbortController()
     try {
       const res = isEdit
         ? await fetch(`/api/skills/${props.skillId}`, {
             method: 'PUT',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ content }),
+            signal: controller.signal,
           })
         : await fetch('/api/skills', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ id, content }),
+            signal: controller.signal,
           })
 
+      if (!mountedRef.current) return
+
       if (res.ok) {
+        // Hand off to the parent OUTSIDE the catch so a throw in the
+        // parent's handler doesn't get re-classified as 'Network error'.
+        // We've already returned a successful response — anything that
+        // happens in the parent is its own concern.
         props.onSaved()
         return
       }
 
       const data = await res.json().catch(() => ({}))
+      if (!mountedRef.current) return
       const message = typeof data.error === 'string' ? data.error : 'Save failed'
 
       if (res.status === 409) {
@@ -208,15 +269,40 @@ export function SkillEditor(props: SkillEditorProps) {
       } else {
         setServerError(message)
       }
-    } catch {
-      setServerError('Network error')
+    } catch (err) {
+      if ((err as DOMException)?.name === 'AbortError') return
+      if (mountedRef.current) setServerError('Network error')
     } finally {
-      setSubmitting(false)
+      if (mountedRef.current) setSubmitting(false)
+      submitInFlightRef.current = false
     }
   }
 
   if (loading) {
     return <p className={sharedStyles.keyStatusText}>Loading skill…</p>
+  }
+
+  // In edit mode, refuse to render the form body when hydration
+  // failed. The form is otherwise pre-filled with DEFAULT_FORM_STATE
+  // (the new-skill template), and a click on Save would PUT those
+  // defaults over the real skill. Surface the error and a Cancel
+  // affordance only.
+  if (isEdit && !hydrated) {
+    return (
+      <section className={sharedStyles.section}>
+        <div className={styles.editorHeader}>
+          <h2 className={styles.editorTitle}>Edit skill: {props.skillId}</h2>
+        </div>
+        <p className={sharedStyles.keyFeedbackError} role="alert">
+          {serverError ?? 'Could not load skill — refresh the list and try again.'}
+        </p>
+        <div className={styles.formActions}>
+          <button type="button" className={styles.cancelButton} onClick={props.onCancel}>
+            Cancel
+          </button>
+        </div>
+      </section>
+    )
   }
 
   return (

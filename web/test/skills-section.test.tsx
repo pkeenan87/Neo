@@ -184,6 +184,22 @@ describe('SkillEditor', () => {
     expect(body.content).toMatch(/## Required Role\s+admin/)
   })
 
+  it('refuses to render the form body when hydration fails (no destructive save with defaults)', async () => {
+    // Regression: pre-fix, a 500 on GET /api/skills/[id] left loading=false
+    // and rendered the form populated with new-skill DEFAULT_FORM_STATE
+    // plus an enabled Save button. Clicking Save would PUT defaults
+    // over the real skill. Now the form body is gated on `hydrated`.
+    queueResponse('GET', '/api/skills/oops', { error: 'boom' }, 500)
+
+    render(
+      <SkillEditor mode="edit" skillId="oops" onCancel={() => {}} onSaved={() => {}} />,
+    )
+
+    await waitFor(() => expect(screen.getByText(/failed to load skill/i)).toBeInTheDocument())
+    expect(screen.queryByRole('button', { name: /save changes/i })).toBeNull()
+    expect(screen.queryByLabelText(/^name$/i)).toBeNull()
+  })
+
   it('hydrates the form from the parsed Skill returned by GET /api/skills/[id]', async () => {
     queueResponse('GET', '/api/skills/existing', {
       skill: {
