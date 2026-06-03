@@ -2,39 +2,10 @@
 
 import { useCallback, useEffect, useState } from 'react'
 
+import type { ScheduledTask } from '@/lib/scheduled-task-types'
+import { ScheduledTaskEditor } from './ScheduledTaskEditor'
 import sharedStyles from './SettingsPage.module.css'
 import styles from './ScheduledTasksSection.module.css'
-
-interface ScheduledTaskRunHistoryEntry {
-  runId: string
-  startTime: string
-  endTime: string
-  result: 'success' | 'failure' | 'timeout'
-  outputSummary: string
-  routedTo: string
-  reason?: string
-}
-
-interface ScheduledTaskState {
-  status: 'idle' | 'running' | 'failed'
-  nextRunTime: string
-  lastRunTime?: string
-  lastRunResult?: 'success' | 'failure' | 'timeout'
-  lastRunDurationMs?: number
-  consecutiveFailures: number
-}
-
-interface ScheduledTask {
-  id: string
-  name: string
-  description: string
-  enabled: boolean
-  dryRun: boolean
-  schedule: { cronExpression: string; timezone: string }
-  state: ScheduledTaskState
-  runHistory: ScheduledTaskRunHistoryEntry[]
-  _etag?: string
-}
 
 function formatDateTime(iso: string | undefined): string {
   if (!iso) return '—'
@@ -45,7 +16,7 @@ function formatDateTime(iso: string | undefined): string {
   }
 }
 
-function statusBadgeClass(state: ScheduledTaskState): string {
+function statusBadgeClass(state: ScheduledTask['state']): string {
   if (state.status === 'running') return styles.badge_running
   if (state.status === 'failed') return styles.badge_failed
   if (state.lastRunResult === 'success') return styles.badge_success
@@ -53,45 +24,23 @@ function statusBadgeClass(state: ScheduledTaskState): string {
   return styles.badge_idle
 }
 
-function statusLabel(state: ScheduledTaskState): string {
+function statusLabel(state: ScheduledTask['state']): string {
   if (state.status === 'running') return 'running'
   if (state.status === 'failed') return 'breaker tripped'
   return state.lastRunResult ?? 'idle'
 }
 
-const DEFAULT_NEW_TASK = JSON.stringify(
-  {
-    name: 'Weekly lateral movement hunt',
-    description:
-      'Proactive cross-tenant lateral movement hunt. Notifies via the Information Security Incident Response Logic App Teams workflow on success.',
-    enabled: false,
-    dryRun: true,
-    schedule: { cronExpression: '0 8 * * 1', timezone: 'America/New_York' },
-    task: {
-      promptTemplate:
-        'Hunt for lateral movement across Defender and Sentinel for the last {{lookbackDays}} days. Summarize suspicious patterns by user and device.',
-      variables: { lookbackDays: 7 },
-      allowedTools: ['run_sentinel_kql', 'run_defender_hunting_query'],
-      maxDurationSeconds: 120,
-    },
-    routing: {
-      destination: 'tool',
-      toolName: 'send_teams_message',
-      fallbackDestination: 'cosmos-log',
-    },
-  },
-  null,
-  2,
-)
+type EditorMode =
+  | { kind: 'closed' }
+  | { kind: 'create' }
+  | { kind: 'edit'; task: ScheduledTask }
 
 export function ScheduledTasksSection() {
   const [tasks, setTasks] = useState<ScheduledTask[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [expandedId, setExpandedId] = useState<string | null>(null)
-  const [showCreate, setShowCreate] = useState(false)
-  const [createJson, setCreateJson] = useState(DEFAULT_NEW_TASK)
-  const [createError, setCreateError] = useState<string | null>(null)
+  const [editor, setEditor] = useState<EditorMode>({ kind: 'closed' })
   const [busyId, setBusyId] = useState<string | null>(null)
 
   const fetchTasks = useCallback(async () => {
@@ -184,33 +133,10 @@ export function ScheduledTasksSection() {
     [fetchTasks],
   )
 
-  const handleCreate = useCallback(async () => {
-    setCreateError(null)
-    let payload: unknown
-    try {
-      payload = JSON.parse(createJson)
-    } catch (err) {
-      setCreateError(`Invalid JSON: ${(err as Error).message}`)
-      return
-    }
-    try {
-      const res = await fetch('/api/scheduled-tasks', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
-      })
-      if (!res.ok) {
-        const body = await res.text()
-        setCreateError(`Server: ${body}`)
-        return
-      }
-      setShowCreate(false)
-      setCreateJson(DEFAULT_NEW_TASK)
-      await fetchTasks()
-    } catch (err) {
-      setCreateError(`Network: ${(err as Error).message}`)
-    }
-  }, [createJson, fetchTasks])
+  const handleEditorSaved = useCallback(async () => {
+    setEditor({ kind: 'closed' })
+    await fetchTasks()
+  }, [fetchTasks])
 
   if (loading) {
     return (
@@ -228,7 +154,7 @@ export function ScheduledTasksSection() {
         <button
           type="button"
           className={styles.newButton}
-          onClick={() => setShowCreate(true)}
+          onClick={() => setEditor({ kind: 'create' })}
         >
           New task
         </button>
@@ -299,6 +225,13 @@ export function ScheduledTasksSection() {
                           <button
                             type="button"
                             className={styles.actionButton}
+                            onClick={() => setEditor({ kind: 'edit', task })}
+                          >
+                            Edit
+                          </button>
+                          <button
+                            type="button"
+                            className={styles.actionButton}
                             onClick={() => setExpandedId(isExpanded ? null : task.id)}
                           >
                             {isExpanded ? 'Hide' : 'History'}
@@ -359,35 +292,28 @@ export function ScheduledTasksSection() {
         </div>
       )}
 
-      {showCreate && (
-        <div className={styles.modalOverlay} role="dialog" aria-modal="true" aria-label="Create scheduled task">
+      {editor.kind !== 'closed' && (
+        <div
+          className={styles.modalOverlay}
+          role="dialog"
+          aria-modal="true"
+          aria-label={editor.kind === 'create' ? 'Create scheduled task' : 'Edit scheduled task'}
+        >
           <div className={styles.modalContent}>
-            <h3 className={styles.modalTitle}>New scheduled task</h3>
-            <p className={sharedStyles.keyFieldHintText}>
-              Paste a JSON definition. New tasks start disabled — enable from the list once you have validated the dry-run output.
-            </p>
-            <textarea
-              className={styles.jsonField}
-              value={createJson}
-              onChange={(e) => setCreateJson(e.target.value)}
-              spellCheck={false}
-            />
-            {createError && <div className={styles.modalError}>{createError}</div>}
-            <div className={styles.modalActions}>
-              <button
-                type="button"
-                className={styles.cancelButton}
-                onClick={() => {
-                  setShowCreate(false)
-                  setCreateError(null)
-                }}
-              >
-                Cancel
-              </button>
-              <button type="button" className={styles.newButton} onClick={handleCreate}>
-                Create
-              </button>
-            </div>
+            {editor.kind === 'create' ? (
+              <ScheduledTaskEditor
+                mode="create"
+                onCancel={() => setEditor({ kind: 'closed' })}
+                onSaved={() => void handleEditorSaved()}
+              />
+            ) : (
+              <ScheduledTaskEditor
+                mode="edit"
+                task={editor.task}
+                onCancel={() => setEditor({ kind: 'closed' })}
+                onSaved={() => void handleEditorSaved()}
+              />
+            )}
           </div>
         </div>
       )}

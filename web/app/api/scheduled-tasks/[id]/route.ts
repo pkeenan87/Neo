@@ -1,8 +1,10 @@
+import { createHash } from "crypto";
 import { NextRequest, NextResponse } from "next/server";
 
 import { resolveAuth } from "@/lib/auth-helpers";
 import { logger } from "@/lib/logger";
 import { validateCronExpression, CronValidationError } from "@/lib/cron-helpers";
+import { scanUserInput, shouldBlock } from "@/lib/injection-guard";
 import {
   deleteTask,
   getTask,
@@ -120,6 +122,27 @@ export async function PATCH(request: NextRequest, { params }: RouteParams) {
   const parsed = validatePatchPayload(body);
   if (typeof parsed === "string") return badRequest(parsed);
 
+  // Injection guard on any new promptTemplate / description text —
+  // matches the POST path. Skip when the patch doesn't touch the
+  // text fields so a routine enabled/disabled toggle isn't scanned.
+  if (parsed.task?.promptTemplate || parsed.description) {
+    const scanTarget = `${parsed.task?.promptTemplate ?? ""}\n\n${parsed.description ?? ""}`;
+    const scan = scanUserInput(scanTarget, {
+      sessionId: "scheduled-task-write",
+      userId: identity.ownerId,
+      role: identity.role,
+    });
+    if (shouldBlock(scan)) {
+      return NextResponse.json(
+        {
+          error:
+            "Scheduled-task prompt tripped the injection guard. Rephrase the prompt template and retry.",
+        },
+        { status: 400 },
+      );
+    }
+  }
+
   if (parsed.schedule) {
     try {
       validateCronExpression(parsed.schedule.cronExpression, parsed.schedule.timezone);
@@ -129,11 +152,33 @@ export async function PATCH(request: NextRequest, { params }: RouteParams) {
     }
   }
 
+  // Snapshot the prior task so the audit log can record a content-
+  // sensitive diff (changed-field names + sha256(promptTemplate)
+  // before/after). Without this, governance can't reconstruct which
+  // admin changed which high-blast-radius field — pre-fix the log
+  // captured only { taskId, updatedBy }.
+  const prior = await getTask(id);
+  const priorPromptHash = prior
+    ? createHash("sha256").update(prior.task.promptTemplate).digest("hex")
+    : undefined;
+
   try {
     const updated = await patchTask(id, parsed);
+    const updatedPromptHash = createHash("sha256")
+      .update(updated.task.promptTemplate)
+      .digest("hex");
+    // Compute the set of top-level fields the admin actually
+    // requested to change. Comparing against `prior` would be more
+    // precise but the validator already drops fields the admin
+    // didn't send; the keys of `parsed` reflect intent.
+    const changedFields = Object.keys(parsed).filter((k) => k !== "expectedEtag");
     logger.info("scheduled_task.updated", "scheduled-tasks-api", {
       taskId: id,
       updatedBy: identity.ownerId,
+      changedFields,
+      promptHashChanged: priorPromptHash !== updatedPromptHash,
+      priorPromptHash,
+      newPromptHash: updatedPromptHash,
     });
     return NextResponse.json({ task: updated });
   } catch (err) {

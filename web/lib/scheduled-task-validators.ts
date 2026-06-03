@@ -90,6 +90,17 @@ export function validateTaskShape(value: unknown): string | null {
   }
   for (const tool of t.allowedTools) {
     if (typeof tool !== "string") return "task.allowedTools must be string[]";
+    // Scheduled tasks run autonomously on a cron — the interactive
+    // confirmation gate that protects destructive tools doesn't
+    // apply here. The runner's `computeAllowedTools` filter strips
+    // these at execution time, but persisting them in `allowedTools`
+    // makes the task look more powerful than it is in audit / list
+    // views and relies on a single runtime check holding forever.
+    // Reject at write-time as defence in depth + truthful audit
+    // surface.
+    if (DESTRUCTIVE_TOOLS.has(tool)) {
+      return `task.allowedTools cannot include destructive tool "${tool}" — scheduled tasks run without a confirmation gate`;
+    }
   }
   if (typeof t.maxDurationSeconds !== "number" || t.maxDurationSeconds <= 0) {
     return "task.maxDurationSeconds must be a positive number";

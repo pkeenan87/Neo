@@ -1,0 +1,400 @@
+@reference "../../app/globals.css";
+
+/* ── Root ─────────────────────────────────────────────────── */
+
+.editorRoot {
+  @apply flex flex-col gap-4;
+}
+
+.editorHeader {
+  @apply flex items-center justify-between gap-4;
+}
+
+.editorTitle {
+  @apply text-lg font-bold text-brand-900;
+}
+
+.viewToggle {
+  @apply text-sm text-brand-700 cursor-pointer transition-colors duration-150;
+  background: none;
+  border: 1px solid;
+  @apply border-border-default px-2 py-1 rounded-lg;
+}
+
+.viewToggle:hover {
+  @apply bg-brand-100;
+}
+
+.viewToggle:focus-visible {
+  outline: 2px solid #64748b;
+  outline-offset: 2px;
+}
+
+/* ── Field groups ─────────────────────────────────────────── */
+
+.fieldGroup {
+  @apply flex flex-col gap-4 p-4 rounded-lg border border-border-default;
+  background: transparent;
+}
+
+.groupLegend {
+  @apply text-sm font-bold text-brand-600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  font-size: 0.75rem;
+  padding: 0 0.5rem;
+}
+
+.nestedGroup {
+  @apply flex flex-col gap-2;
+  border: none;
+  padding: 0;
+  margin: 0;
+}
+
+/* ── Inputs ───────────────────────────────────────────────── */
+
+.textInput,
+.numberInput {
+  @apply px-4 py-2 rounded-lg border border-border-default bg-surface-sunken text-brand-900 transition-colors duration-150;
+  font-size: 0.875rem;
+}
+
+.textInput:focus-visible,
+.numberInput:focus-visible {
+  outline: none;
+  @apply border-brand-500;
+  box-shadow: 0 0 0 3px rgba(100, 116, 139, 0.25);
+}
+
+.numberInput {
+  font-family: monospace;
+  width: 8rem;
+}
+
+.shortTextarea {
+  @apply px-4 py-2 rounded-lg border border-border-default bg-surface-sunken text-brand-900 transition-colors duration-150;
+  font-size: 0.875rem;
+  resize: vertical;
+  min-height: 64px;
+  line-height: 1.5;
+}
+
+.shortTextarea:focus-visible {
+  outline: none;
+  @apply border-brand-500;
+  box-shadow: 0 0 0 3px rgba(100, 116, 139, 0.25);
+}
+
+.longTextarea {
+  @apply px-4 py-2 rounded-lg border border-border-default bg-surface-sunken text-brand-900 transition-colors duration-150;
+  font-size: 0.8125rem;
+  resize: vertical;
+  min-height: 120px;
+  line-height: 1.5;
+}
+
+.longTextarea:focus-visible {
+  outline: none;
+  @apply border-brand-500;
+  box-shadow: 0 0 0 3px rgba(100, 116, 139, 0.25);
+}
+
+.select {
+  @apply px-4 py-2 rounded-lg border border-border-default bg-surface-sunken text-brand-900 transition-colors duration-150;
+  font-size: 0.875rem;
+  cursor: pointer;
+}
+
+.select:focus-visible {
+  outline: none;
+  @apply border-brand-500;
+  box-shadow: 0 0 0 3px rgba(100, 116, 139, 0.25);
+}
+
+.jsonField {
+  @apply w-full px-4 py-2 rounded-lg border border-border-default bg-surface-sunken text-brand-900;
+  font-family: monospace;
+  font-size: 0.8125rem;
+  min-height: 360px;
+  resize: vertical;
+}
+
+.jsonField:focus-visible {
+  outline: none;
+  @apply border-brand-500;
+  box-shadow: 0 0 0 3px rgba(100, 116, 139, 0.25);
+}
+
+/* ── Checkboxes ───────────────────────────────────────────── */
+
+.checkboxRow {
+  @apply flex items-center gap-4 flex-wrap;
+}
+
+.checkboxLabel {
+  @apply inline-flex items-center gap-2 text-sm text-brand-700 cursor-pointer;
+}
+
+/* ── Inline rows + add/remove ─────────────────────────────── */
+
+.inlineRow {
+  @apply flex items-center gap-2;
+}
+
+.kvRow {
+  @apply grid items-center gap-2;
+  grid-template-columns: 1fr 1fr auto;
+}
+
+.inlineAddButton {
+  @apply px-4 py-2 rounded-lg text-sm font-bold cursor-pointer transition-colors duration-150;
+  @apply bg-brand-100 text-brand-700;
+  border: none;
+}
+
+.inlineAddButton:hover:not(:disabled) {
+  @apply bg-brand-200;
+}
+
+.inlineAddButton:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.inlineAddButton:focus-visible {
+  outline: 2px solid #64748b;
+  outline-offset: 2px;
+}
+
+.inlineRemoveButton {
+  @apply text-sm text-brand-500 cursor-pointer transition-colors duration-150;
+  background: none;
+  border: none;
+  padding: 0;
+}
+
+.inlineRemoveButton:hover {
+  @apply text-error-500;
+}
+
+.inlineRemoveButton:focus-visible {
+  outline: 2px solid #64748b;
+  outline-offset: 2px;
+}
+
+/* ── Chips ────────────────────────────────────────────────── */
+
+.chipList {
+  @apply flex flex-wrap gap-2;
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+
+.chip {
+  @apply inline-flex items-center gap-2 px-2 py-1 rounded-lg bg-brand-100 text-brand-700;
+  font-family: monospace;
+  font-size: 0.8125rem;
+}
+
+.chipRemove {
+  @apply text-brand-500 cursor-pointer transition-colors duration-150;
+  background: none;
+  border: none;
+  padding: 0;
+  font-size: 1rem;
+  line-height: 1;
+}
+
+.chipRemove:hover {
+  @apply text-brand-900;
+}
+
+.chipRemove:focus-visible {
+  outline: 2px solid #64748b;
+  outline-offset: 2px;
+}
+
+/* ── Helpers ──────────────────────────────────────────────── */
+
+.fieldHint {
+  @apply text-sm text-brand-400;
+  font-size: 0.8125rem;
+}
+
+.fieldError {
+  @apply text-sm text-error-500;
+  font-size: 0.8125rem;
+}
+
+.srOnly {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* ── Collapsible (auth) ───────────────────────────────────── */
+
+.collapsible {
+  @apply rounded-lg border border-border-default p-4;
+}
+
+.collapsibleSummary {
+  @apply text-sm font-bold text-brand-700 cursor-pointer;
+}
+
+.collapsibleSummary:focus-visible {
+  outline: 2px solid #64748b;
+  outline-offset: 2px;
+}
+
+.collapsibleBody {
+  @apply flex flex-col gap-4 mt-4;
+}
+
+/* ── Footer actions ───────────────────────────────────────── */
+
+.formActions {
+  @apply flex items-center justify-end gap-4 mt-4;
+}
+
+.cancelButton {
+  @apply px-4 py-2 rounded-lg text-sm font-bold cursor-pointer transition-colors duration-150;
+  background: none;
+  border: 1px solid;
+  @apply border-border-default text-brand-700;
+}
+
+.cancelButton:hover {
+  @apply bg-brand-50;
+}
+
+.cancelButton:focus-visible {
+  outline: 2px solid #64748b;
+  outline-offset: 2px;
+}
+
+.saveButton {
+  @apply px-4 py-2 rounded-lg text-sm font-bold cursor-pointer transition-colors duration-150;
+  @apply bg-brand-900 text-white;
+  border: none;
+}
+
+.saveButton:hover:not(:disabled) {
+  @apply bg-brand-800;
+}
+
+.saveButton:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.saveButton:focus-visible {
+  outline: 2px solid #64748b;
+  outline-offset: 2px;
+}
+
+/* ── Dark mode ────────────────────────────────────────────── */
+
+:global(html.dark) .editorTitle,
+:global(html.dark) .groupLegend {
+  color: #dbdee1;
+}
+
+:global(html.dark) .fieldGroup,
+:global(html.dark) .collapsible {
+  border-color: rgba(255, 255, 255, 0.06);
+}
+
+:global(html.dark) .textInput,
+:global(html.dark) .numberInput,
+:global(html.dark) .shortTextarea,
+:global(html.dark) .longTextarea,
+:global(html.dark) .select,
+:global(html.dark) .jsonField {
+  background-color: #1e1f22;
+  border-color: rgba(255, 255, 255, 0.06);
+  color: #dbdee1;
+}
+
+:global(html.dark) .textInput:focus-visible,
+:global(html.dark) .numberInput:focus-visible,
+:global(html.dark) .shortTextarea:focus-visible,
+:global(html.dark) .longTextarea:focus-visible,
+:global(html.dark) .select:focus-visible,
+:global(html.dark) .jsonField:focus-visible {
+  border-color: #3ba55d;
+  box-shadow: 0 0 0 3px rgba(59, 165, 93, 0.15);
+}
+
+:global(html.dark) .chip {
+  background: rgba(255, 255, 255, 0.06);
+  color: #dbdee1;
+}
+
+:global(html.dark) .chipRemove,
+:global(html.dark) .inlineRemoveButton {
+  color: #b9bbbe;
+}
+
+:global(html.dark) .chipRemove:hover {
+  color: #fff;
+}
+
+:global(html.dark) .inlineRemoveButton:hover {
+  color: #f87171;
+}
+
+:global(html.dark) .inlineAddButton {
+  background: rgba(255, 255, 255, 0.06);
+  color: #dbdee1;
+}
+
+:global(html.dark) .inlineAddButton:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.12);
+}
+
+:global(html.dark) .fieldHint {
+  color: #72767d;
+}
+
+:global(html.dark) .checkboxLabel {
+  color: #dbdee1;
+}
+
+:global(html.dark) .viewToggle {
+  color: #dbdee1;
+  border-color: rgba(255, 255, 255, 0.06);
+}
+
+:global(html.dark) .viewToggle:hover {
+  background: rgba(255, 255, 255, 0.06);
+}
+
+:global(html.dark) .collapsibleSummary {
+  color: #dbdee1;
+}
+
+:global(html.dark) .cancelButton {
+  color: #b9bbbe;
+  border-color: rgba(255, 255, 255, 0.06);
+}
+
+:global(html.dark) .cancelButton:hover {
+  background: rgba(255, 255, 255, 0.06);
+}
+
+:global(html.dark) .saveButton {
+  background-color: #3ba55d;
+}
+
+:global(html.dark) .saveButton:hover:not(:disabled) {
+  background-color: #4cba6e;
+}

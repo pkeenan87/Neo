@@ -3,6 +3,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { resolveAuth } from "@/lib/auth-helpers";
 import { logger } from "@/lib/logger";
 import { validateCronExpression, CronValidationError } from "@/lib/cron-helpers";
+import { scanUserInput, shouldBlock } from "@/lib/injection-guard";
 import { createTask, listTasks } from "@/lib/scheduled-task-store";
 import type {
   CreateScheduledTaskInput,
@@ -109,6 +110,27 @@ export async function POST(request: NextRequest) {
 
   const parsed = validateCreatePayload(body);
   if (typeof parsed === "string") return badRequest(parsed);
+
+  // Admin-authored promptTemplate is interpolated verbatim into the
+  // agent loop's user message at every cron tick. Scan at write-time
+  // so cron-bound prompts go through the same injection guard as
+  // skills (web/app/api/skills/route.ts) and interactive chat.
+  // Default monitor mode logs only; INJECTION_GUARD_MODE=block 400s.
+  const scanTarget = `${parsed.task.promptTemplate}\n\n${parsed.description ?? ""}`;
+  const scan = scanUserInput(scanTarget, {
+    sessionId: "scheduled-task-write",
+    userId: identity.ownerId,
+    role: identity.role,
+  });
+  if (shouldBlock(scan)) {
+    return NextResponse.json(
+      {
+        error:
+          "Scheduled-task prompt tripped the injection guard. Rephrase the prompt template and retry.",
+      },
+      { status: 400 },
+    );
+  }
 
   try {
     validateCronExpression(parsed.schedule.cronExpression, parsed.schedule.timezone);
