@@ -1,5 +1,4 @@
 import { app, type InvocationContext, type Timer } from "@azure/functions";
-import { ManagedIdentityCredential } from "@azure/identity";
 
 // ── Configuration ────────────────────────────────────────────
 // Read from Function App settings. The Function runs under its
@@ -20,6 +19,83 @@ function loadConfig(): Config {
   return { neoWebUrl: neoWebUrl.replace(/\/$/, ""), neoWebAudience };
 }
 
+// ── Managed Identity ─────────────────────────────────────────
+
+interface AppServiceMiResponse {
+  access_token?: string;
+  expires_on?: string;
+  resource?: string;
+  token_type?: string;
+}
+
+/**
+ * Acquire an AAD token via the App Service Managed Identity endpoint.
+ *
+ * Uses the v2019-08-01 protocol Azure documents at
+ * https://learn.microsoft.com/en-us/azure/app-service/overview-managed-identity?tabs=portal%2Chttp
+ *
+ * Returns the access token on success, or null on failure (the
+ * specific failure is already logged via context.error).
+ *
+ * We bypass @azure/identity because its 4.13.x parser has been
+ * observed throwing a generic "Response had no 'expiresOn' property"
+ * error on this exact endpoint without exposing the raw response body
+ * for diagnosis. Direct fetch keeps the wire-format visibility.
+ */
+async function acquireAppServiceMiToken(
+  audience: string,
+  context: InvocationContext,
+): Promise<string | null> {
+  const endpoint = process.env.IDENTITY_ENDPOINT;
+  const header = process.env.IDENTITY_HEADER;
+  if (!endpoint || !header) {
+    context.error(
+      `Managed Identity env vars missing — IDENTITY_ENDPOINT present: ${!!endpoint}, IDENTITY_HEADER present: ${!!header}. ` +
+        "Confirm Function App → Settings → Identity → System assigned → Status is On.",
+    );
+    return null;
+  }
+
+  const url = `${endpoint}?resource=${encodeURIComponent(audience)}&api-version=2019-08-01`;
+  let res: Response;
+  try {
+    res = await fetch(url, {
+      headers: { "X-IDENTITY-HEADER": header },
+    });
+  } catch (err) {
+    context.error(`MI endpoint fetch threw: ${(err as Error).message}`);
+    return null;
+  }
+
+  const text = await res.text();
+  if (!res.ok) {
+    // Truncate to 1KB so a Front Door / WAF error page doesn't blow
+    // up the log entry.
+    const trimmed = text.length > 1024 ? `${text.slice(0, 1024)}…` : text;
+    context.error(`MI endpoint returned ${res.status}: ${trimmed}`);
+    return null;
+  }
+
+  let body: AppServiceMiResponse;
+  try {
+    body = JSON.parse(text) as AppServiceMiResponse;
+  } catch {
+    const trimmed = text.length > 1024 ? `${text.slice(0, 1024)}…` : text;
+    context.error(`MI endpoint returned non-JSON ${res.status}: ${trimmed}`);
+    return null;
+  }
+
+  if (!body.access_token) {
+    // Log the keys we DID get back so we can see what the endpoint
+    // actually returned. Never log the token value itself.
+    const keys = Object.keys(body).join(",");
+    context.error(`MI endpoint response missing access_token. Response keys: [${keys}]`);
+    return null;
+  }
+
+  return body.access_token;
+}
+
 // ── Handler ──────────────────────────────────────────────────
 
 async function scheduledTaskPollerHandler(
@@ -34,16 +110,16 @@ async function scheduledTaskPollerHandler(
     return;
   }
 
-  const credential = new ManagedIdentityCredential();
-  let token: string;
-  try {
-    const result = await credential.getToken(`${config.neoWebAudience}/.default`);
-    if (!result?.token) throw new Error("Token endpoint returned empty token");
-    token = result.token;
-  } catch (err) {
-    context.error(`Failed to acquire MI token: ${(err as Error).message}`);
-    return;
-  }
+  // Talk to the App Service Managed Identity endpoint directly
+  // instead of via @azure/identity. The SDK (v4.13.x — latest
+  // stable as of 2026-06) has been observed in production to fail
+  // with "Response had no 'expiresOn' property" when the upstream
+  // returns a slightly different shape, with no path to see the
+  // raw body. Direct fetch costs us ~15 lines of code and gives us
+  // full visibility into the response. Protocol reference:
+  // https://learn.microsoft.com/en-us/azure/app-service/overview-managed-identity?tabs=portal%2Chttp
+  const token = await acquireAppServiceMiToken(config.neoWebAudience, context);
+  if (!token) return;
 
   const url = `${config.neoWebUrl}/api/internal/scheduled-tasks/poll`;
   const startMs = Date.now();
