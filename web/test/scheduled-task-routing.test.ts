@@ -158,14 +158,30 @@ describe("routeOutput — tool destination happy path", () => {
     expect(logContextCapture.last).toMatchObject({ userEmail: "legacy@example.com" });
   });
 
-  it("summarises long output to OUTPUT_SUMMARY_MAX (2000) chars with truncation marker", async () => {
+  it("sends a full 4000-char SOC analysis body to the routing tool without truncation", async () => {
+    // Regression: routing body used to be capped at 2000 chars
+    // (OUTPUT_SUMMARY_MAX) and SOC analyses were arriving in Teams
+    // ending with "…[truncated]" mid-section. Routing now uses
+    // truncateForRouting (25 KB cap) so realistic-size analyses
+    // pass through verbatim.
     const task = makeTask();
     const longText = "x".repeat(4000);
     await routeOutput(task, longText);
     const args = executeToolMock.mock.calls[0][1] as Record<string, string>;
+    expect(args.body).toBe(longText);
+    expect(args.body.endsWith("…[truncated]")).toBe(false);
+  });
+
+  it("truncates the routing body only when it exceeds ROUTING_BODY_MAX (25,000)", async () => {
+    // The cap still applies — Teams adaptive cards have a ~28 KB
+    // payload ceiling. We crop at 25 KB to leave card-scaffolding
+    // headroom.
+    const task = makeTask();
+    const longText = "x".repeat(40_000);
+    await routeOutput(task, longText);
+    const args = executeToolMock.mock.calls[0][1] as Record<string, string>;
     expect(args.body.endsWith("…[truncated]")).toBe(true);
-    // 2000 chars + "\n…[truncated]" suffix.
-    expect(args.body.length).toBe(2000 + "\n…[truncated]".length);
+    expect(args.body.length).toBe(25_000 + "\n…[truncated]".length);
   });
 });
 

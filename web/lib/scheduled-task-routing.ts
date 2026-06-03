@@ -12,7 +12,7 @@ import { executeTool } from "./executors";
 import { getToolIntegration } from "./integration-registry";
 import { hashPii, logger, setLogContext } from "./logger";
 import { ROUTING_ALLOWED_TOOLS } from "./scheduled-task-validators";
-import { summarize } from "./scheduled-task-summary";
+import { truncateForRouting } from "./scheduled-task-summary";
 import { postToChannel } from "./teams-channel";
 import { DESTRUCTIVE_TOOLS } from "./tools";
 import type { ScheduledTask, ScheduledTaskDestination } from "./scheduled-task-types";
@@ -130,17 +130,24 @@ async function dispatchToolDestination(
   // failure-path notifications are intentionally out of scope.
   //
   // Sentinel body: when the agent produces no narrative text (only
-  // tool_use blocks at end_turn, or whitespace), summarize().trim()
-  // yields "" and validateNotificationInput would reject it as
-  // missing — silently dead-lettering the run via the fallback even
-  // though the agent itself succeeded. Substitute a placeholder so
-  // the notification still fires and operators see *something*. See
-  // ultra-review F5.
-  const summarised = summarize(outputText).trim();
+  // tool_use blocks at end_turn, or whitespace), the routing
+  // truncation yields "" and validateNotificationInput would reject
+  // it as missing — silently dead-lettering the run via the fallback
+  // even though the agent itself succeeded. Substitute a placeholder
+  // so the notification still fires and operators see *something*.
+  // See ultra-review F5.
+  //
+  // truncateForRouting (25 KB) is used here instead of summarize
+  // (2 KB) — the routing body is the actual content delivered to
+  // the SOC channel; cropping a real analysis at 2 KB was killing
+  // report quality (observed in production: SOC analyses ending
+  // mid-section with "…[truncated]"). 2 KB is reserved for the
+  // Cosmos run-history summary, which is a separate concern.
+  const bodyText = truncateForRouting(outputText).trim();
   await dispatchRoutingTool(task, {
     title: task.name,
     status: "success",
-    body: summarised || "(no narrative output produced by scheduled task run)",
+    body: bodyText || "(no narrative output produced by scheduled task run)",
   });
 }
 
@@ -195,13 +202,14 @@ export async function routeOutput(
   outputText: string,
 ): Promise<RoutingOutcome> {
   if (task.dryRun) {
-    const summary = task.routing.destination === "tool" ? summarize(outputText) : outputText;
+    const previewBody =
+      task.routing.destination === "tool" ? truncateForRouting(outputText) : outputText;
     logger.info("scheduled_task.dry_run_routed", "scheduled-task-routing", {
       taskId: task.id,
       destination: task.routing.destination,
       toolName: task.routing.destination === "tool" ? task.routing.toolName : undefined,
       titleLength: task.routing.destination === "tool" ? task.name.length : undefined,
-      bodyLength: task.routing.destination === "tool" ? summary.length : undefined,
+      bodyLength: task.routing.destination === "tool" ? previewBody.length : undefined,
       previewLength: outputText.length,
     });
     return { routedTo: "dry-run-log", success: true };
