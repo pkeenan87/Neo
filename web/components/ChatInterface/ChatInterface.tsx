@@ -27,7 +27,7 @@ import Link from 'next/link'
 import { useTheme } from '@/context/ThemeContext'
 import { useConversationCache } from '@/context/ConversationCacheContext'
 import { useToast } from '@/context/ToastContext'
-import { ContextTierSelector, MarkdownRenderer, MessageActions, ThinkingBubble, UserAvatar, FileAttachmentBar, modelIdForTier, tierForModelId, type ContextTier } from '@/components'
+import { ContextTierSelector, MarkdownRenderer, MessageActions, ThinkingBubble, UserAvatar, FileAttachmentBar, modelIdForTier, tierForModelId, displayNameForTier, type ContextTier } from '@/components'
 import { useFileUpload } from '@/hooks/useFileUpload'
 import styles from './ChatInterface.module.css'
 import type { Conversation, ConversationMeta, PendingTool, ToolTrace } from '@/lib/types'
@@ -284,7 +284,6 @@ export interface ChatInterfaceProps {
   userImage?: string
   initialConversations?: ConversationMeta[]
   initialConversation?: Conversation
-  defaultModelName?: string
   className?: string
 }
 
@@ -469,7 +468,6 @@ export function ChatInterface({
   userImage,
   initialConversations = [],
   initialConversation,
-  defaultModelName = 'Claude Sonnet',
   className,
 }: ChatInterfaceProps) {
   const { theme, toggleTheme } = useTheme()
@@ -1383,7 +1381,7 @@ export function ChatInterface({
 
           <div className={styles.statusGroup}>
             <div className={styles.statusText}>
-              <span>Powered by {defaultModelName}</span>
+              <span>Powered by {displayNameForTier(contextTier)}</span>
             </div>
           </div>
         </header>

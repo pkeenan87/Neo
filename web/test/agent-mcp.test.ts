@@ -234,6 +234,27 @@ describe("agent loop — MCP routing", () => {
     expect(params.betas).toContain("context-1m-2025-08-07");
     expect(params.betas).toContain("extended-cache-ttl-2025-04-11");
   });
+
+  it("does NOT attach the context-1m beta on Opus 4.8 (1M is the model's default)", async () => {
+    // Opus 4.8 serves 1M context by default with no beta header
+    // required. Attaching `context-1m-2025-08-07` would be a no-op
+    // today but a future API change could reject unknown betas, so
+    // we deliberately keep the header out of 4.8 calls. Also: no
+    // `[1m]` suffix means the model id passes through unchanged.
+    mcpServersReturn.current = [];
+    await runAgentLoop(
+      [{ role: "user", content: "hi" }],
+      {},
+      "admin",
+      "session-1",
+      "claude-opus-4-8",
+    );
+    const params = capturedBetaCalls[capturedBetaCalls.length - 1] as { model: string; betas?: string[] };
+    expect(params.model).toBe("claude-opus-4-8");
+    expect(params.betas).not.toContain("context-1m-2025-08-07");
+    // Extended-cache-ttl still attached unconditionally.
+    expect(params.betas).toContain("extended-cache-ttl-2025-04-11");
+  });
 });
 
 // ── Audit ────────────────────────────────────────────────────

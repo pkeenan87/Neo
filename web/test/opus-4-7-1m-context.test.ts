@@ -12,22 +12,29 @@ import {
   isOneMillionContextModel,
 } from "../lib/config";
 
-describe("Opus 4.7 1M context configuration", () => {
-  it("SUPPORTED_MODELS exposes the 1M-context Opus 4.7 option", () => {
-    expect(SUPPORTED_MODELS["Opus 4.7 (1M context)"]).toBe("claude-opus-4-7[1m]");
+describe("Opus 4.7 1M context configuration (legacy resume path)", () => {
+  // Post-Opus-4.8 migration, this whole file pins the LEGACY path
+  // for conversations whose persisted `session.model` is the
+  // `[1m]` sentinel. New conversations go through Opus 4.8 (see
+  // opus-4-8-migration.test.ts). The legacy entries below MUST
+  // keep working until the longest-running [1m] conversation has
+  // aged past Cosmos TTL.
+  it("SUPPORTED_MODELS still exposes the legacy Opus 4.7 1M option", () => {
+    expect(SUPPORTED_MODELS["Opus (1M, legacy)"]).toBe("claude-opus-4-7[1m]");
   });
 
-  it("TOKEN_PRICING covers both Opus 4.7 variants and prices the 1M tier at 2x", () => {
+  it("TOKEN_PRICING still covers Opus 4.7 variants (legacy resumes need it)", () => {
     expect(TOKEN_PRICING["claude-opus-4-7"]).toEqual({ input: 15, output: 75 });
     expect(TOKEN_PRICING["claude-opus-4-7[1m]"]).toEqual({ input: 30, output: 150 });
   });
 
-  it("MODEL_OUTPUT_CEILINGS covers the 1M-context variant", () => {
+  it("MODEL_OUTPUT_CEILINGS still covers the legacy [1m] variant", () => {
     expect(MODEL_OUTPUT_CEILINGS["claude-opus-4-7[1m]"]).toBe(32_000);
   });
 
-  it("isOneMillionContextModel only matches the [1m] suffix", () => {
+  it("isOneMillionContextModel matches [1m] suffix AND Opus 4.8 (the new 1M-by-default model)", () => {
     expect(isOneMillionContextModel("claude-opus-4-7[1m]")).toBe(true);
+    expect(isOneMillionContextModel("claude-opus-4-8")).toBe(true);
     expect(isOneMillionContextModel("claude-opus-4-7")).toBe(false);
     expect(isOneMillionContextModel("claude-sonnet-4-6")).toBe(false);
     expect(isOneMillionContextModel("claude-opus-4-6")).toBe(false);
@@ -74,20 +81,20 @@ describe("getContextBudget — model-aware thresholds", () => {
   });
 });
 
-describe("ContextTierSelector model mapping", () => {
+describe("ContextTierSelector — legacy [1m] resume support", () => {
   // The selector lives in components/ but the model-id mapping is the
-  // server-facing contract; tested at the data layer.
-  it("modelIdForTier maps '200k' to Sonnet and '1m' to Opus 4.7 [1m]", async () => {
-    const { modelIdForTier, tierForModelId } = await import(
+  // server-facing contract; tested at the data layer. Post-Opus-4.8
+  // migration, modelIdForTier('1m') now resolves to Opus 4.8 (NEW
+  // conversations), but tierForModelId STILL accepts legacy [1m]-
+  // suffixed ids so resumed conversations land on the right selector
+  // state. See opus-4-8-migration.test.ts for the forward mapping.
+  it("tierForModelId collapses the legacy [1m] sentinel into '1m' on resume", async () => {
+    const { tierForModelId } = await import(
       "../components/ContextTierSelector/ContextTierSelector"
     );
-    expect(modelIdForTier("200k")).toBe("claude-sonnet-4-6");
-    expect(modelIdForTier("1m")).toBe("claude-opus-4-7[1m]");
-
-    // Inverse mapping for conversation resume.
     expect(tierForModelId("claude-opus-4-7[1m]")).toBe("1m");
-    expect(tierForModelId("claude-sonnet-4-6")).toBe("200k");
-    expect(tierForModelId(undefined)).toBe("200k");
+    // Bare Opus 4.7 (200K) is treated as a Sonnet-tier resume since
+    // it never had a 1M context — no first-class option in the UI.
     expect(tierForModelId("claude-opus-4-7")).toBe("200k");
   });
 });

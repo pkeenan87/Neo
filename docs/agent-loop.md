@@ -218,9 +218,9 @@ const systemBlock: CacheableTextBlock = {
 };
 ```
 
-`max_tokens` per turn is resolved by `resolveMaxTokens(model, { skillInvocation })` — skills get 24,576 tokens, plain chat gets 16,384 (raised from 4,096 in early 2026 to stop long publisher / hunt / digest responses from truncating mid-output), both clamped to the model's published ceiling (`MODEL_OUTPUT_CEILINGS`: 32K Opus 4.6/4.7, 64K Sonnet 4.6, 8K Haiku). The clamp emits a one-time warning per `(model, budget-type)` pair so misconfigurations surface in logs.
+`max_tokens` per turn is resolved by `resolveMaxTokens(model, { skillInvocation })` — skills get 24,576 tokens, plain chat gets 16,384 (raised from 4,096 in early 2026 to stop long publisher / hunt / digest responses from truncating mid-output), both clamped to the model's published ceiling (`MODEL_OUTPUT_CEILINGS`: 32K Opus 4.6/4.7/4.8, 64K Sonnet 4.6, 8K Haiku). The clamp emits a one-time warning per `(model, budget-type)` pair so misconfigurations surface in logs.
 
-**Per-conversation model selection.** The user picks a context tier before the first message (web: `<ContextTierSelector>` next to the send button; CLI: `neo --context 1m`). The selected model id is sent in `body.model`, persisted on the conversation root as `session.model`, and locked thereafter — the agent route reads `session.model` on every subsequent turn and ignores any divergent `body.model` (logged as a warn). Default is `claude-sonnet-4-6`; the opt-in 1M tier is `claude-opus-4-7[1m]`, which `createWithOptionalMcp` automatically routes through the beta API with the `context-1m-2025-08-07` header.
+**Per-conversation model selection.** The user picks a model before the first message (web: `<ContextTierSelector>` next to the send button — labelled Sonnet / Opus; CLI: `neo --context 1m`). The selected model id is sent in `body.model`, persisted on the conversation root as `session.model`, and locked thereafter — the agent route reads `session.model` on every subsequent turn and ignores any divergent `body.model` (logged as a warn). Default is `claude-sonnet-4-6`; the Opus option is `claude-opus-4-8`, which serves the full 1M context window by default at standard $15/$75 pricing (no beta header, no premium). Legacy conversations whose `session.model` is the Opus 4.7 1M-context sentinel `claude-opus-4-7[1m]` still resolve: `createWithOptionalMcp` strips the suffix and attaches the `context-1m-2025-08-07` beta header for that path.
 
 ### 4.2 Context preparation (compression safeguard)
 
@@ -286,7 +286,7 @@ Three safeguards worth memorizing:
 2. **Compression-failure notice is explicit, not casual.** When Haiku itself fails, the fallback isn't a casual `[Earlier context removed — key findings may need to be re-investigated]` line anymore; it's a `<system_notice type="context_compression_failed">` block with the instruction *"You have NO record of what was discussed before this point. ASK THE USER to restate the relevant findings. Do NOT infer or invent details."*
 3. **Emergency progressive truncation.** If the post-Haiku result *still* exceeds the ceiling, a second loop drops the oldest preserved messages pair-aware (so a `tool_use` is never separated from its `tool_result`) until the budget is met or only `anchor + summary + 1 recent` remains.
 
-**1M-tier behaviour.** When the active conversation's model is `claude-opus-4-7[1m]`, `getContextBudget(model)` returns the 1M-tier thresholds (900K ceiling, 800K trim trigger, 500K anchor cap, 100K per-tool-result cap). Compression still runs through the same `compressOlderMessages` path, but normal investigations rarely cross 800K so the Haiku call typically never fires.
+**1M-tier behaviour.** When the active conversation's model is `claude-opus-4-8` (1M by default) OR the legacy `claude-opus-4-7[1m]` sentinel, `getContextBudget(model)` returns the 1M-tier thresholds (900K ceiling, 800K trim trigger, 500K anchor cap, 100K per-tool-result cap). The `isOneMillionContextModel(model)` predicate covers both paths. Compression still runs through the same `compressOlderMessages` path, but normal investigations rarely cross 800K so the Haiku call typically never fires.
 
 `validateAndRepairConversationShape()` runs *before* the Haiku call to catch orphaned tool blocks — this is the fix for the "tool_use ids were found without tool_result blocks" bug recorded in `_plans/checkpoint-compaction.md`.
 
@@ -797,7 +797,7 @@ The complete list lives in `docs/configuration.md`. The ones that directly shape
 
 | Env var | Default | What it controls |
 |---|---|---|
-| `NEO_CONTEXT_MAX_INPUT_TOKENS` | `180000` | Standard-tier hard ceiling — Anthropic API call must stay below. Auto-overridden to `NEO_CONTEXT_MAX_INPUT_TOKENS_1M` (900000) when the conversation's model id ends in `[1m]`. |
+| `NEO_CONTEXT_MAX_INPUT_TOKENS` | `180000` | Standard-tier hard ceiling — Anthropic API call must stay below. Auto-overridden to `NEO_CONTEXT_MAX_INPUT_TOKENS_1M` (900000) when the conversation runs on a 1M-window model (Opus 4.8 or legacy Opus 4.7 [1m]). |
 | `TRIM_TRIGGER_THRESHOLD` | `140000` | Standard-tier compression trigger. 1M-tier override: `TRIM_TRIGGER_THRESHOLD_1M` (default 800000). |
 | `PER_TOOL_RESULT_TOKEN_CAP` | `50000` | Max tokens per single `tool_result` block in-flight (standard tier). 1M-tier override: `PER_TOOL_RESULT_TOKEN_CAP_1M` (default 100000). |
 | `PERSISTENCE_TOOL_RESULT_TOKEN_CAP` | `10000` | Same, but for persisted form (smaller — favors readability). Not tiered. |
@@ -806,8 +806,9 @@ The complete list lives in `docs/configuration.md`. The ones that directly shape
 | `PRESERVED_RECENT_MESSAGES` | `10` | Tail kept verbatim during compression |
 | `MAX_TOKENS_DEFAULT` | `16384` | Per-turn output budget for plain chat (raised from 4096) |
 | `MAX_TOKENS_SKILL` | `24576` | Per-turn output budget for skill invocations |
-| `CLAUDE_DEFAULT_MODEL` | `claude-sonnet-4-6` | Default tier when no explicit selection is made |
-| `CLAUDE_OPUS_1M_MODEL` | `claude-opus-4-7[1m]` | Model id for the opt-in 1M-context tier |
+| `CLAUDE_DEFAULT_MODEL` | `claude-sonnet-4-6` | Default model when no explicit selection is made |
+| `CLAUDE_OPUS_MODEL` | `claude-opus-4-8` | Opus option the selector picks. 4.8 serves 1M context by default at standard $15/$75 pricing. |
+| `CLAUDE_OPUS_1M_MODEL` | `claude-opus-4-7[1m]` | **Legacy.** Resolves in-flight Opus 4.7 1M-context conversations; new conversations use `CLAUDE_OPUS_MODEL`. |
 | `NEO_CONVERSATION_STORE_MODE` | `v1` | One of `v1` / `dual-write` / `dual-read` / `v2` |
 | `NEO_BLOB_OFFLOAD_THRESHOLD_BYTES` | `256000` | Above this, tool result moves to blob storage |
 | `NEO_BLOB_RESOLVE_MAX_BYTES` | `20971520` | Cap for `get_full_tool_result` reads |

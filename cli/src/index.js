@@ -121,13 +121,16 @@ const MATRIX_QUOTES = [
 // ── Context tier selection ───────────────────────────────────
 //
 // Mirrors web/components/ContextTierSelector. The default tier
-// (200K) uses Sonnet; the opt-in 1M tier uses Opus 4.7 [1m] —
-// priced ~10x more, so the user has to ask for it explicitly.
+// ("200k") uses Sonnet; the opt-in "1m" tier uses Opus 4.8 —
+// priced ~5× more, so the user asks for it explicitly. The "200k"
+// / "1m" labels are kept for backward compatibility with running
+// shell scripts; the underlying tier is really a Sonnet-vs-Opus
+// model picker (Opus 4.8 serves 1M by default at standard rates).
 // Map kept local to the CLI because the cli/ and web/ projects
 // don't share imports (per CLAUDE.md project structure).
 const CONTEXT_TIERS = {
   "200k": "claude-sonnet-4-6",
-  "1m":   "claude-opus-4-7[1m]",
+  "1m":   "claude-opus-4-8",
 };
 
 function resolveContextTier() {
@@ -158,9 +161,8 @@ function printBanner(contextTier) {
   console.log(chalk.gray(`    [ ${quote.padEnd(38)} ]`));
   if (contextTier && contextTier !== "200k") {
     // Surface non-default tier so the cost is visible at every REPL
-    // launch. 200K is the default; 1M is highlighted because it costs
-    // ~10x more per token.
-    const label = contextTier === "1m" ? "1M context (Opus 4.7 \u2014 ~10x cost)" : contextTier;
+    // launch. "200k" \u2192 Sonnet; "1m" \u2192 Opus 4.8 (~5\u00d7 Sonnet cost).
+    const label = contextTier === "1m" ? "Opus 4.8 \u2014 1M context \u2014 ~5x Sonnet cost" : contextTier;
     console.log(chalk.yellow(`    [ ${label} ]`));
   }
   console.log(chalk.gray("\n    exit \u2014 quit  |  clear \u2014 reset context  |  history \u2014 list sessions  |  resume N \u2014 continue one\n"));

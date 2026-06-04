@@ -411,9 +411,9 @@ neo --session conv_abc123
 
 The banner highlights non-default tiers in yellow at REPL startup so the cost surface is visible at every launch.
 
-**API:** pass `"model": "claude-opus-4-7[1m]"` in the `/api/agent` request body on the first turn. The server persists it on the conversation root and ignores divergent `body.model` values on subsequent turns (logged as a warn — defence in depth against a hand-crafted request that tries to swap tiers mid-conversation).
+**API:** pass `"model": "claude-opus-4-8"` in the `/api/agent` request body on the first turn. The server persists it on the conversation root and ignores divergent `body.model` values on subsequent turns (logged as a warn — defence in depth against a hand-crafted request that tries to swap models mid-conversation).
 
-You can check your current token usage on the [Settings](#settings) page under the Usage tab. The per-user 2-hour and weekly budgets are calibrated to standard-tier (Opus 4.6, $15/Mtok input) pricing — heavy 1M-tier usage burns those caps roughly twice as fast. Admins can override via the `USAGE_LIMIT_*` env vars.
+You can check your current token usage on the [Settings](#settings) page under the Usage tab. The per-user 2-hour and weekly budgets are calibrated to Opus pricing ($15/Mtok input — same rate across Opus 4.6/4.7/4.8); Sonnet sessions are ~5× cheaper and won't hit these caps. Admins can override via the `USAGE_LIMIT_*` env vars.
 
 ### File Uploads (Web)
 
