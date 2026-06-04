@@ -314,11 +314,12 @@ See [`configuration.md`](./configuration.md) for the full list.
 | `NEO_ORG_CONTEXT_CONTAINER` | (none) | Blob container for the org-context addendum. When set together with `CLI_STORAGE_ACCOUNT`, the loader prefers blob storage over Key Vault and the application cap rises to 100,000 chars (vs the 25 KB Key Vault ceiling). The App Service managed identity needs `Storage Blob Data Contributor` on this container. |
 | `MAX_TOKENS_DEFAULT` | 16384 | Per-turn output budget for plain chat. Raised from 4096 in early 2026 — long publisher / hunt / digest responses were truncating mid-output. |
 | `MAX_TOKENS_SKILL` | 24576 | Larger budget for skill invocations. |
-| `CLAUDE_DEFAULT_MODEL` | `claude-sonnet-4-6` | Default context tier when no explicit selection is made. |
-| `CLAUDE_OPUS_1M_MODEL` | `claude-opus-4-7[1m]` | Model id used by the opt-in 1M-context tier selector. |
-| `NEO_CONTEXT_MAX_INPUT_TOKENS_1M` | 900000 | Hard input ceiling for 1M-tier conversations (env-tunable; standard-tier conversations stay on `NEO_CONTEXT_MAX_INPUT_TOKENS`, default 180K). |
-| `USAGE_LIMIT_2H_INPUT_TOKENS` | 670000 | Per-user 2-hour rolling budget. Calibrated to standard-tier Opus 4.6 pricing ($15/Mtok input). 1M-tier conversations (Opus 4.7 [1m]) cost ~$30/Mtok input, so heavy 1M users burn this cap roughly twice as fast — lower the override if you expect default-1M usage. |
-| `USAGE_LIMIT_WEEKLY_INPUT_TOKENS` | 6700000 | Per-user weekly rolling budget. Same pricing caveat as above. |
+| `CLAUDE_DEFAULT_MODEL` | `claude-sonnet-4-6` | Default model when no explicit selection is made. |
+| `CLAUDE_OPUS_MODEL` | `claude-opus-4-8` | Opus model the selector picks. 4.8 serves 1M context by default at standard $15/$75 pricing — no beta header, no premium. |
+| `CLAUDE_OPUS_1M_MODEL` | `claude-opus-4-7[1m]` | **Legacy.** Only used by in-flight conversations whose persisted `session.model` is the Opus 4.7 1M-context sentinel. New conversations resolve through `CLAUDE_OPUS_MODEL`. Remove once those sessions age out. |
+| `NEO_CONTEXT_MAX_INPUT_TOKENS_1M` | 900000 | Hard input ceiling for 1M-window conversations (Opus 4.8 OR legacy Opus 4.7 [1m]). Standard-window conversations (Sonnet) stay on `NEO_CONTEXT_MAX_INPUT_TOKENS`, default 180K. |
+| `USAGE_LIMIT_2H_INPUT_TOKENS` | 670000 | Per-user 2-hour rolling budget. Calibrated to Opus pricing ($15/Mtok input — same rate for Opus 4.6/4.7/4.8). Sonnet is ~5× cheaper, so Sonnet-heavy users won't hit this cap. |
+| `USAGE_LIMIT_WEEKLY_INPUT_TOKENS` | 6700000 | Per-user weekly rolling budget. Same calibration as above. |
 | `INJECTION_GUARD_MODE` | `monitor` | `monitor` logs only; `block` rejects 2+-pattern matches. |
 
 ### What to put in Key Vault

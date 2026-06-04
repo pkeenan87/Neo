@@ -12,7 +12,12 @@ export { SettingsPage } from './SettingsPage'
 export { IntegrationsPage } from './IntegrationsPage'
 export { IntegrationDetailPage } from './IntegrationDetailPage'
 export { FileAttachmentBar } from './FileAttachmentBar'
-export { ContextTierSelector, modelIdForTier, tierForModelId } from './ContextTierSelector'
+export {
+  ContextTierSelector,
+  modelIdForTier,
+  tierForModelId,
+  displayNameForTier,
+} from './ContextTierSelector'
 export type { ContextTier, ContextTierSelectorProps } from './ContextTierSelector'
 export { KeyValueList } from './KeyValueList'
 export type { KeyValueEntry, KeyValueListProps } from './KeyValueList'

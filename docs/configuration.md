@@ -155,10 +155,10 @@ INJECTION_GUARD_MODE=monitor
 
 | Constant | Value | Description |
 |----------|-------|-------------|
-| `DEFAULT_MODEL` | `claude-sonnet-4-6` | Default Claude model. Users can pick the 1M-context Opus 4.7 tier per-conversation in the web UI (selector next to the send button) or via `neo --context 1m` on the CLI. Selection is locked once the first message is sent — see [Context tier selection](#context-tier-selection). |
-| `CONTEXT_TOKEN_LIMIT` | 180,000 | Legacy constant retained for backward compatibility — current code reads `getContextBudget(model).neoContextMaxInputTokens` so the value automatically tracks the standard-tier (180K) or 1M-tier (900K) ceiling. |
-| `TRIM_TRIGGER_THRESHOLD` | 140,000 | Token count that triggers conversation compression (standard tier; the 1M tier raises this to 800K via `ONE_MILLION_CONTEXT_BUDGET`). |
-| `PER_TOOL_RESULT_TOKEN_CAP` | 50,000 | Maximum tokens per individual tool result before truncation. 1M-tier conversations raise to 100K. |
+| `DEFAULT_MODEL` | `claude-sonnet-4-6` | Default Claude model. Users can pick the Opus option (Opus 4.8, 1M context by default) per-conversation in the web UI (selector next to the send button) or via `neo --context 1m` on the CLI. Selection is locked once the first message is sent — see [Context tier selection](#context-tier-selection). |
+| `CONTEXT_TOKEN_LIMIT` | 180,000 | Legacy constant retained for backward compatibility — current code reads `getContextBudget(model).neoContextMaxInputTokens` so the value automatically tracks the Sonnet (180K) or Opus 1M (900K) ceiling. |
+| `TRIM_TRIGGER_THRESHOLD` | 140,000 | Token count that triggers conversation compression (Sonnet; 1M-window models raise this to 800K via `ONE_MILLION_CONTEXT_BUDGET`). |
+| `PER_TOOL_RESULT_TOKEN_CAP` | 50,000 | Maximum tokens per individual tool result before truncation. 1M-window conversations raise to 100K. |
 | `PRESERVED_RECENT_MESSAGES` | 10 | Number of recent messages always preserved during compression |
 | `USAGE_LIMITS.warningThreshold` | 0.80 | Usage fraction at which a warning is sent to the client |
 
@@ -169,41 +169,43 @@ INJECTION_GUARD_MODE=monitor
 | `MAX_TOKENS_DEFAULT` | 16384 | Per-turn output budget for plain chat. Raised from 4096 in early 2026 to stop publisher-analysis-style responses from truncating mid-output. Sits well under the 32K Opus 4.7 / 64K Sonnet 4.6 ceilings. |
 | `MAX_TOKENS_SKILL` | 24576 | Larger output budget for skill invocations (structured payloads). |
 | `MAX_TOKENS_CEILING_OVERRIDE` | unset | Optional hard cap regardless of per-model ceilings — useful for cost-controlled production environments. |
-| `NEO_CONTEXT_MAX_INPUT_TOKENS` | 180000 | Hard input-token ceiling enforced AFTER compression for **standard-tier** conversations (Sonnet, Opus 4.6, Opus 4.7 200K). Must stay < 200000 (Anthropic's prompt-too-long cap). |
+| `NEO_CONTEXT_MAX_INPUT_TOKENS` | 180000 | Hard input-token ceiling enforced AFTER compression for Sonnet conversations. Must stay < 200000 (Anthropic's prompt-too-long cap for 200K-window models). |
 | `HAIKU_INPUT_MAX_TOKENS` | 160000 | Pre-trim cap for the Haiku compression call's own input. Always 160K regardless of tier — Haiku itself is a 200K-window model. |
 | `FIRST_MESSAGE_MAX_TOKENS` | 100000 | When the anchor (first user message) alone exceeds this, Neo replaces it with a Haiku-generated summary inside a `<system_notice type="anchor_summarised">` envelope. The downstream model is taught (via system prompt) to treat the summary as a lossy reminder, not authoritative quotation. |
 | `REMEDIATE_MAX_EXPLICIT_MESSAGES` | 20 | Cap on `messages[]` array size accepted by `remediate_abnormal_messages`. Exceeding the cap surfaces a `BATCH_TOO_LARGE` tool_result to the agent instead of reaching the vendor API. |
 
-**1M-context tier overrides** (env-tunable; only active when the conversation's model id ends in `[1m]`):
+**1M-context budget overrides** (env-tunable; applied when the conversation runs on a 1M-window model — Opus 4.8 or legacy Opus 4.7 [1m]):
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `NEO_CONTEXT_MAX_INPUT_TOKENS_1M` | 900000 | Hard input-token ceiling for 1M-tier conversations. 100K headroom below the 1M model limit for system prompt + tool schemas + output budget. |
-| `TRIM_TRIGGER_THRESHOLD_1M` | 800000 | Compression trigger for 1M-tier conversations (same ~78% ratio to the ceiling that the standard tier uses). |
-| `FIRST_MESSAGE_MAX_TOKENS_1M` | 500000 | Anchor-summary trigger for 1M-tier. Allows much larger paste-ins (PCAPs, audit dumps) inline. |
-| `PER_TOOL_RESULT_TOKEN_CAP_1M` | 100000 | Per-result truncation cap for 1M-tier. Doubled from the standard cap so a single KQL pivot can stay inline without forcing a `get_full_tool_result` round-trip. |
+| `NEO_CONTEXT_MAX_INPUT_TOKENS_1M` | 900000 | Hard input-token ceiling for 1M-window conversations. 100K headroom below the 1M model limit for system prompt + tool schemas + output budget. |
+| `TRIM_TRIGGER_THRESHOLD_1M` | 800000 | Compression trigger for 1M-window conversations (same ~78% ratio to the ceiling that Sonnet uses). |
+| `FIRST_MESSAGE_MAX_TOKENS_1M` | 500000 | Anchor-summary trigger for 1M-window conversations. Allows much larger paste-ins (PCAPs, audit dumps) inline. |
+| `PER_TOOL_RESULT_TOKEN_CAP_1M` | 100000 | Per-result truncation cap for 1M-window conversations. Doubled from the Sonnet cap so a single KQL pivot can stay inline without forcing a `get_full_tool_result` round-trip. |
 
-The standard-tier input-token budgets nest: `TRIM_TRIGGER_THRESHOLD < NEO_CONTEXT_MAX_INPUT_TOKENS < 200000`. The 1M-tier values follow the same pattern at higher scale: `TRIM_TRIGGER_THRESHOLD_1M (800K) < NEO_CONTEXT_MAX_INPUT_TOKENS_1M (900K) < 1000000` (Anthropic's 1M-context hard cap). Compression starts at the trigger; the ceiling is enforced afterwards by dropping older turn pairs.
+The Sonnet input-token budgets nest: `TRIM_TRIGGER_THRESHOLD < NEO_CONTEXT_MAX_INPUT_TOKENS < 200000`. The 1M-window values follow the same pattern at higher scale: `TRIM_TRIGGER_THRESHOLD_1M (800K) < NEO_CONTEXT_MAX_INPUT_TOKENS_1M (900K) < 1000000` (Anthropic's 1M-context hard cap). Compression starts at the trigger; the ceiling is enforced afterwards by dropping older turn pairs.
 
 ### Context tier selection
 
-Each conversation is locked to one of two context tiers, chosen by the user before the first message:
+Each conversation is locked to one of two models, chosen by the user before the first message:
 
-| Tier | Model id | Input pricing | Output pricing | When to use |
+| Option | Model id | Input pricing | Output pricing | When to use |
 |------|----------|---------------|----------------|-------------|
-| **200K** (default) | `claude-sonnet-4-6` | $3 / Mtok | $15 / Mtok | Standard investigations. Compression triggers at 140K, ceiling at 180K. |
-| **1M context** | `claude-opus-4-7[1m]` | $30 / Mtok | $150 / Mtok | Long investigations that need huge in-context history. ~10× cost of the default. |
+| **Sonnet** (default) | `claude-sonnet-4-6` | $3 / Mtok | $15 / Mtok | Standard investigations. Compression triggers at 140K, ceiling at 180K. |
+| **Opus** | `claude-opus-4-8` | $15 / Mtok | $75 / Mtok | Heavier reasoning, 1M-context investigations. ~5× the Sonnet rate. 1M is the default window — no beta header, no premium. |
+
+**Legacy:** conversations whose persisted `session.model` is `claude-opus-4-7[1m]` still resolve through the same `'1m'` tier in the selector. New conversations land on Opus 4.8.
 
 **Selection UX:**
-- Web UI: `<ContextTierSelector>` next to the chat send button. Disabled the moment the first user message is sent.
-- CLI: `neo --context 1m` (or `neo prompt --context 1m "..."`). Default tier is 200K when the flag is absent.
+- Web UI: `<ContextTierSelector>` next to the chat send button (labelled Sonnet / Opus). Disabled the moment the first user message is sent.
+- CLI: `neo --context 1m` (or `neo prompt --context 1m "..."`). Default is Sonnet when the flag is absent. The literal `'200k'` / `'1m'` tier names are kept for shell-script compatibility; they now mean Sonnet / Opus respectively.
 
 **Server-side enforcement:**
 - The selected model id is persisted on the Cosmos conversation root as `model`.
-- On subsequent turns, the agent route reads `session.model` and ignores any divergent `body.model` (logged as a `Ignoring body.model — session model is locked` warn). Defence in depth against a hand-crafted request that tries to swap tiers mid-conversation.
-- The 1M tier automatically attaches the `context-1m-2025-08-07` beta header to every Anthropic API call.
+- On subsequent turns, the agent route reads `session.model` and ignores any divergent `body.model` (logged as a `Ignoring body.model — session model is locked` warn). Defence in depth against a hand-crafted request that tries to swap models mid-conversation.
+- For legacy `claude-opus-4-7[1m]` resumes only, `createWithOptionalMcp` strips the `[1m]` suffix and attaches the `context-1m-2025-08-07` beta header. Opus 4.8 needs neither — 1M is the model's default window.
 
-**Budget impact:** the per-user `USAGE_LIMIT_2H_INPUT_TOKENS` / `USAGE_LIMIT_WEEKLY_INPUT_TOKENS` defaults are calibrated to standard Opus 4.6 pricing ($15/Mtok). A heavy 1M-tier user can exhaust those caps in roughly half the time. Lower the env-override values for users you expect to default to the 1M tier, or rely on opt-in selection per-conversation.
+**Budget impact:** the per-user `USAGE_LIMIT_2H_INPUT_TOKENS` / `USAGE_LIMIT_WEEKLY_INPUT_TOKENS` defaults are calibrated to Opus pricing ($15/Mtok input — same rate across Opus 4.6/4.7/4.8). Sonnet sessions consume the budgets ~5× more slowly so Sonnet-heavy users won't hit them.
 
 ### API Key Management
 

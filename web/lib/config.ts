@@ -41,9 +41,12 @@ export const NEO_CONTEXT_MAX_INPUT_TOKENS = parsePositiveInt("NEO_CONTEXT_MAX_IN
 export const HAIKU_INPUT_MAX_TOKENS = parsePositiveInt("HAIKU_INPUT_MAX_TOKENS", 160_000);
 export const FIRST_MESSAGE_MAX_TOKENS = parsePositiveInt("FIRST_MESSAGE_MAX_TOKENS", 100_000);
 
-// 1M-context tier (Opus 4.7 [1m]) overrides. Each constant is the
-// equivalent of the standard-tier value scaled to the 1M window with
-// ~100K headroom for system prompt + tool schemas + output budget.
+// 1M-context budget overrides. Used by:
+//   - Opus 4.7 1M-context variant (`claude-opus-4-7[1m]`) — legacy
+//     sessions still using the `[1m]` sentinel + context-1m beta
+//   - Opus 4.8 (`claude-opus-4-8`) — 1M is the model's default window
+//     so no beta header is needed; we still cap the input budget at
+//     900K to leave headroom and to keep cost predictable.
 // HAIKU_INPUT_MAX is intentionally NOT raised here — Haiku itself is
 // still a 200K-window model, so its pre-trim ceiling stays at 160K.
 // PER_TOOL_RESULT_TOKEN_CAP doubles so KQL pivots can stay inline
@@ -55,12 +58,18 @@ export const ONE_MILLION_CONTEXT_BUDGET = Object.freeze({
   perToolResultTokenCap: parsePositiveInt("PER_TOOL_RESULT_TOKEN_CAP_1M", 100_000),
 });
 
+// Models whose default context window is 1M (no `[1m]` sentinel, no
+// beta header needed). Opus 4.8 is the first such model; future
+// large-window defaults land here.
+const ALWAYS_1M_MODELS: ReadonlySet<string> = new Set(["claude-opus-4-8"]);
+
 /**
  * Effective context budget for a given model id. Standard models
  * (Sonnet, Opus 4.6, Opus 4.7 200K) use the default constants; the
- * 1M-context Opus 4.7 variant uses ONE_MILLION_CONTEXT_BUDGET. Used
- * by prepareMessages in context-manager.ts to select per-call
- * thresholds without invasive const rewrites at every callsite.
+ * legacy `[1m]`-suffixed variant AND any model in ALWAYS_1M_MODELS
+ * use ONE_MILLION_CONTEXT_BUDGET. Used by prepareMessages in
+ * context-manager.ts to select per-call thresholds without invasive
+ * const rewrites at every callsite.
  */
 export interface ContextBudget {
   neoContextMaxInputTokens: number;
@@ -70,7 +79,7 @@ export interface ContextBudget {
 }
 
 export function getContextBudget(model: string): ContextBudget {
-  if (model.endsWith("[1m]")) {
+  if (isOneMillionContextModel(model)) {
     return {
       neoContextMaxInputTokens: ONE_MILLION_CONTEXT_BUDGET.neoContextMaxInputTokens,
       trimTriggerThreshold: ONE_MILLION_CONTEXT_BUDGET.trimTriggerThreshold,
@@ -213,6 +222,7 @@ export const MODEL_OUTPUT_CEILINGS: Record<string, number> = {
   "claude-opus-4-6": 32_000,
   "claude-opus-4-7": 32_000,
   "claude-opus-4-7[1m]": 32_000,
+  "claude-opus-4-8": 32_000,
   "claude-sonnet-4-6": 64_000,
   "claude-haiku-4-5-20251001": 8_192,
 };
@@ -269,20 +279,30 @@ export const DEFAULT_MODEL = (process.env.CLAUDE_DEFAULT_MODEL || "claude-sonnet
 
 export const SUPPORTED_MODELS: Record<string, ModelPreference> = {
   "Sonnet (default)": (process.env.CLAUDE_SONNET_MODEL || "claude-sonnet-4-6") as ModelPreference,
-  "Opus": (process.env.CLAUDE_OPUS_MODEL || "claude-opus-4-6") as ModelPreference,
-  // Opus 4.7 with 1M-token context. Surfaced as an opt-in tier in the
-  // chat UI (a 200K / 1M selector next to the send button) because the
-  // 1M tier is priced at 2× the standard rate. The selector is locked
-  // after the first message so a long-running conversation can't
-  // accidentally switch tiers mid-investigation.
-  "Opus 4.7 (1M context)": (process.env.CLAUDE_OPUS_1M_MODEL || "claude-opus-4-7[1m]") as ModelPreference,
+  // Opus is now the Opus 4.8 model. It serves the full 1M-token
+  // context window by default with no beta header and no premium —
+  // the previous tier split between Opus 4.6 (200K) and Opus 4.7 1M
+  // (2× cost) is gone. The chat UI's selector picks Sonnet vs Opus
+  // at conversation start and locks afterward; the cost story is now
+  // model-level (Opus ~5× Sonnet), not tier-level.
+  "Opus": (process.env.CLAUDE_OPUS_MODEL || "claude-opus-4-8") as ModelPreference,
+  // Legacy entry kept so in-flight conversations whose persisted
+  // session.model is "claude-opus-4-7[1m]" still resolve. New
+  // conversations should never land here. Remove once the longest-
+  // running [1m] conversation has aged past Cosmos TTL.
+  "Opus (1M, legacy)": (process.env.CLAUDE_OPUS_1M_MODEL || "claude-opus-4-7[1m]") as ModelPreference,
 };
 
-// True when the given model id is the 1M-context Opus 4.7 variant.
-// Used to (a) attach the context-1m beta header, (b) switch context-
-// manager thresholds, and (c) skip the standard boot guard.
+// True when the model serves a 1M-token context window. Two sources:
+//   - Legacy `[1m]` sentinel (Opus 4.7 1M-context variant) — requires
+//     the context-1m-2025-08-07 beta header to unlock.
+//   - ALWAYS_1M_MODELS (Opus 4.8 and later) — 1M is the default, no
+//     header required.
+// Callers use this to (a) decide whether to switch context-manager
+// thresholds to ONE_MILLION_CONTEXT_BUDGET and (b) decide whether to
+// skip the standard boot guard.
 export function isOneMillionContextModel(model: string): boolean {
-  return model.endsWith("[1m]");
+  return model.endsWith("[1m]") || ALWAYS_1M_MODELS.has(model);
 }
 
 export const HAIKU_MODEL = process.env.CLAUDE_HAIKU_MODEL || "claude-haiku-4-5-20251001";
@@ -292,6 +312,9 @@ export const HAIKU_MODEL = process.env.CLAUDE_HAIKU_MODEL || "claude-haiku-4-5-2
 export const TOKEN_PRICING: Record<string, { input: number; output: number }> = {
   "claude-opus-4-6":             { input: 15,   output: 75 },
   "claude-opus-4-7":             { input: 15,   output: 75 },
+  // Opus 4.8: same $15/$75 rate as Opus 4.7 standard. 1M context is
+  // the default with no long-context premium.
+  "claude-opus-4-8":             { input: 15,   output: 75 },
   // 1M-context tier: input and output prices are 2× the standard
   // Opus 4.7 rate per Anthropic's published pricing.
   "claude-opus-4-7[1m]":         { input: 30,   output: 150 },

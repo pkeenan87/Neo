@@ -24,7 +24,11 @@ import type { Message, AgentLoopResult, AgentCallbacks, PendingTool, ModelPrefer
 // Newer header supersedes mcp-client-2025-04-04; both still work.
 const MCP_CLIENT_BETA = "mcp-client-2025-11-20" as const;
 // Beta header required to unlock Opus 4.7's 1M-token context window.
-// Attached only when the active model id ends in `[1m]`.
+// Attached ONLY when the active model id ends in `[1m]` — i.e. the
+// legacy Opus 4.7 1M-context sentinel. Opus 4.8 serves 1M by default
+// with no header required, so we deliberately skip the beta there
+// (sending unknown betas to a model that doesn't expect them risks
+// future API rejections).
 const CONTEXT_1M_BETA = "context-1m-2025-08-07" as const;
 // Beta header that enables 1-hour TTL on prompt-cache breakpoints
 // (the default is 5 minutes). 2× write cost but dramatically better
@@ -322,13 +326,17 @@ async function createWithOptionalMcp(
   const needsMcp = mcpServers.length > 0;
 
   // The `[1m]` suffix on the model id is a Neo-internal sentinel for
-  // the 1M-context Opus 4.7 tier; the Anthropic API only knows the
-  // bare `claude-opus-4-7` id, and unlocks the 1M context via the
+  // the legacy Opus 4.7 1M-context tier; the Anthropic API only knows
+  // the bare `claude-opus-4-7` id and unlocks the 1M context via the
   // `context-1m-2025-08-07` beta header (attached by resolveBetas
   // when the sentinel matches). Strip the suffix at the API boundary
   // so the upstream call doesn't 404. The sentinel still drives
   // beta-header selection upstream because resolveBetas is called
   // with the original `modelId` before stripping.
+  //
+  // Opus 4.8 (`claude-opus-4-8`) does NOT carry the sentinel and is
+  // passed through unchanged — 4.8 serves 1M by default, no header,
+  // no strip.
   const apiModelId = modelId.endsWith("[1m]") ? modelId.slice(0, -4) : modelId;
 
   // Every call routes through the beta API now — we always attach
