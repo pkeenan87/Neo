@@ -314,6 +314,8 @@ Three things to notice:
 - **AbortError propagates.** The user clicking "Stop" must take effect within the current API call.
 - **`signal?.aborted` is also checked at the top of every loop iteration** (line 244), so abort wins even between iterations.
 
+**Every Anthropic call is a stream under the hood.** The Anthropic SDK enforces a hard 10-minute wall-clock ceiling on non-streaming `messages.create()` calls. Skills routinely exceeded that on Opus 4.8 (larger output budget × default `effort=high` × multi-step reasoning), surfacing as `"Streaming is required for operations that may take longer than 10 minutes."` `createBetaWithRetry` now always calls `client.beta.messages.create({ ...params, stream: true })` and runs the resulting event stream through `aggregateBetaStream`, which walks `message_start` / `content_block_start` / `content_block_delta` / `content_block_stop` / `message_delta` / `message_stop` events and produces the same `Message` shape the rest of the loop has always consumed. The 10-minute ceiling is gone; the per-event timeout still catches a stalled upstream. This is invisible to the client today — Neo doesn't surface partial tokens via SSE — but it removes the principal blocker for long-running investigations and skill runs. Mid-stream errors (e.g. a 529 thrown after some events have arrived) flow into the same retry filter as request-time errors; the retried attempt discards the partial output.
+
 Token usage is recorded every iteration (in-memory) and an `onUsage` callback fires for the SSE stream:
 
 ```ts

@@ -7,7 +7,22 @@ const createMock = vi.fn();
 vi.mock("@anthropic-ai/sdk", () => ({
   default: class MockAnthropic {
     messages = { create: (params: unknown) => createMock(params) };
-    beta = { messages: { create: (params: unknown) => createMock(params) } };
+    // Streaming wrapper — production calls .create({ stream: true })
+    // and aggregates events. Delegate to the shared mock so
+    // params capture still works for the assertions below.
+    beta = {
+      messages: {
+        create: async (params: unknown) => {
+          const message = await createMock(params);
+          return {
+            async *[Symbol.asyncIterator]() {
+              yield { type: "message_start", message };
+              yield { type: "message_stop" };
+            },
+          };
+        },
+      },
+    };
   },
 }));
 

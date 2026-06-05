@@ -246,14 +246,165 @@ async function createWithRetry(
 //  of the loop stays uniform.
 // ─────────────────────────────────────────────────────────────
 
+// ─── Beta stream accumulator ──────────────────────────────────
+//
+// The SDK enforces a 10-minute wall-clock ceiling on every
+// non-streaming `messages.create` call. Skills routinely exceed
+// that on Opus 4.8 (large output budget + default effort=high +
+// multi-step reasoning), surfacing as:
+//   "Streaming is required for operations that may take longer
+//    than 10 minutes."
+// Fix: switch every call to streaming and aggregate server-side.
+// The aggregated Message shape is identical to what `.create()`
+// returned, so downstream consumers (cache breakpoints, content-
+// block parsing, MCP audit, token-usage logging) need no changes.
+//
+// The beta `messages` class doesn't expose the stable API's
+// `.stream()` helper — only `.create({ stream: true })` returning
+// a raw event Stream — so we walk the events here.
+//
+// We override the SDK's default 600_000 ms timeout to 30 min so a
+// genuinely long turn can complete; the per-event timeout still
+// catches a server-side stall.
+const STREAM_TIMEOUT_MS = 30 * 60 * 1000;
+
+interface AccumulatorContentBlock {
+  type: string;
+  text?: string;
+  input?: unknown;
+  [k: string]: unknown;
+}
+
+/**
+ * Accumulate a Beta message stream into a single Message-shaped
+ * object. Handles text_delta, input_json_delta, and pass-through
+ * for content blocks that arrive complete at content_block_start
+ * (mcp_tool_use, mcp_tool_result, thinking, etc.).
+ *
+ * Aborts cleanly when the signal fires — the stream's underlying
+ * fetch is already cancelled by the SDK; we just stop accumulating
+ * and let `signal.throwIfAborted()` raise.
+ */
+async function aggregateBetaStream(
+  stream: AsyncIterable<Anthropic.Beta.Messages.BetaRawMessageStreamEvent>,
+  signal?: AbortSignal,
+): Promise<Anthropic.Messages.Message> {
+  let message: Record<string, unknown> | null = null;
+  const blocks: AccumulatorContentBlock[] = [];
+  // Per-index tool_use partial-JSON buffers — joined + parsed at
+  // content_block_stop.
+  const toolInputBuffers = new Map<number, string>();
+
+  for await (const event of stream) {
+    signal?.throwIfAborted();
+
+    switch (event.type) {
+      case "message_start": {
+        const start = event as unknown as { message: Record<string, unknown> };
+        message = { ...start.message, content: blocks };
+        // Seed the blocks buffer from anything the start event
+        // already carries. The real Anthropic protocol always sends
+        // `content: []` here and then streams content_block_*
+        // events, but test wrappers (and forward-compat servers)
+        // can short-circuit by delivering the complete message in
+        // one event. Without seeding, that content would be lost
+        // to the empty buffer.
+        const startContent = start.message.content;
+        if (Array.isArray(startContent)) {
+          for (const block of startContent) {
+            blocks.push(block as AccumulatorContentBlock);
+          }
+        }
+        break;
+      }
+      case "content_block_start": {
+        const e = event as unknown as { index: number; content_block: AccumulatorContentBlock };
+        // Deep-ish copy so deltas mutate our buffer, not the event.
+        blocks[e.index] = { ...e.content_block };
+        if (e.content_block.type === "text" && typeof blocks[e.index].text !== "string") {
+          blocks[e.index].text = "";
+        }
+        break;
+      }
+      case "content_block_delta": {
+        const e = event as { index: number; delta: { type: string; text?: string; partial_json?: string } };
+        const block = blocks[e.index];
+        if (!block) break;
+        if (e.delta.type === "text_delta" && typeof e.delta.text === "string") {
+          block.text = (block.text ?? "") + e.delta.text;
+        } else if (e.delta.type === "input_json_delta" && typeof e.delta.partial_json === "string") {
+          toolInputBuffers.set(e.index, (toolInputBuffers.get(e.index) ?? "") + e.delta.partial_json);
+        }
+        // thinking_delta, signature_delta and other future delta
+        // types pass through silently — we only accumulate the
+        // fields the agent loop reads downstream.
+        break;
+      }
+      case "content_block_stop": {
+        const e = event as { index: number };
+        const buf = toolInputBuffers.get(e.index);
+        if (buf !== undefined && buf.length > 0) {
+          try {
+            blocks[e.index].input = JSON.parse(buf);
+          } catch {
+            // Leave input as whatever the start event provided
+            // (often `{}`) — content_block_stop without a valid
+            // JSON buffer means the model emitted a zero-arg
+            // tool call.
+          }
+          toolInputBuffers.delete(e.index);
+        }
+        break;
+      }
+      case "message_delta": {
+        const e = event as unknown as { delta: Record<string, unknown>; usage?: Record<string, unknown> };
+        if (!message) break;
+        // Top-level fields land in message.delta (stop_reason,
+        // stop_sequence, container).
+        Object.assign(message, e.delta);
+        // Usage at this stage carries the FINAL output_tokens;
+        // merge with the input_tokens / cache_* recorded at
+        // message_start.
+        if (e.usage) {
+          const prior = (message.usage as Record<string, unknown> | undefined) ?? {};
+          message.usage = { ...prior, ...e.usage };
+        }
+        break;
+      }
+      case "message_stop":
+        // No payload — the stream is done.
+        break;
+      default:
+        // Forward-compatible: unknown event types are ignored.
+        break;
+    }
+  }
+
+  if (!message) {
+    throw new Error("Stream ended without emitting a message_start event");
+  }
+  return message as unknown as Anthropic.Messages.Message;
+}
+
 async function createBetaWithRetry(
   params: Anthropic.Beta.Messages.MessageCreateParamsNonStreaming,
   signal?: AbortSignal,
 ): Promise<Anthropic.Messages.Message> {
   for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
     try {
-      const resp = await client.beta.messages.create(params, { signal });
-      return resp as unknown as Anthropic.Messages.Message;
+      // Always stream. The non-streaming path is capped at 10
+      // minutes by the SDK; skills + deep Opus 4.8 turns routinely
+      // exceed that. We then aggregate to the same Message shape
+      // the rest of the loop already consumes.
+      const streamParams = {
+        ...params,
+        stream: true as const,
+      } as Anthropic.Beta.Messages.MessageCreateParamsStreaming;
+      const stream = await client.beta.messages.create(streamParams, {
+        signal,
+        timeout: STREAM_TIMEOUT_MS,
+      });
+      return await aggregateBetaStream(stream, signal);
     } catch (err: unknown) {
       if ((err as Error).name === "AbortError") throw err;
       const status = (err as { status?: number }).status;

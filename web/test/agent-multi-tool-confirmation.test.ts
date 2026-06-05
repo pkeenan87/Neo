@@ -6,7 +6,20 @@ vi.mock("@anthropic-ai/sdk", () => {
   return {
     default: class MockAnthropic {
       messages = { create: mockCreate };
-      beta = { messages: { create: mockCreate } };
+      // Streaming wrapper — see agent-max-tokens-handling.test.ts.
+      beta = {
+        messages: {
+          create: async (params: unknown) => {
+            const message = await mockCreate(params);
+            return {
+              async *[Symbol.asyncIterator]() {
+                yield { type: "message_start", message };
+                yield { type: "message_stop" };
+              },
+            };
+          },
+        },
+      };
       constructor(_opts?: unknown) {}
     },
   };

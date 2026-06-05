@@ -6,7 +6,24 @@ vi.mock('@anthropic-ai/sdk', () => {
   return {
     default: class MockAnthropic {
       messages = { create: mockCreate }
-      beta = { messages: { create: mockCreate } }
+      // Production now always calls `client.beta.messages.create({
+      // stream: true })` and aggregates events. Wrap the shared mock
+      // so it returns the streaming shape `aggregateBetaStream`
+      // consumes: a Promise that resolves to an AsyncIterable of
+      // {message_start, message_stop}.
+      beta = {
+        messages: {
+          create: async (params: unknown) => {
+            const message = await mockCreate(params)
+            return {
+              async *[Symbol.asyncIterator]() {
+                yield { type: "message_start", message }
+                yield { type: "message_stop" }
+              },
+            }
+          },
+        },
+      }
       constructor(_opts?: unknown) {}
     },
   }
