@@ -49,9 +49,20 @@ const {
     capturedStableCalls.push(params);
     return buildResponse(params);
   });
-  const betaCreateMock = vi.fn(async (params: { model: string }) => {
+  // Production now always calls `client.beta.messages.create({ ...,
+  // stream: true })`. The mock returns an AsyncIterable that emits a
+  // single message_start (carrying the whole Message) + message_stop
+  // so `aggregateBetaStream` re-assembles the expected Message shape.
+  // Implementation lives in test/helpers/mock-beta-stream.ts.
+  const betaCreateMock = vi.fn((params: { model: string }) => {
     capturedBetaCalls.push(params);
-    return buildResponse(params);
+    const message = buildResponse(params);
+    return {
+      async *[Symbol.asyncIterator]() {
+        yield { type: "message_start", message };
+        yield { type: "message_stop" };
+      },
+    };
   });
 
   const enforceMock = vi.fn((_role: string, _server: string, _tool: string) => true);
@@ -261,18 +272,27 @@ describe("agent loop — MCP routing", () => {
 
 describe("agent loop — MCP audit emission", () => {
   function makeBetaResponseWithMcpBlocks(blocks: unknown[]): void {
-    // The beta mock returns the shared response wrapper; rewrite its
-    // content to inject the MCP blocks for this case.
-    betaCreateMock.mockImplementationOnce(async (params: { model: string }) => ({
-      id: "msg_01",
-      type: "message" as const,
-      role: "assistant" as const,
-      model: params.model,
-      content: blocks,
-      stop_reason: "end_turn" as const,
-      stop_sequence: null,
-      usage: { input_tokens: 10, output_tokens: 2 },
-    }));
+    // Rewrite the streaming mock so this one turn yields a message
+    // whose content is the MCP blocks under test. Same async-iter
+    // wire format as the default mock — see hoisted helper.
+    betaCreateMock.mockImplementationOnce((params: { model: string }) => {
+      const message = {
+        id: "msg_01",
+        type: "message" as const,
+        role: "assistant" as const,
+        model: params.model,
+        content: blocks,
+        stop_reason: "end_turn" as const,
+        stop_sequence: null,
+        usage: { input_tokens: 10, output_tokens: 2 },
+      };
+      return {
+        async *[Symbol.asyncIterator]() {
+          yield { type: "message_start", message };
+          yield { type: "message_stop" };
+        },
+      };
+    });
   }
 
   it("emits one mcp_invocation event per mcp_tool_use block with result=success", async () => {
@@ -405,30 +425,38 @@ describe("agent loop — MCP sanitize on history-append", () => {
     // Response with one MCP pair — content is plain (no injection
     // markers); envelope should still wrap it because the trust
     // boundary tag is informational, not gated on `flagged`.
-    betaCreateMock.mockImplementationOnce(async (params: { model: string }) => ({
-      id: "msg_01",
-      type: "message" as const,
-      role: "assistant" as const,
-      model: params.model,
-      content: [
-        {
-          type: "mcp_tool_use",
-          id: "tu_sanitize_1",
-          server_name: "wiz",
-          name: "wiz_get_issues",
-          input: {},
+    betaCreateMock.mockImplementationOnce((params: { model: string }) => {
+      const message = {
+        id: "msg_01",
+        type: "message" as const,
+        role: "assistant" as const,
+        model: params.model,
+        content: [
+          {
+            type: "mcp_tool_use",
+            id: "tu_sanitize_1",
+            server_name: "wiz",
+            name: "wiz_get_issues",
+            input: {},
+          },
+          {
+            type: "mcp_tool_result",
+            tool_use_id: "tu_sanitize_1",
+            is_error: false,
+            content: "A benign Wiz issue summary",
+          },
+        ],
+        stop_reason: "end_turn" as const,
+        stop_sequence: null,
+        usage: { input_tokens: 10, output_tokens: 2 },
+      };
+      return {
+        async *[Symbol.asyncIterator]() {
+          yield { type: "message_start", message };
+          yield { type: "message_stop" };
         },
-        {
-          type: "mcp_tool_result",
-          tool_use_id: "tu_sanitize_1",
-          is_error: false,
-          content: "A benign Wiz issue summary",
-        },
-      ],
-      stop_reason: "end_turn" as const,
-      stop_sequence: null,
-      usage: { input_tokens: 10, output_tokens: 2 },
-    }));
+      };
+    });
 
     const result = await runAgentLoop(
       [{ role: "user", content: "hi" }],
@@ -495,36 +523,44 @@ describe("agent loop — MCP sanitize survives destructive-tool slice (B1)", () 
     // Before B1, the slice was taken from raw `response.content`,
     // throwing away the sanitized MCP envelope. After B1, it
     // slices the sanitized content so the envelope survives.
-    betaCreateMock.mockImplementationOnce(async (params: { model: string }) => ({
-      id: "msg_01",
-      type: "message" as const,
-      role: "assistant" as const,
-      model: params.model,
-      content: [
-        {
-          type: "mcp_tool_use",
-          id: "tu_mcp_1",
-          server_name: "wiz",
-          name: "wiz_get_issues",
-          input: {},
+    betaCreateMock.mockImplementationOnce((params: { model: string }) => {
+      const message = {
+        id: "msg_01",
+        type: "message" as const,
+        role: "assistant" as const,
+        model: params.model,
+        content: [
+          {
+            type: "mcp_tool_use",
+            id: "tu_mcp_1",
+            server_name: "wiz",
+            name: "wiz_get_issues",
+            input: {},
+          },
+          {
+            type: "mcp_tool_result",
+            tool_use_id: "tu_mcp_1",
+            is_error: false,
+            content: "Wiz issue summary content",
+          },
+          {
+            type: "tool_use",
+            id: "tu_destructive",
+            name: "isolate_machine",
+            input: { machineId: "m1" },
+          },
+        ],
+        stop_reason: "tool_use" as const,
+        stop_sequence: null,
+        usage: { input_tokens: 10, output_tokens: 2 },
+      };
+      return {
+        async *[Symbol.asyncIterator]() {
+          yield { type: "message_start", message };
+          yield { type: "message_stop" };
         },
-        {
-          type: "mcp_tool_result",
-          tool_use_id: "tu_mcp_1",
-          is_error: false,
-          content: "Wiz issue summary content",
-        },
-        {
-          type: "tool_use",
-          id: "tu_destructive",
-          name: "isolate_machine",
-          input: { machineId: "m1" },
-        },
-      ],
-      stop_reason: "tool_use" as const,
-      stop_sequence: null,
-      usage: { input_tokens: 10, output_tokens: 2 },
-    }));
+      };
+    });
 
     const result = await runAgentLoop(
       [{ role: "user", content: "isolate m1 using wiz context" }],
@@ -619,16 +655,24 @@ describe("agent loop — compaction stop_reason clears inProgressPlan (M2)", () 
     const setSpy = sessionStore.setInProgressPlan as ReturnType<typeof vi.fn>;
     setSpy.mockClear();
 
-    betaCreateMock.mockImplementationOnce(async (params: { model: string }) => ({
-      id: "msg_01",
-      type: "message" as const,
-      role: "assistant" as const,
-      model: params.model,
-      content: [{ type: "text", text: "compacted" }],
-      stop_reason: "compaction" as const,
-      stop_sequence: null,
-      usage: { input_tokens: 10, output_tokens: 2 },
-    }));
+    betaCreateMock.mockImplementationOnce((params: { model: string }) => {
+      const message = {
+        id: "msg_01",
+        type: "message" as const,
+        role: "assistant" as const,
+        model: params.model,
+        content: [{ type: "text", text: "compacted" }],
+        stop_reason: "compaction" as const,
+        stop_sequence: null,
+        usage: { input_tokens: 10, output_tokens: 2 },
+      };
+      return {
+        async *[Symbol.asyncIterator]() {
+          yield { type: "message_start", message };
+          yield { type: "message_stop" };
+        },
+      };
+    });
 
     await runAgentLoop([{ role: "user", content: "hi" }], {}, "admin", "session-m2");
 

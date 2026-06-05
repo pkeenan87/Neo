@@ -184,6 +184,20 @@ export function stampCacheBreakpointOnLastMessage(
 const MAX_RETRIES = 3;
 const RETRYABLE_STATUS = new Set([429, 529, 500, 502, 503]);
 
+// Matches both the runtime fetch `AbortError` (name === "AbortError")
+// AND the Anthropic SDK's `APIUserAbortError` class (name ===
+// "APIUserAbortError"). The SDK throws the latter when `signal.aborted`
+// is true at request entry or when the underlying fetch errors AND the
+// signal is aborted (see `@anthropic-ai/sdk/core.js:298, 304`). Without
+// matching both, SDK-originated aborts fall through to the generic
+// error path and the agent loop emits a confusing "Unexpected
+// stop_reason" / opaque-error response instead of the clean
+// `buildInterruptedResult()` flow.
+function isAbortError(err: unknown): boolean {
+  const name = (err as Error | undefined)?.name;
+  return name === "AbortError" || name === "APIUserAbortError";
+}
+
 async function createWithRetry(
   params: Anthropic.Messages.MessageCreateParamsNonStreaming,
   signal?: AbortSignal,
@@ -193,7 +207,7 @@ async function createWithRetry(
       return await client.messages.create(params, { signal });
     } catch (err: unknown) {
       // Never retry on abort — propagate immediately
-      if ((err as Error).name === "AbortError") {
+      if (isAbortError(err)) {
         throw err;
       }
       const status = (err as { status?: number }).status;
@@ -246,16 +260,227 @@ async function createWithRetry(
 //  of the loop stays uniform.
 // ─────────────────────────────────────────────────────────────
 
+// ─── Beta stream accumulator ──────────────────────────────────
+//
+// The SDK enforces a 10-minute wall-clock ceiling on every
+// non-streaming `messages.create` call. Skills routinely exceed
+// that on Opus 4.8 (large output budget + default effort=high +
+// multi-step reasoning), surfacing as:
+//   "Streaming is required for operations that may take longer
+//    than 10 minutes."
+// Fix: switch every call to streaming and aggregate server-side.
+// The aggregated Message shape is identical to what `.create()`
+// returned, so downstream consumers (cache breakpoints, content-
+// block parsing, MCP audit, token-usage logging) need no changes.
+//
+// The beta `messages` class doesn't expose the stable API's
+// `.stream()` helper — only `.create({ stream: true })` returning
+// a raw event Stream — so we walk the events here.
+//
+// STREAM_TIMEOUT_MS is the total wall-clock budget for one stream.
+// We compose it with the caller's AbortSignal via AbortSignal.any
+// at the call site so the timer survives past TTFB. The SDK's
+// `timeout` option alone won't cut it: `fetchWithTimeout` in
+// `@anthropic-ai/sdk/core.js` clears its setTimeout in `.finally()`
+// after the fetch promise resolves (i.e. at headers-received), so a
+// quiet stall during body consumption would otherwise hang the
+// agent until TCP keepalive. We DON'T add a per-event watchdog —
+// the wall-clock budget covers stalled streams adequately, and a
+// per-event timer would terminate slow-but-active long turns
+// unnecessarily.
+const STREAM_TIMEOUT_MS = 30 * 60 * 1000;
+
+interface AccumulatorContentBlock {
+  type: string;
+  text?: string;
+  input?: unknown;
+  [k: string]: unknown;
+}
+
+/**
+ * Accumulate a Beta message stream into a single Message-shaped
+ * object. Handles text_delta, input_json_delta, and pass-through
+ * for content blocks that arrive complete at content_block_start
+ * (mcp_tool_use, mcp_tool_result, thinking, etc.).
+ *
+ * Abort handling: the Anthropic SDK's stream iterator
+ * (`@anthropic-ai/sdk/streaming.js`) explicitly **returns silently**
+ * when the underlying fetch is aborted — the for-await loop exits
+ * normally instead of throwing. The `signal?.throwIfAborted()`
+ * inside the loop only catches aborts that fire between processed
+ * events; an abort during the inter-event await (the common case
+ * for slow streams) would otherwise reach `return message` with
+ * `stop_reason: null` and look like a successful turn. To prevent
+ * that, we explicitly re-check the signal AFTER the loop and
+ * require `message_stop` to have been seen — either condition
+ * failing converts the silent return into a clean abort/error the
+ * outer handlers route through `buildInterruptedResult()`.
+ */
+async function aggregateBetaStream(
+  stream: AsyncIterable<Anthropic.Beta.Messages.BetaRawMessageStreamEvent>,
+  signal?: AbortSignal,
+): Promise<Anthropic.Messages.Message> {
+  let message: Record<string, unknown> | null = null;
+  let sawMessageStop = false;
+  const blocks: AccumulatorContentBlock[] = [];
+  // Per-index tool_use partial-JSON buffers — joined + parsed at
+  // content_block_stop.
+  const toolInputBuffers = new Map<number, string>();
+
+  for await (const event of stream) {
+    signal?.throwIfAborted();
+
+    switch (event.type) {
+      case "message_start": {
+        const start = event as unknown as { message: Record<string, unknown> };
+        message = { ...start.message, content: blocks };
+        // Seed the blocks buffer from anything the start event
+        // already carries. The real Anthropic protocol always sends
+        // `content: []` here and then streams content_block_*
+        // events, but test wrappers (and forward-compat servers)
+        // can short-circuit by delivering the complete message in
+        // one event. Without seeding, that content would be lost
+        // to the empty buffer.
+        const startContent = start.message.content;
+        if (Array.isArray(startContent)) {
+          for (const block of startContent) {
+            blocks.push(block as AccumulatorContentBlock);
+          }
+        }
+        break;
+      }
+      case "content_block_start": {
+        const e = event as unknown as { index: number; content_block: AccumulatorContentBlock };
+        // Deep-ish copy so deltas mutate our buffer, not the event.
+        blocks[e.index] = { ...e.content_block };
+        if (e.content_block.type === "text" && typeof blocks[e.index].text !== "string") {
+          blocks[e.index].text = "";
+        }
+        break;
+      }
+      case "content_block_delta": {
+        const e = event as { index: number; delta: { type: string; text?: string; partial_json?: string } };
+        const block = blocks[e.index];
+        if (!block) break;
+        if (e.delta.type === "text_delta" && typeof e.delta.text === "string") {
+          block.text = (block.text ?? "") + e.delta.text;
+        } else if (e.delta.type === "input_json_delta" && typeof e.delta.partial_json === "string") {
+          toolInputBuffers.set(e.index, (toolInputBuffers.get(e.index) ?? "") + e.delta.partial_json);
+        }
+        // thinking_delta, signature_delta and other future delta
+        // types pass through silently — we only accumulate the
+        // fields the agent loop reads downstream.
+        break;
+      }
+      case "content_block_stop": {
+        const e = event as { index: number };
+        const buf = toolInputBuffers.get(e.index);
+        if (buf !== undefined && buf.length > 0) {
+          try {
+            blocks[e.index].input = JSON.parse(buf);
+          } catch (parseErr) {
+            // A non-empty buffer that fails to parse means the
+            // delta stream was corrupted, truncated mid-arg, or
+            // out of order. Silently defaulting to the seeded
+            // `{}` would let the agent loop execute a tool call
+            // with the wrong arguments — for query-scoping or
+            // identity-targeting tools that's a real data-
+            // integrity hazard. Fail loud so the retry path
+            // engages and the failure is investigable.
+            const preview = buf.length > 256 ? `${buf.slice(0, 256)}…` : buf;
+            logger.warn(
+              "Tool input JSON failed to parse mid-stream",
+              "agent",
+              { blockIndex: e.index, bufferLength: buf.length, preview },
+            );
+            throw new Error(
+              `tool input JSON parse failed at content block ${e.index}: ${(parseErr as Error).message}`,
+            );
+          }
+          toolInputBuffers.delete(e.index);
+        }
+        break;
+      }
+      case "message_delta": {
+        const e = event as unknown as { delta: Record<string, unknown>; usage?: Record<string, unknown> };
+        if (!message) break;
+        // Top-level fields land in message.delta (stop_reason,
+        // stop_sequence, container).
+        Object.assign(message, e.delta);
+        // Usage at this stage carries the FINAL output_tokens;
+        // merge with the input_tokens / cache_* recorded at
+        // message_start.
+        if (e.usage) {
+          const prior = (message.usage as Record<string, unknown> | undefined) ?? {};
+          message.usage = { ...prior, ...e.usage };
+        }
+        break;
+      }
+      case "message_stop":
+        sawMessageStop = true;
+        break;
+      default:
+        // Forward-compatible: unknown event types are ignored.
+        break;
+    }
+  }
+
+  // Catch aborts that fired DURING the inter-event await — the SDK
+  // iterator swallows AbortError and returns silently, so without
+  // this re-check we'd return a partial message and the agent loop
+  // would crash with "Unexpected stop_reason: null" instead of
+  // surfacing as a clean interrupt.
+  signal?.throwIfAborted();
+
+  if (!message) {
+    throw new Error("Stream ended without emitting a message_start event");
+  }
+  if (!sawMessageStop) {
+    // No message_stop event means the upstream connection closed
+    // before the model finished generating — e.g. a server-side
+    // truncation, proxy cut, or silent network failure. The
+    // partial message at this point may carry stop_reason: null
+    // (no message_delta arrived) which would crash the stop-
+    // reason dispatch. Throw a typed network-style error so
+    // createBetaWithRetry's retry filter can decide whether to
+    // try again.
+    throw Object.assign(new Error("Stream ended before message_stop event (incomplete response)"), {
+      name: "StreamIncompleteError",
+    });
+  }
+  return message as unknown as Anthropic.Messages.Message;
+}
+
 async function createBetaWithRetry(
   params: Anthropic.Beta.Messages.MessageCreateParamsNonStreaming,
   signal?: AbortSignal,
 ): Promise<Anthropic.Messages.Message> {
   for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+    // Compose the caller's signal with a wall-clock timeout so the
+    // 30-min budget actually fires during body consumption. The
+    // SDK's `timeout` option only covers up to TTFB (its setTimeout
+    // is cleared when the fetch promise resolves at headers-
+    // received). AbortSignal.any rolls up to whichever fires first.
+    // We build a fresh composite per attempt so retries get a full
+    // fresh budget rather than sharing one stale timer.
+    const composite = signal
+      ? AbortSignal.any([signal, AbortSignal.timeout(STREAM_TIMEOUT_MS)])
+      : AbortSignal.timeout(STREAM_TIMEOUT_MS);
     try {
-      const resp = await client.beta.messages.create(params, { signal });
-      return resp as unknown as Anthropic.Messages.Message;
+      // Always stream. The non-streaming path is capped at 10
+      // minutes by the SDK; skills + deep Opus 4.8 turns routinely
+      // exceed that. We then aggregate to the same Message shape
+      // the rest of the loop already consumes.
+      const streamParams = {
+        ...params,
+        stream: true as const,
+      } as Anthropic.Beta.Messages.MessageCreateParamsStreaming;
+      const stream = await client.beta.messages.create(streamParams, {
+        signal: composite,
+      });
+      return await aggregateBetaStream(stream, composite);
     } catch (err: unknown) {
-      if ((err as Error).name === "AbortError") throw err;
+      if (isAbortError(err)) throw err;
       const status = (err as { status?: number }).status;
 
       if (status === 400) {
@@ -298,7 +523,7 @@ async function getMcpServersSafely(role: Role): Promise<McpServerConfig[]> {
   try {
     return await getMcpServers(role);
   } catch (err) {
-    if ((err as Error).name === "AbortError") throw err;
+    if (isAbortError(err)) throw err;
     logger.warn(
       "agent: MCP server lookup failed — continuing without MCP for this turn",
       "agent",
@@ -1391,9 +1616,11 @@ export async function runAgentLoop(
     throw new Error(`Unexpected stop_reason: ${response.stop_reason}`);
   }
   } catch (err) {
-    // AbortError: return interrupted result instead of rethrowing so the route
-    // can persist partial state cleanly
-    if ((err as Error).name === "AbortError") {
+    // AbortError / APIUserAbortError: return interrupted result
+    // instead of rethrowing so the route can persist partial state
+    // cleanly. isAbortError() covers both the runtime fetch
+    // `AbortError` and the Anthropic SDK's `APIUserAbortError`.
+    if (isAbortError(err)) {
       return buildInterruptedResult();
     }
     throw err;

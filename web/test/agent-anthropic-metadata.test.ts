@@ -31,7 +31,22 @@ vi.mock("@anthropic-ai/sdk", () => {
   return {
     default: class MockAnthropic {
       messages = { create: anthropicCreateMock };
-      beta = { messages: { create: anthropicCreateMock } };
+      // Streaming wrapper — production now calls .create({ stream:
+      // true }) and aggregates. Delegate to the shared mock so
+      // `capturedCalls` still records the params for assertion.
+      beta = {
+        messages: {
+          create: async (params: unknown) => {
+            const message = await anthropicCreateMock(params as Anthropic.Messages.MessageCreateParamsNonStreaming);
+            return {
+              async *[Symbol.asyncIterator]() {
+                yield { type: "message_start", message };
+                yield { type: "message_stop" };
+              },
+            };
+          },
+        },
+      };
     },
   };
 });
