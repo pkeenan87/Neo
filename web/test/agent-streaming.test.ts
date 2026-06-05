@@ -167,8 +167,14 @@ describe("agent loop — streaming wire format (b) aggregated message reaches ca
   });
 });
 
-describe("agent loop — streaming wire format (c) AbortSignal is forwarded", () => {
-  it("forwards the caller's signal to the beta create options", async () => {
+describe("agent loop — streaming wire format (c) AbortSignal is composed", () => {
+  it("composes the caller's signal with the wall-clock STREAM_TIMEOUT_MS", async () => {
+    // Pre-fix: caller.signal was passed through directly. Post-fix:
+    // wrapped via AbortSignal.any so the 30-min wall-clock timeout
+    // also fires (the SDK's own `timeout` only covers TTFB). We
+    // can't assert on the exact composite, but it must NOT be the
+    // raw controller.signal, and must be an AbortSignal that
+    // *would* abort if the caller's signal aborts.
     betaCreateMock.mockReturnValue(streamYielding(defaultMessage()));
     const controller = new AbortController();
     await runAgentLoop(
@@ -181,7 +187,13 @@ describe("agent loop — streaming wire format (c) AbortSignal is forwarded", ()
     );
     expect(capturedCalls).toHaveLength(1);
     const options = capturedCalls[0].options as { signal?: AbortSignal };
-    expect(options.signal).toBe(controller.signal);
+    expect(options.signal).toBeDefined();
+    expect(options.signal).not.toBe(controller.signal);
+    expect(options.signal instanceof AbortSignal).toBe(true);
+    // Aborting the caller's signal aborts the composite too.
+    expect(options.signal!.aborted).toBe(false);
+    controller.abort();
+    expect(options.signal!.aborted).toBe(true);
   });
 });
 
@@ -212,6 +224,111 @@ describe("agent loop — streaming wire format (d) mid-stream errors retry", () 
     if (result.type !== "response") throw new Error("expected response");
     expect(result.text).toBe("recovered");
     expect(attempts).toBeGreaterThanOrEqual(2);
+  }, 20_000);
+});
+
+describe("agent loop — ultrareview HIGH (silent abort truncation)", () => {
+  it("returns buildInterruptedResult when AbortSignal fires while the SDK iterator is awaiting the next event", async () => {
+    // The Anthropic SDK's stream iterator silently returns (does
+    // NOT throw) when the underlying fetch is aborted. Pre-fix,
+    // our for-await loop exited normally, `aggregateBetaStream`
+    // returned a partial Message with stop_reason: null, and the
+    // agent loop crashed with "Unexpected stop_reason: null".
+    // Post-fix, the post-loop `signal?.throwIfAborted()` and
+    // sawMessageStop guard convert the silent return into a clean
+    // abort that the outer catch routes to buildInterruptedResult.
+    const controller = new AbortController();
+    betaCreateMock.mockImplementation(() => ({
+      async *[Symbol.asyncIterator]() {
+        yield { type: "message_start", message: { id: "p", type: "message", role: "assistant", model: "claude-sonnet-4-6", content: [], stop_reason: null, stop_sequence: null, usage: { input_tokens: 10, output_tokens: 0 } } };
+        // Simulate the SDK's silent-return-on-abort by simply
+        // ending the iterator after the abort fires. The composite
+        // signal aborts when controller.signal aborts, so
+        // throwIfAborted() inside aggregateBetaStream's post-loop
+        // re-check raises.
+        // We trigger the abort via setTimeout so it happens
+        // *between* yields.
+        await new Promise<void>((resolve) => setTimeout(resolve, 5));
+        return; // silent return — pre-fix this would have masked the abort
+      },
+    }));
+    setTimeout(() => controller.abort(), 1);
+
+    const result = await runAgentLoop(
+      [{ role: "user", content: "hi" } as Message],
+      {},
+      "reader",
+      "s-abort",
+      undefined,
+      controller.signal,
+    );
+    // buildInterruptedResult() returns { type: "response", text: "[interrupted]", interrupted: true }
+    if (result.type !== "response") throw new Error("expected response");
+    expect(result.interrupted).toBe(true);
+  });
+
+  it("throws StreamIncompleteError when message_stop never arrives (upstream truncation)", async () => {
+    // Distinct from the abort case: the stream ENDED cleanly but
+    // never sent message_stop (proxy cut, server-side truncation).
+    // Pre-fix this fell through to "Unexpected stop_reason: null".
+    // Post-fix we throw a typed error so the retry path engages.
+    betaCreateMock.mockImplementation(() => ({
+      async *[Symbol.asyncIterator]() {
+        yield { type: "message_start", message: { id: "p", type: "message", role: "assistant", model: "claude-sonnet-4-6", content: [], stop_reason: null, stop_sequence: null, usage: { input_tokens: 0, output_tokens: 0 } } };
+        // Loop ends here — no message_stop.
+      },
+    }));
+    await expect(
+      runAgentLoop([{ role: "user", content: "hi" }], {}, "reader", "s-trunc"),
+    ).rejects.toThrow(/incomplete response/i);
+  });
+});
+
+describe("agent loop — ultrareview MEDIUM (APIUserAbortError)", () => {
+  it("treats the SDK's APIUserAbortError as an abort, not a generic error", async () => {
+    // The SDK throws APIUserAbortError (not AbortError) when
+    // signal.aborted is true at request time. Pre-fix, our checks
+    // only matched err.name === 'AbortError' so SDK-originated
+    // aborts surfaced as opaque errors. Post-fix, isAbortError()
+    // matches both.
+    betaCreateMock.mockImplementation(() => {
+      throw Object.assign(new Error("Request was aborted."), {
+        name: "APIUserAbortError",
+        status: undefined,
+      });
+    });
+    const result = await runAgentLoop(
+      [{ role: "user", content: "hi" }],
+      {},
+      "reader",
+      "s-apiabort",
+    );
+    if (result.type !== "response") throw new Error("expected response");
+    expect(result.interrupted).toBe(true);
+  });
+});
+
+describe("agent loop — ultrareview MEDIUM (malformed tool input JSON fails loud)", () => {
+  it("throws when input_json_delta deltas concatenate to invalid JSON", async () => {
+    // Pre-fix, the JSON.parse failure was silently swallowed and
+    // input defaulted to whatever content_block_start provided
+    // (typically {}). The tool then executed with empty/wrong
+    // arguments — a data-integrity hazard for any executor that
+    // scopes by argument. Post-fix, the parse failure throws and
+    // is logged.
+    betaCreateMock.mockImplementation(() => ({
+      async *[Symbol.asyncIterator]() {
+        yield { type: "message_start", message: { id: "p", type: "message", role: "assistant", model: "claude-sonnet-4-6", content: [], stop_reason: null, stop_sequence: null, usage: { input_tokens: 0, output_tokens: 0 } } };
+        yield { type: "content_block_start", index: 0, content_block: { type: "tool_use", id: "tu_1", name: "x", input: {} } };
+        yield { type: "content_block_delta", index: 0, delta: { type: "input_json_delta", partial_json: "{not-json" } };
+        yield { type: "content_block_stop", index: 0 };
+        yield { type: "message_delta", delta: { stop_reason: "tool_use", stop_sequence: null }, usage: { output_tokens: 1 } };
+        yield { type: "message_stop" };
+      },
+    }));
+    await expect(
+      runAgentLoop([{ role: "user", content: "hi" }], {}, "reader", "s-badjson"),
+    ).rejects.toThrow(/tool input JSON parse failed/i);
   }, 20_000);
 });
 
