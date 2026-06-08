@@ -454,8 +454,39 @@ function findSafeSliceStart(messages: Message[], targetIndex: number): number {
  * Validate and repair the conversation shape so every tool_use block
  * has a matching tool_result in the next message and vice versa.
  * Removes orphaned blocks that would cause a 400 error from the API.
+ *
+ * Runs the inner pass iteratively until the conversation is stable.
+ * The single-pass logic uses each message's PRE-repair neighbour to
+ * decide whether to keep its tool_use / tool_result blocks; this is
+ * cheap but leaves cascades — e.g. stripping a tool_use because the
+ * adjacent user has no matching tool_result then orphans any later
+ * tool_result that referenced that same id from elsewhere in history.
+ * The single-pass case that motivated this loop was a destructive
+ * cancel race: a stale `tool_use` survives the first pass because a
+ * later turn's `tool_result` (also for the same id) makes it look
+ * paired, but the user-side check then strips that tool_result on a
+ * different adjacency rule, leaving the assistant block orphaned for
+ * the API. Cap at MAX_REPAIR_PASSES so any pathological input fails
+ * loud rather than spinning.
  */
+const MAX_REPAIR_PASSES = 4;
+
 export function validateAndRepairConversationShape(messages: Message[]): Message[] {
+  let current = messages;
+  for (let pass = 0; pass < MAX_REPAIR_PASSES; pass++) {
+    const { messages: next, repaired } = singleRepairPass(current);
+    if (!repaired) return current;
+    current = next;
+  }
+  logger.warn(
+    "Conversation-shape repair did not stabilise within max passes — returning best-effort result",
+    "context-manager",
+    { maxPasses: MAX_REPAIR_PASSES },
+  );
+  return current;
+}
+
+function singleRepairPass(messages: Message[]): { messages: Message[]; repaired: boolean } {
   let repaired = false;
 
   // Pre-pass: within each assistant message, strip orphan mcp_tool_use
@@ -594,7 +625,7 @@ export function validateAndRepairConversationShape(messages: Message[]): Message
     });
   }
 
-  return result;
+  return { messages: result, repaired };
 }
 
 // ── Conversation compression ─────────────────────────────────

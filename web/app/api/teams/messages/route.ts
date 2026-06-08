@@ -9,7 +9,7 @@ import {
 } from "botbuilder";
 import { env, DEFAULT_MODEL } from "@/lib/config";
 import { sessionStore } from "@/lib/session-factory";
-import { runAgentLoop, resumeAfterConfirmation, summarizeConversation } from "@/lib/agent";
+import { runAgentLoop, resumeAfterConfirmation, summarizeConversation, buildImplicitCancellationMessage } from "@/lib/agent";
 import { canUseTool } from "@/lib/permissions";
 import { scanUserInput, shouldBlock } from "@/lib/injection-guard";
 import { logger, hashPii, setLogContext } from "@/lib/logger";
@@ -449,6 +449,22 @@ async function handleTurn(context: TurnContext): Promise<void> {
     return;
   }
 
+  // Build logging context as soon as session resolution succeeds so any
+  // audit event emitted later in this handler (auto-cancel of a stale
+  // pending destructive, in particular) carries the full identity
+  // envelope. Previously this lived just above the runAgentLoop call,
+  // which meant logger.emitEvent calls in the auto-cancel block landed
+  // with identity: undefined — SOC dashboards joining destructive_action
+  // events by userIdHash silently lost every Teams implicit-cancel.
+  const teamsLogContext = {
+    userName: teamsUserName,
+    userIdHash: hashPii(aadObjectId),
+    role: env.TEAMS_BOT_ROLE,
+    provider: "entra-id" as const,
+    channel: "teams",
+    sessionId: resolvedSessionId,
+  };
+
   // Injection scan — mirrors the check in api/agent/route.ts
   const scanResult = scanUserInput(messageText, {
     sessionId: resolvedSessionId,
@@ -569,6 +585,53 @@ async function handleTurn(context: TurnContext): Promise<void> {
     persistedContent = messageText;
   }
 
+  // Same auto-cancel guard as /api/agent: if a destructive tool is
+  // pending and the user sent another chat instead of confirming, pair
+  // the unpaired `tool_use` with a synthesised cancellation tool_result
+  // BEFORE pushing the new user turn. Without this the orphaned
+  // tool_use either 400s on the next call or gets stripped by the
+  // repair pass — both of which break any later Cancel attempt. See
+  // lib/agent.ts:buildImplicitCancellationMessage and the /api/agent
+  // mirror for full rationale (including why this is try/catched).
+  let teamsStalePending: Awaited<ReturnType<typeof sessionStore.clearPendingConfirmation>> = null;
+  try {
+    teamsStalePending = await sessionStore.clearPendingConfirmation(resolvedSessionId);
+  } catch (err) {
+    logger.warn(
+      "Failed to clear pending confirmation — proceeding without auto-cancel",
+      "teams",
+      { sessionId: resolvedSessionId, errorMessage: (err as Error).message },
+    );
+  }
+  if (teamsStalePending) {
+    session.messages.push(buildImplicitCancellationMessage(teamsStalePending));
+    logger.info(
+      "Auto-cancelling pending destructive — user sent a new message",
+      "teams",
+      {
+        sessionId: resolvedSessionId,
+        toolName: teamsStalePending.name,
+        toolId: teamsStalePending.id,
+      },
+    );
+    // Emit destructive_action audit event INSIDE the log context so
+    // the identity envelope (userIdHash, role, channel, sessionId) is
+    // attached — without this wrap the event lands with no actor
+    // attribution and SOC correlation by userIdHash misses it.
+    setLogContext(teamsLogContext, () => {
+      logger.emitEvent(
+        "destructive_action",
+        `Destructive tool implicitly cancelled (new message): ${teamsStalePending.name}`,
+        "teams",
+        {
+          toolName: teamsStalePending.name,
+          confirmed: false,
+          implicitCancel: true,
+        },
+      );
+    });
+  }
+
   session.messages.push({ role: "user", content: persistedContent });
   session.messageCount++;
 
@@ -593,15 +656,9 @@ async function handleTurn(context: TurnContext): Promise<void> {
     }
   }
 
-  // Build logging context after session resolution so sessionId is real
-  const teamsLogContext = {
-    userName: teamsUserName,
-    userIdHash: hashPii(aadObjectId),
-    role: env.TEAMS_BOT_ROLE,
-    provider: "entra-id" as const,
-    channel: "teams",
-    sessionId: resolvedSessionId,
-  };
+  // teamsLogContext is built earlier (right after session resolution)
+  // so the auto-cancel emit further up the function carries the
+  // identity envelope. Re-used here for runAgentLoop.
   const result = await setLogContext(teamsLogContext, () =>
     // Honour the conversation's locked model — see the confirm-handler
     // comment above for rationale.

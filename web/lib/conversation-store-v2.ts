@@ -744,19 +744,42 @@ export async function clearConversationPendingConfirmationV2(
   ownerId: string,
 ): Promise<PendingTool | null> {
   const container = getContainerV2();
-  const { resource } = await container.item(id, id).read<ConversationV2Root>();
+  // ETag-guarded clear so two concurrent callers can't both observe
+  // the same non-null pending. See clearConversationPendingConfirmation
+  // V1 sibling for the full rationale — race produces duplicate
+  // `tool_result` blocks and double `destructive_action` audit events.
+  // On 412 the other caller won the race and we return null.
+  const { resource, etag } = await container
+    .item(id, id)
+    .read<ConversationV2Root>();
   if (!resource || resource.docType !== "root") {
     throw new ConversationNotFoundV2Error(id);
   }
   if (resource.ownerId !== ownerId) return null;
+  if (!etag) {
+    throw new Error(`Missing ETag for conversation ${id} (v2)`);
+  }
 
   const pending = resource.pendingConfirmation;
-  await container.item(id, id).patch({
-    operations: [
-      { op: "set", path: "/pendingConfirmation", value: null },
-      { op: "set", path: "/updatedAt", value: nowIso() },
-    ],
-  });
+  try {
+    await container.item(id, id).patch(
+      {
+        operations: [
+          { op: "set", path: "/pendingConfirmation", value: null },
+          { op: "set", path: "/updatedAt", value: nowIso() },
+        ],
+      },
+      { accessCondition: { type: "IfMatch", condition: etag } },
+    );
+  } catch (err: unknown) {
+    const code = err && typeof err === "object" && "code" in err ? (err as { code: number }).code : 0;
+    if (code === 412) {
+      // Another caller cleared it first. Their `pending` is the
+      // authoritative one; ours is now `null`.
+      return null;
+    }
+    throw err;
+  }
   return pending;
 }
 

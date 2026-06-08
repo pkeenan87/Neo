@@ -2144,3 +2144,45 @@ export async function resumeAfterConfirmation(
 
   return runAgentLoop(localMessages, callbacks, role, sessionId, model, undefined, options);
 }
+
+/**
+ * Build the user-role message that pairs an implicitly-cancelled
+ * destructive tool with its `tool_result`. When a destructive tool is
+ * pending and the user sends a NEW chat message instead of clicking
+ * Confirm or Cancel, callers must inject this synthetic block at the
+ * top of the new turn — otherwise the still-unpaired `tool_use` at the
+ * end of the prior assistant message either (a) trips Anthropic's
+ * `tool_use ids were found without tool_result blocks` 400 on the next
+ * API call, or (b) gets silently stripped by the conversation-shape
+ * repair, which in turn makes any later /api/confirm Cancel append an
+ * orphan `tool_result` and reproduce the same 400 on the turn after
+ * that.
+ *
+ * Pure helper — caller is responsible for `sessionStore.clearPendingConfirmation`,
+ * `session.messages.push`, persistence, and audit logging. Keeping the
+ * I/O at the call site lets the chat (/api/agent) and Teams routes
+ * each emit their own destructive_action event in their own logger
+ * context without us reaching into either.
+ */
+export function buildImplicitCancellationMessage(
+  pendingTool: PendingTool,
+): Message {
+  const cancelOutput = {
+    cancelled: true,
+    message:
+      "User sent a new message instead of confirming this action — treating as a cancellation.",
+  };
+  const cancelResultBlock: Anthropic.Messages.ToolResultBlockParam = {
+    type: "tool_result",
+    tool_use_id: pendingTool.id,
+    content: JSON.stringify(cancelOutput),
+  };
+  // Include any non-destructive tool results captured before the
+  // destructive paused the loop, so every tool_use in the preceding
+  // assistant message is paired by THIS one user message.
+  const preExecuted = pendingTool.preExecutedResults ?? [];
+  return {
+    role: "user",
+    content: [...preExecuted, cancelResultBlock],
+  };
+}

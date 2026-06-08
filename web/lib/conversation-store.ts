@@ -579,13 +579,40 @@ async function clearConversationPendingConfirmationV1Internal(
   ownerId: string,
 ): Promise<PendingTool | null> {
   const container = getContainer();
-  const conv = await getConversationV1Internal(id, ownerId);
+  // ETag-guarded clear so two concurrent callers can't both observe
+  // the same non-null pending. Without IfMatch the read-then-replace
+  // is non-atomic — /api/agent (auto-cancel) and /api/agent/confirm
+  // can race and both treat themselves as the unique owner of the
+  // cancellation, producing duplicate `tool_result` blocks for the
+  // same `tool_use_id` and double-firing `destructive_action` audit
+  // events. On 412 the OTHER caller won the race; we return null so
+  // this caller takes the no-op branch.
+  const { resource: conv, etag } = await container
+    .item(id, ownerId)
+    .read<Conversation>();
   if (!conv) return null;
+  if (!etag) {
+    // Cosmos always returns an etag on a successful read; if missing
+    // something is structurally wrong with the response. Fail closed.
+    throw new Error(`Missing ETag for conversation ${id}`);
+  }
 
   const pending = conv.pendingConfirmation;
   conv.pendingConfirmation = null;
   conv.updatedAt = new Date().toISOString();
-  await container.item(id, ownerId).replace(conv);
+  try {
+    await container.item(id, ownerId).replace(conv, {
+      accessCondition: { type: "IfMatch", condition: etag },
+    });
+  } catch (err: unknown) {
+    const code = err && typeof err === "object" && "code" in err ? (err as { code: number }).code : 0;
+    if (code === 412) {
+      // Another caller cleared it first. Their `pending` return value
+      // is the authoritative one; ours is now `null`.
+      return null;
+    }
+    throw err;
+  }
   return pending;
 }
 
