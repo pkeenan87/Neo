@@ -322,67 +322,52 @@ export function wrapMcpToolResultContent(
 }
 
 /**
- * Scan + wrap content from an Anthropic `web_search_tool_result` block.
+ * Audit (warn-log only) the metadata of an Anthropic
+ * `web_search_tool_result` block for injection-pattern matches in the
+ * title + URL fields the model and operators can see.
  *
- * `web_search` is an Anthropic server-side tool — the API runs the
- * search itself and returns `server_tool_use` + `web_search_tool_result`
- * blocks inline in the assistant response. The result content reaches
- * Neo's history without ever passing through {@link wrapToolResult},
- * which is the seam where other tool results get injection-scanned.
- * Without this helper, an adversarial web page surfaced by the search
- * would be appended to history and re-sent to the model on every
- * subsequent turn — a direct prompt-injection vector.
+ * Why this no longer mutates content: the previous implementation
+ * wrapped the content into a `_neo_trust_boundary` JSON-string
+ * envelope, but Anthropic's API rejects string content on
+ * `web_search_tool_result` blocks — the schema enforces
+ * `Array<WebSearchResultBlock> | WebSearchToolResultError`. Sending
+ * the envelope back on the next turn produced:
+ *   `400: messages.5.content.0.web_search_tool_result.content.list[...]
+ *    Input should be a valid array`
+ * which broke every multi-turn web_search session in production. Block
+ * type already identifies the source (`web_search_tool_result`), and
+ * the system-prompt EXTERNAL ENRICHMENT section instructs the model to
+ * treat web content as untrusted, so the structural label was never
+ * load-bearing for safety — it was purely advisory metadata.
  *
- * The `web_search_tool_result.content` field is normally an array of
- * `{ type: "web_search_result", url, title, encrypted_content, page_age? }`
- * entries, but can also be an `{ type: "web_search_tool_result_error" }`
- * envelope. We extract scannable text from both shapes and apply the
- * standard TOOL_RESULT_PATTERNS scan, then return a string envelope
- * with the trust-boundary marker so downstream consumers know this
- * came from the open internet.
+ * What we scan: title + URL only. The `encrypted_content` blob is
+ * opaque base64 ciphertext that Anthropic re-uses internally — passing
+ * it through the scanner trips the `encoded_payload` pattern on every
+ * search (100% false positives, noisy warn log) without telling us
+ * anything actionable.
  *
- * The returned string is intended to replace the original `content`
- * field of the web_search_tool_result block before history persistence.
+ * Returns the scan result so the caller can decide whether to surface
+ * the signal further (audit event etc.). Side effect: a warn log when
+ * flagged.
  */
-export function wrapWebSearchToolResultContent(
+export function auditWebSearchToolResultMetadata(
   rawContent: unknown,
-  context: { sessionId: string },
-): string {
+  context: { sessionId: string; toolUseId?: string },
+): ScanResult {
   let textToScan = "";
-  if (typeof rawContent === "string") {
-    textToScan = rawContent;
-  } else if (Array.isArray(rawContent)) {
+  if (Array.isArray(rawContent)) {
     const parts: string[] = [];
     for (const b of rawContent) {
       if (typeof b !== "object" || b === null) continue;
-      const block = b as {
-        type?: unknown;
-        url?: unknown;
-        title?: unknown;
-        encrypted_content?: unknown;
-        page_age?: unknown;
-        error_code?: unknown;
-      };
-      if (block.type === "web_search_result") {
-        if (typeof block.title === "string") parts.push(block.title);
-        if (typeof block.url === "string") parts.push(block.url);
-        // encrypted_content is opaque to the client, but Anthropic
-        // hands it back on subsequent turns. Stringify defensively so
-        // anything we don't recognise gets scanned anyway.
-        if (typeof block.encrypted_content === "string") {
-          parts.push(block.encrypted_content);
-        }
-        continue;
-      }
-      try {
-        parts.push(JSON.stringify(b));
-      } catch {
-        // Circular / unserializable — skip; wrap event still logs.
-      }
+      const block = b as { type?: unknown; url?: unknown; title?: unknown };
+      if (block.type !== "web_search_result") continue;
+      if (typeof block.title === "string") parts.push(block.title);
+      if (typeof block.url === "string") parts.push(block.url);
     }
     textToScan = parts.join("\n");
   } else if (typeof rawContent === "object" && rawContent !== null) {
-    // Error envelope shape.
+    // Error envelope — { type: "web_search_tool_result_error",
+    // error_code: "..." }. Stringify to scan any error_code value.
     try {
       textToScan = JSON.stringify(rawContent);
     } catch {
@@ -391,39 +376,19 @@ export function wrapWebSearchToolResultContent(
   }
 
   const scanResult = scan(textToScan, TOOL_RESULT_PATTERNS);
-
   if (scanResult.flagged) {
     logger.warn(
       "Prompt injection detected in web search result metadata",
       "injection-guard",
       {
         sessionId: context.sessionId,
+        ...(context.toolUseId ? { toolUseId: context.toolUseId } : {}),
         label: scanResult.label,
         matchCount: scanResult.matchCount,
       },
     );
   }
-
-  // IMPORTANT: web_search results carry the actual page body inside the
-  // opaque `encrypted_content` blob — the client never sees the
-  // cleartext, so pattern-scanning is limited to title + URL +
-  // ciphertext. The `scan_coverage: "metadata_only"` field makes that
-  // explicit: a `metadata_flagged: false` reading is NOT a "clean
-  // page" signal, only a "no injection patterns matched on the
-  // metadata we could read" signal. Downstream consumers and the
-  // system-prompt trust-boundary rule must continue to treat all
-  // content inside `data` as untrusted regardless of this flag. The
-  // compact (no-indent) serialisation also halves persisted history
-  // size vs the older pretty-printed form.
-  return JSON.stringify({
-    _neo_trust_boundary: {
-      source: "web_search",
-      tool: "web_search",
-      scan_coverage: "metadata_only",
-      metadata_flagged: scanResult.flagged,
-    },
-    data: rawContent ?? "",
-  });
+  return scanResult;
 }
 
 /**

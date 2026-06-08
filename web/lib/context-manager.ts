@@ -236,37 +236,35 @@ export function truncateToolResult(content: string, capTokens: number): string {
 // ── Deep copy + per-result truncation ────────────────────────
 
 /**
- * Compact a web_search _neo_trust_boundary envelope by stripping
- * `encrypted_content` from each result when the envelope exceeds the
- * per-result cap. Returns the original string when no change is
- * needed, or a new envelope string with the same _neo_trust_boundary
- * metadata so downstream parsers still recognise the trust marker.
+ * Compact a web_search_tool_result content ARRAY by stripping
+ * `encrypted_content` from each result when the serialised array
+ * exceeds the per-result cap. Returns the original array reference
+ * when no change is needed, or a new array with stripped entries.
  *
- * encrypted_content is Anthropic-opaque and used for citation
- * resolution within the response that produced it; older history can
- * be safely reduced to title + url + page_age.
+ * encrypted_content is the opaque blob Anthropic re-uses on subsequent
+ * turns to resolve citations. Once a turn has finished consuming a
+ * web_search result, the blob is no longer load-bearing for that
+ * conversation's correctness — but if we let it accumulate across
+ * every turn it dominates the prompt-token budget (Anthropic returns
+ * up to 10 results per search, each blob is tens of KB). Stripping
+ * preserves title + URL + page_age so the model still has the
+ * citation reference available.
+ *
+ * Anthropic's API schema rejects string content here (see comment at
+ * the top of unwrapLegacyWebSearchEnvelopes for the history), so this
+ * compaction operates directly on the array shape rather than wrapping
+ * into a JSON envelope.
  */
-function compactWebSearchEnvelope(envelope: string, capTokens: number): string {
+function compactWebSearchResultArray(
+  results: unknown[],
+  capTokens: number,
+): { content: unknown[]; changed: boolean } {
   const charCap = capTokens * CHARS_PER_TOKEN;
-  if (envelope.length <= charCap) return envelope;
-
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(envelope);
-  } catch {
-    return envelope;
-  }
-  const env = parsed as {
-    _neo_trust_boundary?: unknown;
-    data?: unknown;
-  };
-  if (!env || typeof env !== "object" || !env._neo_trust_boundary) {
-    return envelope;
-  }
-  if (!Array.isArray(env.data)) return envelope;
+  const serialised = JSON.stringify(results);
+  if (serialised.length <= charCap) return { content: results, changed: false };
 
   let stripped = 0;
-  const compactedData = env.data.map((entry) => {
+  const compacted = results.map((entry) => {
     if (
       typeof entry !== "object" ||
       entry === null ||
@@ -287,13 +285,7 @@ function compactWebSearchEnvelope(envelope: string, capTokens: number): string {
     };
   });
 
-  if (stripped === 0) return envelope;
-
-  const out = JSON.stringify({
-    ...env,
-    data: compactedData,
-  });
-  return out;
+  return { content: compacted, changed: stripped > 0 };
 }
 
 export function truncateToolResults(
@@ -307,17 +299,33 @@ export function truncateToolResults(
 
     const newContent = msg.content.map((block) => {
       const blockType = (block as { type: string }).type;
-      // Local tool_result, inline mcp_tool_result, and inline
-      // web_search_tool_result are all truncated against the same
-      // per-result cap. The sanitize step in agent.ts coerces the
-      // content of the latter two to a string envelope before
-      // history-append, so the string-only path below handles them
-      // consistently with local tool_result.
-      if (
-        blockType !== "tool_result" &&
-        blockType !== "mcp_tool_result" &&
-        blockType !== "web_search_tool_result"
-      ) {
+
+      // web_search_tool_result is special: Anthropic's schema requires
+      // its content to be an ARRAY of web_search_result entries (or
+      // an error envelope object), so we compact in-place on the array
+      // rather than truncating a string. Older entries' encrypted_content
+      // blobs are the dominant cost; stripping them preserves the
+      // title + URL the model needs for citation reference.
+      if (blockType === "web_search_tool_result") {
+        const tr = block as { content?: unknown };
+        if (!Array.isArray(tr.content)) return block;
+        const { content: compacted, changed } = compactWebSearchResultArray(
+          tr.content,
+          capTokens,
+        );
+        if (changed) {
+          anyTruncated = true;
+          return { ...block, content: compacted } as typeof block;
+        }
+        return block;
+      }
+
+      // Local tool_result and inline mcp_tool_result are both
+      // truncated against the same per-result cap. The MCP sanitize
+      // step in agent.ts coerces mcp_tool_result content to a string
+      // envelope before history-append, so the string-only path below
+      // handles both consistently.
+      if (blockType !== "tool_result" && blockType !== "mcp_tool_result") {
         return block;
       }
 
@@ -334,24 +342,7 @@ export function truncateToolResults(
       // wrapAndMaybeOffloadToolResult, which can fall back to
       // inlining when blob storage is unavailable) and inline
       // mcp_tool_result envelopes. See review N4.
-      //
-      // EXCEPTION for web_search envelopes: web_search results carry
-      // large `encrypted_content` blobs that Anthropic uses for citation
-      // resolution. Once a result has been processed by the model in an
-      // earlier turn, the encrypted_content is no longer load-bearing —
-      // but if we let the envelope-skip apply unconditionally the blob
-      // accumulates across every turn and there is no recovery path
-      // (offloadLargeToolResultsInPrompt also doesn't match this block
-      // type). Parse the envelope, strip `encrypted_content` from the
-      // older results, and re-wrap with the trust marker intact.
       if (tr.content.includes("_neo_trust_boundary")) {
-        if (blockType === "web_search_tool_result") {
-          const reduced = compactWebSearchEnvelope(tr.content, capTokens);
-          if (reduced !== tr.content) {
-            anyTruncated = true;
-            return { ...block, content: reduced } as typeof block;
-          }
-        }
         return block;
       }
 
@@ -446,6 +437,68 @@ function findSafeSliceStart(messages: Message[], targetIndex: number): number {
   }
 
   return targetIndex;
+}
+
+// ── Legacy web_search envelope unwrap ────────────────────────
+
+/**
+ * Convert legacy `_neo_trust_boundary` string envelopes on
+ * `web_search_tool_result` blocks back to the original array shape
+ * Anthropic's API requires.
+ *
+ * Background: a previous version of the codebase wrapped
+ * `web_search_tool_result.content` (an array of WebSearchResult
+ * entries) into a JSON-string envelope marker so downstream consumers
+ * could see the trust-boundary tag. That broke the next API call —
+ * Anthropic's schema rejects string content on this block type with:
+ *   `messages.N.content.X.web_search_tool_result.content.list[...]:
+ *    Input should be a valid array`
+ *
+ * Existing Cosmos conversations may still contain the wrapped form.
+ * On every API call we recover the original array from the envelope
+ * before shipping to Anthropic, and we persist the unwrapped form on
+ * the next turn-complete save so the store converges to clean state.
+ * If parsing fails, we leave the content alone and rely on
+ * validateAndRepairConversationShape to strip the orphan pair.
+ */
+export function unwrapLegacyWebSearchEnvelopes(messages: Message[]): Message[] {
+  let mutated = false;
+  const out = messages.map((msg) => {
+    if (!Array.isArray(msg.content)) return msg;
+    let blockMutated = false;
+    const newContent = msg.content.map((block) => {
+      const t = (block as { type?: unknown }).type;
+      if (t !== "web_search_tool_result") return block;
+      const tr = block as { content?: unknown };
+      if (typeof tr.content !== "string") return block;
+      if (!tr.content.includes("_neo_trust_boundary")) return block;
+      try {
+        const env = JSON.parse(tr.content) as {
+          _neo_trust_boundary?: { source?: string };
+          data?: unknown;
+        };
+        if (env?._neo_trust_boundary?.source !== "web_search") return block;
+        // Restore the array shape. Error-envelope shape (`{ type:
+        // "web_search_tool_result_error", error_code }`) is also a
+        // valid restoration target.
+        const data = env.data;
+        if (
+          Array.isArray(data) ||
+          (typeof data === "object" && data !== null)
+        ) {
+          blockMutated = true;
+          mutated = true;
+          return { ...block, content: data } as typeof block;
+        }
+        return block;
+      } catch {
+        // Malformed envelope — leave for the repair pass.
+        return block;
+      }
+    });
+    return blockMutated ? { ...msg, content: newContent } : msg;
+  });
+  return mutated ? out : messages;
 }
 
 // ── Conversation shape validation ────────────────────────────

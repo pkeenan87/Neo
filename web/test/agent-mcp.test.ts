@@ -106,6 +106,7 @@ vi.mock("../lib/context-manager", () => ({
   })),
   sanitizeEmptyUserMessages: (messages: Message[]) => messages,
   CHARS_PER_TOKEN: 4,
+  unwrapLegacyWebSearchEnvelopes: (messages: Message[]) => messages,
   // Lightweight materialiser used by createWithOptionalMcp's
   // stable-API path (M1) when persisted MCP blocks are present.
   // Mirrors the real function's contract: convert mcp_tool_use /

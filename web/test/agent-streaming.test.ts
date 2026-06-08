@@ -54,6 +54,7 @@ vi.mock("../lib/context-manager", () => ({
   })),
   sanitizeEmptyUserMessages: (messages: unknown[]) => messages,
   CHARS_PER_TOKEN: 4,
+  unwrapLegacyWebSearchEnvelopes: (messages: unknown[]) => messages,
 }));
 
 vi.mock("../lib/session-factory", () => ({

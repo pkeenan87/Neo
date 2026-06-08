@@ -8,13 +8,14 @@ import { getToolIntegration } from "./integration-registry";
 import {
   wrapAndMaybeOffloadToolResult,
   wrapMcpToolResultContent,
-  wrapWebSearchToolResultContent,
+  auditWebSearchToolResultMetadata,
 } from "./injection-guard";
 import {
   prepareMessages,
   sanitizeEmptyUserMessages,
   CHARS_PER_TOKEN,
   materializeMcpBlocksAsText,
+  unwrapLegacyWebSearchEnvelopes,
 } from "./context-manager";
 import {
   getMcpServers,
@@ -796,17 +797,19 @@ function sanitizeMcpResultsForHistory(
       };
     }
     if (isWebSearchToolResult(block)) {
-      // Web search results come from the open internet — apply the
-      // same trust-boundary envelope used for MCP. The wrapped content
-      // is a JSON string, which Anthropic accepts in place of the
-      // original array on subsequent turns (block keeps its
-      // `web_search_tool_result` type and tool_use_id).
-      const wrapped = wrapWebSearchToolResultContent(block.content, { sessionId });
-      mutated = true;
-      return {
-        ...block,
-        content: wrapped,
-      };
+      // Audit only — DO NOT replace content. Anthropic's API rejects
+      // string content on web_search_tool_result blocks (schema
+      // requires Array<WebSearchResultBlock> | WebSearchToolResultError),
+      // so any history-side wrapping would 400 on the next turn. The
+      // block.type itself already labels the source for the model; the
+      // EXTERNAL ENRICHMENT section in the system prompt instructs it
+      // to treat web content as untrusted. We just scan the visible
+      // metadata (title + URL) and warn-log so SOC can correlate.
+      auditWebSearchToolResultMetadata(block.content, {
+        sessionId,
+        toolUseId: block.tool_use_id,
+      });
+      return block;
     }
     return block;
   });
@@ -1071,7 +1074,13 @@ export async function runAgentLoop(
   signal?: AbortSignal,
   options: RunAgentLoopOptions = {},
 ): Promise<AgentLoopResult> {
-  const localMessages: Message[] = [...messages];
+  // Recover any legacy web_search trust-boundary envelopes from a
+  // prior buggy version. Anthropic's API rejects string content on
+  // web_search_tool_result blocks; unwrap before any downstream code
+  // (prepareMessages, the API call, onTurnComplete persistence) sees
+  // them. unwrapLegacyWebSearchEnvelopes is a no-op when the input has
+  // no envelopes, so this is cheap on the hot path.
+  const localMessages: Message[] = unwrapLegacyWebSearchEnvelopes([...messages]);
   logger.info("Agent loop started", "agent", { role, model });
 
   // Citations from web_search results are attached to text blocks in
@@ -2044,7 +2053,10 @@ export async function resumeAfterConfirmation(
   model: ModelPreference = DEFAULT_MODEL,
   options: RunAgentLoopOptions = {},
 ): Promise<AgentLoopResult> {
-  const localMessages: Message[] = [...messages];
+  // Same legacy-envelope unwrap as runAgentLoop — see that callsite
+  // for rationale. resumeAfterConfirmation is the second entry point
+  // to the agent loop and must apply the same recovery.
+  const localMessages: Message[] = unwrapLegacyWebSearchEnvelopes([...messages]);
   const { id, name, input } = pendingTool;
 
   let toolResult: Anthropic.Messages.ToolResultBlockParam;
