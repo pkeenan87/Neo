@@ -2,6 +2,56 @@ import type Anthropic from "@anthropic-ai/sdk";
 
 type Tool = Anthropic.Messages.Tool;
 
+/**
+ * Anthropic server-side tool descriptor (e.g. web_search). Unlike custom
+ * tools, the API executes server tools itself and returns
+ * `server_tool_use` and `<tool>_tool_result` content blocks inline — no
+ * local executor. The SDK type at the current pinned version doesn't
+ * model `web_search_20250305`, so we declare the shape locally and cast
+ * at the call boundary.
+ */
+export interface ServerTool {
+  type: "web_search_20250305";
+  name: "web_search";
+  max_uses?: number;
+}
+
+export const SERVER_TOOLS: ServerTool[] = [
+  {
+    type: "web_search_20250305",
+    name: "web_search",
+    max_uses: 10,
+  },
+];
+
+/**
+ * Returns the list of server tools that should be advertised to Claude
+ * for this turn. In MOCK_MODE we strip server tools entirely — they
+ * cannot be mocked client-side (Anthropic runs the search), and the
+ * model can still complete most local-dev flows without them.
+ *
+ * Reads `process.env.MOCK_MODE` directly rather than importing from
+ * lib/config to avoid a module-load cycle (config → skill-store →
+ * skill-parser → tools → config). Mirrors the same `!== "false"`
+ * default treatment config.ts applies, so an unset MOCK_MODE behaves
+ * as `true` (the dev default).
+ *
+ * If `toolAllowlist` is supplied (scheduled-task / triage scoping),
+ * each server tool must appear in it explicitly. Without this guard
+ * a task scoped to `['run_sentinel_kql']` would still get web_search
+ * since server-tool dispatch is server-side and bypasses the standard
+ * tool_use allowlist check at dispatch time.
+ */
+export function getEnabledServerTools(
+  toolAllowlist?: ReadonlySet<string> | null,
+): ServerTool[] {
+  if (process.env.MOCK_MODE !== "false") return [];
+  if (toolAllowlist) {
+    return SERVER_TOOLS.filter((t) => toolAllowlist.has(t.name));
+  }
+  return SERVER_TOOLS;
+}
+
 export const TOOLS: Tool[] = [
   {
     name: "run_sentinel_kql",

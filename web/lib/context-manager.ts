@@ -134,6 +134,28 @@ function contentCharCount(content: Message["content"]): number {
       } else if (Array.isArray(c)) {
         total += JSON.stringify(c).length;
       }
+    } else if ((block as { type: string }).type === "web_search_tool_result") {
+      // web_search results — like mcp_tool_result — live inline in the
+      // assistant message. After the injection-guard sanitize step the
+      // content is a string envelope; on the very first turn it's still
+      // the raw array Anthropic returned. Count both shapes for parity
+      // with mcp_tool_result.
+      const c = (block as { content?: unknown }).content;
+      if (typeof c === "string") {
+        total += c.length;
+      } else if (Array.isArray(c)) {
+        total += JSON.stringify(c).length;
+      } else if (c !== undefined && c !== null) {
+        try {
+          total += JSON.stringify(c).length;
+        } catch {
+          // Unserializable — skip; the next pass will still see the block.
+        }
+      }
+    } else if ((block as { type: string }).type === "server_tool_use") {
+      // server_tool_use blocks carry the same shape as tool_use but are
+      // counted separately for clarity.
+      total += JSON.stringify((block as { input?: unknown }).input ?? null).length;
     } else if (block.type === "image") {
       total += IMAGE_CHAR_ESTIMATE;
     } else if ((block as { type: string }).type === "document") {
@@ -213,6 +235,67 @@ export function truncateToolResult(content: string, capTokens: number): string {
 
 // ── Deep copy + per-result truncation ────────────────────────
 
+/**
+ * Compact a web_search _neo_trust_boundary envelope by stripping
+ * `encrypted_content` from each result when the envelope exceeds the
+ * per-result cap. Returns the original string when no change is
+ * needed, or a new envelope string with the same _neo_trust_boundary
+ * metadata so downstream parsers still recognise the trust marker.
+ *
+ * encrypted_content is Anthropic-opaque and used for citation
+ * resolution within the response that produced it; older history can
+ * be safely reduced to title + url + page_age.
+ */
+function compactWebSearchEnvelope(envelope: string, capTokens: number): string {
+  const charCap = capTokens * CHARS_PER_TOKEN;
+  if (envelope.length <= charCap) return envelope;
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(envelope);
+  } catch {
+    return envelope;
+  }
+  const env = parsed as {
+    _neo_trust_boundary?: unknown;
+    data?: unknown;
+  };
+  if (!env || typeof env !== "object" || !env._neo_trust_boundary) {
+    return envelope;
+  }
+  if (!Array.isArray(env.data)) return envelope;
+
+  let stripped = 0;
+  const compactedData = env.data.map((entry) => {
+    if (
+      typeof entry !== "object" ||
+      entry === null ||
+      (entry as { type?: unknown }).type !== "web_search_result"
+    ) {
+      return entry;
+    }
+    const e = entry as { encrypted_content?: unknown };
+    if (typeof e.encrypted_content !== "string" || e.encrypted_content.length === 0) {
+      return entry;
+    }
+    stripped++;
+    const { encrypted_content: _drop, ...rest } = e;
+    void _drop;
+    return {
+      ...rest,
+      encrypted_content_stripped: true,
+    };
+  });
+
+  if (stripped === 0) return envelope;
+
+  const out = JSON.stringify({
+    ...env,
+    data: compactedData,
+  });
+  return out;
+}
+
 export function truncateToolResults(
   messages: Message[],
   capTokens: number = PER_TOOL_RESULT_TOKEN_CAP,
@@ -224,12 +307,17 @@ export function truncateToolResults(
 
     const newContent = msg.content.map((block) => {
       const blockType = (block as { type: string }).type;
-      // Local tool_result and inline mcp_tool_result are both
-      // truncated against the same per-result cap. The sanitize
-      // step in agent.ts coerces mcp_tool_result content to a
-      // string envelope before history-append, so the string-only
-      // path below handles both consistently.
-      if (blockType !== "tool_result" && blockType !== "mcp_tool_result") {
+      // Local tool_result, inline mcp_tool_result, and inline
+      // web_search_tool_result are all truncated against the same
+      // per-result cap. The sanitize step in agent.ts coerces the
+      // content of the latter two to a string envelope before
+      // history-append, so the string-only path below handles them
+      // consistently with local tool_result.
+      if (
+        blockType !== "tool_result" &&
+        blockType !== "mcp_tool_result" &&
+        blockType !== "web_search_tool_result"
+      ) {
         return block;
       }
 
@@ -246,7 +334,24 @@ export function truncateToolResults(
       // wrapAndMaybeOffloadToolResult, which can fall back to
       // inlining when blob storage is unavailable) and inline
       // mcp_tool_result envelopes. See review N4.
+      //
+      // EXCEPTION for web_search envelopes: web_search results carry
+      // large `encrypted_content` blobs that Anthropic uses for citation
+      // resolution. Once a result has been processed by the model in an
+      // earlier turn, the encrypted_content is no longer load-bearing —
+      // but if we let the envelope-skip apply unconditionally the blob
+      // accumulates across every turn and there is no recovery path
+      // (offloadLargeToolResultsInPrompt also doesn't match this block
+      // type). Parse the envelope, strip `encrypted_content` from the
+      // older results, and re-wrap with the trust marker intact.
       if (tr.content.includes("_neo_trust_boundary")) {
+        if (blockType === "web_search_tool_result") {
+          const reduced = compactWebSearchEnvelope(tr.content, capTokens);
+          if (reduced !== tr.content) {
+            anyTruncated = true;
+            return { ...block, content: reduced } as typeof block;
+          }
+        }
         return block;
       }
 
@@ -292,6 +397,13 @@ function hasToolResultBlocks(msg: Message): boolean {
 function hasMcpToolResultBlocks(msg: Message): boolean {
   if (!Array.isArray(msg.content)) return false;
   return msg.content.some((b) => (b as { type: string }).type === "mcp_tool_result");
+}
+
+function hasWebSearchToolResultBlocks(msg: Message): boolean {
+  if (!Array.isArray(msg.content)) return false;
+  return msg.content.some(
+    (b) => (b as { type: string }).type === "web_search_tool_result",
+  );
 }
 
 /**
@@ -919,6 +1031,13 @@ export async function offloadLargeToolResultsInPrompt(
       if (m.role === "assistant" && hasMcpToolResultBlocks(m)) {
         // MCP pair lives entirely inside this assistant message; just
         // protect this single message.
+        cutoffIndex = i;
+        break;
+      }
+      if (m.role === "assistant" && hasWebSearchToolResultBlocks(m)) {
+        // web_search pair (server_tool_use + web_search_tool_result)
+        // also lives entirely inside one assistant message. Same
+        // single-message protection as MCP.
         cutoffIndex = i;
         break;
       }

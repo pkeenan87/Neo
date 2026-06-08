@@ -88,7 +88,8 @@ const TOOL_COLORS = {
   get_appomni_identity:        chalk.magenta,
   list_appomni_discovered_apps: chalk.magenta,
   get_appomni_audit_logs:      chalk.magenta,
-  action_appomni_finding:      chalk.red.bold
+  action_appomni_finding:      chalk.red.bold,
+  web_search:                  chalk.cyanBright
 };
 
 const username = os.userInfo().username;

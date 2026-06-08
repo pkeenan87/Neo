@@ -322,6 +322,111 @@ export function wrapMcpToolResultContent(
 }
 
 /**
+ * Scan + wrap content from an Anthropic `web_search_tool_result` block.
+ *
+ * `web_search` is an Anthropic server-side tool — the API runs the
+ * search itself and returns `server_tool_use` + `web_search_tool_result`
+ * blocks inline in the assistant response. The result content reaches
+ * Neo's history without ever passing through {@link wrapToolResult},
+ * which is the seam where other tool results get injection-scanned.
+ * Without this helper, an adversarial web page surfaced by the search
+ * would be appended to history and re-sent to the model on every
+ * subsequent turn — a direct prompt-injection vector.
+ *
+ * The `web_search_tool_result.content` field is normally an array of
+ * `{ type: "web_search_result", url, title, encrypted_content, page_age? }`
+ * entries, but can also be an `{ type: "web_search_tool_result_error" }`
+ * envelope. We extract scannable text from both shapes and apply the
+ * standard TOOL_RESULT_PATTERNS scan, then return a string envelope
+ * with the trust-boundary marker so downstream consumers know this
+ * came from the open internet.
+ *
+ * The returned string is intended to replace the original `content`
+ * field of the web_search_tool_result block before history persistence.
+ */
+export function wrapWebSearchToolResultContent(
+  rawContent: unknown,
+  context: { sessionId: string },
+): string {
+  let textToScan = "";
+  if (typeof rawContent === "string") {
+    textToScan = rawContent;
+  } else if (Array.isArray(rawContent)) {
+    const parts: string[] = [];
+    for (const b of rawContent) {
+      if (typeof b !== "object" || b === null) continue;
+      const block = b as {
+        type?: unknown;
+        url?: unknown;
+        title?: unknown;
+        encrypted_content?: unknown;
+        page_age?: unknown;
+        error_code?: unknown;
+      };
+      if (block.type === "web_search_result") {
+        if (typeof block.title === "string") parts.push(block.title);
+        if (typeof block.url === "string") parts.push(block.url);
+        // encrypted_content is opaque to the client, but Anthropic
+        // hands it back on subsequent turns. Stringify defensively so
+        // anything we don't recognise gets scanned anyway.
+        if (typeof block.encrypted_content === "string") {
+          parts.push(block.encrypted_content);
+        }
+        continue;
+      }
+      try {
+        parts.push(JSON.stringify(b));
+      } catch {
+        // Circular / unserializable — skip; wrap event still logs.
+      }
+    }
+    textToScan = parts.join("\n");
+  } else if (typeof rawContent === "object" && rawContent !== null) {
+    // Error envelope shape.
+    try {
+      textToScan = JSON.stringify(rawContent);
+    } catch {
+      textToScan = "";
+    }
+  }
+
+  const scanResult = scan(textToScan, TOOL_RESULT_PATTERNS);
+
+  if (scanResult.flagged) {
+    logger.warn(
+      "Prompt injection detected in web search result metadata",
+      "injection-guard",
+      {
+        sessionId: context.sessionId,
+        label: scanResult.label,
+        matchCount: scanResult.matchCount,
+      },
+    );
+  }
+
+  // IMPORTANT: web_search results carry the actual page body inside the
+  // opaque `encrypted_content` blob — the client never sees the
+  // cleartext, so pattern-scanning is limited to title + URL +
+  // ciphertext. The `scan_coverage: "metadata_only"` field makes that
+  // explicit: a `metadata_flagged: false` reading is NOT a "clean
+  // page" signal, only a "no injection patterns matched on the
+  // metadata we could read" signal. Downstream consumers and the
+  // system-prompt trust-boundary rule must continue to treat all
+  // content inside `data` as untrusted regardless of this flag. The
+  // compact (no-indent) serialisation also halves persisted history
+  // size vs the older pretty-printed form.
+  return JSON.stringify({
+    _neo_trust_boundary: {
+      source: "web_search",
+      tool: "web_search",
+      scan_coverage: "metadata_only",
+      metadata_flagged: scanResult.flagged,
+    },
+    data: rawContent ?? "",
+  });
+}
+
+/**
  * Async wrapper around {@link wrapToolResult} that, after injection
  * scanning + envelope wrapping, offloads oversized payloads to Azure
  * Blob Storage via the tool-result blob store (phase 3). Returns the
