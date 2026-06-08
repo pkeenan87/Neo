@@ -419,7 +419,26 @@ async function handleAgentRequest(
   // tool_result blocks`) or trips validateAndRepairConversationShape's
   // strip pass — and then any later /api/confirm Cancel appends an
   // orphan tool_result and we 400 anyway.
-  const stalePending = await sessionStore.clearPendingConfirmation(sessionId);
+  //
+  // Wrapped in try/catch because clearPendingConfirmation hits Cosmos
+  // and can throw (429/503 transients, or ConversationNotFoundV2Error
+  // if the doc was TTL-collected between session.get and now). Without
+  // the catch the throw propagates out of handleAgentRequest BEFORE
+  // the inner IIFE's `finally { deleteReservation(...) }` runs, leaking
+  // the budget reservation we created earlier in this function and
+  // 500-ing the user on every retry. The repair pass in prepareMessages
+  // will still strip the orphan on the API-call side as a defence in
+  // depth — degrading without auto-cancel beats a hard failure.
+  let stalePending: Awaited<ReturnType<typeof sessionStore.clearPendingConfirmation>> = null;
+  try {
+    stalePending = await sessionStore.clearPendingConfirmation(sessionId);
+  } catch (err) {
+    logger.warn(
+      "Failed to clear pending confirmation — proceeding without auto-cancel",
+      "api/agent",
+      { sessionId, errorMessage: (err as Error).message },
+    );
+  }
   if (stalePending) {
     session.messages.push(buildImplicitCancellationMessage(stalePending));
     logger.info(
