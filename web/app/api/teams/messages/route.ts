@@ -9,7 +9,7 @@ import {
 } from "botbuilder";
 import { env, DEFAULT_MODEL } from "@/lib/config";
 import { sessionStore } from "@/lib/session-factory";
-import { runAgentLoop, resumeAfterConfirmation, summarizeConversation } from "@/lib/agent";
+import { runAgentLoop, resumeAfterConfirmation, summarizeConversation, buildImplicitCancellationMessage } from "@/lib/agent";
 import { canUseTool } from "@/lib/permissions";
 import { scanUserInput, shouldBlock } from "@/lib/injection-guard";
 import { logger, hashPii, setLogContext } from "@/lib/logger";
@@ -567,6 +567,37 @@ async function handleTurn(context: TurnContext): Promise<void> {
   } else {
     claudeContent = messageText;
     persistedContent = messageText;
+  }
+
+  // Same auto-cancel guard as /api/agent: if a destructive tool is
+  // pending and the user sent another chat instead of confirming, pair
+  // the unpaired `tool_use` with a synthesised cancellation tool_result
+  // BEFORE pushing the new user turn. Without this the orphaned
+  // tool_use either 400s on the next call or gets stripped by the
+  // repair pass — both of which break any later Cancel attempt. See
+  // lib/agent.ts:buildImplicitCancellationMessage for the rationale.
+  const teamsStalePending = await sessionStore.clearPendingConfirmation(resolvedSessionId);
+  if (teamsStalePending) {
+    session.messages.push(buildImplicitCancellationMessage(teamsStalePending));
+    logger.info(
+      "Auto-cancelling pending destructive — user sent a new message",
+      "teams",
+      {
+        sessionId: resolvedSessionId,
+        toolName: teamsStalePending.name,
+        toolId: teamsStalePending.id,
+      },
+    );
+    logger.emitEvent(
+      "destructive_action",
+      `Destructive tool implicitly cancelled (new message): ${teamsStalePending.name}`,
+      "teams",
+      {
+        toolName: teamsStalePending.name,
+        confirmed: false,
+        implicitCancel: true,
+      },
+    );
   }
 
   session.messages.push({ role: "user", content: persistedContent });

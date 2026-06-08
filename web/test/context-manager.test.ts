@@ -579,6 +579,116 @@ describe("validateAndRepairConversationShape", () => {
     expect(typeof userMsg.content).toBe("string");
     expect(userMsg.content).toContain("removed during context compression");
   });
+
+  it("removes a destructive-cancel orphan tool_use that appears far from any tool_result", () => {
+    // Reproduces the production scenario: a stale `tool_use` survives at
+    // an early message index after the user sent a new chat instead of
+    // confirming, while a synthesised cancellation `tool_result` for
+    // the same id was appended at the END of history (not adjacent).
+    // The single-pass repair must drop BOTH blocks because neither is
+    // paired with its counterpart in the adjacent position.
+    const messages: Message[] = [
+      { role: "user", content: "research host srv-01" },
+      {
+        role: "assistant",
+        content: [
+          { type: "text" as const, text: "Calling password reset" },
+          {
+            type: "tool_use" as const,
+            id: "toolu_destructive_X",
+            name: "reset_user_password",
+            input: { upn: "test@example.com" },
+          },
+        ],
+      },
+      { role: "user", content: "Actually, never mind. Check Sentinel instead." },
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "tool_use" as const,
+            id: "toolu_sentinel_Y",
+            name: "run_sentinel_kql",
+            input: { query: "SigninLogs | take 1", description: "probe" },
+          },
+        ],
+      },
+      {
+        role: "user",
+        content: [
+          { type: "tool_result" as const, tool_use_id: "toolu_sentinel_Y", content: "rows" },
+          // Stale cancellation tool_result for the destructive that was
+          // appended far from its tool_use. Either path (drop or repair)
+          // must resolve cleanly.
+          {
+            type: "tool_result" as const,
+            tool_use_id: "toolu_destructive_X",
+            content: JSON.stringify({ cancelled: true }),
+          },
+        ],
+      },
+    ];
+
+    const repaired = validateAndRepairConversationShape(messages);
+
+    // Original destructive tool_use at index 1 is stripped.
+    const assistantOne = repaired[1].content as { type: string; id?: string }[];
+    expect(assistantOne.some((b) => b.type === "tool_use" && b.id === "toolu_destructive_X")).toBe(false);
+
+    // The legitimate Sentinel tool_use/tool_result pair survives.
+    const assistantTwo = repaired[3].content as { type: string; id?: string }[];
+    expect(assistantTwo.some((b) => b.type === "tool_use" && b.id === "toolu_sentinel_Y")).toBe(true);
+    const userTwo = repaired[4].content as { type: string; tool_use_id?: string }[];
+    expect(userTwo.some((b) => b.type === "tool_result" && b.tool_use_id === "toolu_sentinel_Y")).toBe(true);
+
+    // The orphaned cancellation tool_result is gone.
+    expect(userTwo.some((b) => b.type === "tool_result" && b.tool_use_id === "toolu_destructive_X")).toBe(false);
+  });
+
+  it("catches cascading orphans across multiple passes", () => {
+    // Scenario crafted so a single pass would leave residue:
+    //   - assistant A has tool_use(X)
+    //   - user B has tool_result(X) AND tool_result(Y)   ← Y is orphan
+    //   - assistant C has tool_use(Z)
+    //   - user D has nothing for Z   ← Z is orphan
+    // First pass: drops Y (no preceding tool_use), drops Z (no
+    // following tool_result). All clean in ONE pass for the asymmetric
+    // checks — but if the single-pass used the post-repair adjacency
+    // (would-be cascade) we'd still want stability. Verify the loop
+    // doesn't spin and the end state is clean.
+    const messages: Message[] = [
+      {
+        role: "assistant",
+        content: [{ type: "tool_use" as const, id: "X", name: "a", input: {} }],
+      },
+      {
+        role: "user",
+        content: [
+          { type: "tool_result" as const, tool_use_id: "X", content: "ok" },
+          { type: "tool_result" as const, tool_use_id: "Y", content: "orphan" },
+        ],
+      },
+      {
+        role: "assistant",
+        content: [{ type: "tool_use" as const, id: "Z", name: "b", input: {} }],
+      },
+      { role: "user", content: "Plain user text — no tool_result for Z" },
+    ];
+
+    const repaired = validateAndRepairConversationShape(messages);
+
+    const userOne = repaired[1].content as { type: string; tool_use_id?: string }[];
+    expect(userOne.some((b) => b.tool_use_id === "X")).toBe(true);
+    expect(userOne.some((b) => b.tool_use_id === "Y")).toBe(false);
+
+    const assistantTwo = repaired[2];
+    // Z was stripped — assistant message had a single tool_use, becomes
+    // a placeholder string per existing semantics.
+    expect(typeof assistantTwo.content === "string" ||
+      (Array.isArray(assistantTwo.content) &&
+        !(assistantTwo.content as { type: string; id?: string }[])
+          .some((b) => b.type === "tool_use" && b.id === "Z"))).toBe(true);
+  });
 });
 
 // ── truncateToolResults (exported with custom cap) ──────────

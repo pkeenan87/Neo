@@ -1,7 +1,7 @@
 import type Anthropic from "@anthropic-ai/sdk";
 import { NextRequest } from "next/server";
 import { sessionStore } from "@/lib/session-factory";
-import { runAgentLoop } from "@/lib/agent";
+import { runAgentLoop, buildImplicitCancellationMessage } from "@/lib/agent";
 import { createNDJSONStream, encodeNDJSON, writeAgentResult } from "@/lib/stream";
 import { resolveAuth } from "@/lib/auth-helpers";
 import { scanUserInput, shouldBlock } from "@/lib/injection-guard";
@@ -409,6 +409,38 @@ async function handleAgentRequest(
   } else {
     claudeContent = effectiveMessage;
     persistedContent = effectiveMessage;
+  }
+
+  // Auto-cancel any pending destructive confirmation. When a destructive
+  // tool was paused mid-loop, session.messages ends with an assistant
+  // message whose final block is the unpaired `tool_use`. If we just
+  // push the user's new text we leave that tool_use orphaned, which
+  // either 400s on the next API call (`tool_use ids were found without
+  // tool_result blocks`) or trips validateAndRepairConversationShape's
+  // strip pass — and then any later /api/confirm Cancel appends an
+  // orphan tool_result and we 400 anyway.
+  const stalePending = await sessionStore.clearPendingConfirmation(sessionId);
+  if (stalePending) {
+    session.messages.push(buildImplicitCancellationMessage(stalePending));
+    logger.info(
+      "Auto-cancelling pending destructive — user sent a new message",
+      "api/agent",
+      {
+        sessionId,
+        toolName: stalePending.name,
+        toolId: stalePending.id,
+      },
+    );
+    logger.emitEvent(
+      "destructive_action",
+      `Destructive tool implicitly cancelled (new message): ${stalePending.name}`,
+      "api/agent",
+      {
+        toolName: stalePending.name,
+        confirmed: false,
+        implicitCancel: true,
+      },
+    );
   }
 
   // Add user message to session (persisted form for Cosmos DB)
