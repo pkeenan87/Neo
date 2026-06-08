@@ -141,7 +141,9 @@ describe("wrapWebSearchToolResultContent", () => {
 
 describe("buildCitationsFooter", () => {
   it("returns empty string when no text block has citations", () => {
-    const blocks = [{ type: "text" as const, text: "hello" }];
+    const blocks = [
+      { type: "text" as const, text: "hello" },
+    ] as unknown as Parameters<typeof buildCitationsFooter>[0];
     expect(buildCitationsFooter(blocks)).toBe("");
   });
 
@@ -225,6 +227,35 @@ describe("buildCitationsFooter", () => {
     expect(footer).toContain("Title with \\[brackets\\]");
     expect(footer).toContain("\\`code\\`");
     expect(footer).toContain("\\<html\\>");
+  });
+
+  it("escapes pre-existing backslashes in titles so they cannot reactivate a meta-char", () => {
+    // Regression test for the CodeQL "incomplete string escaping" finding:
+    // without escaping `\` first, a title like `\]inject]` becomes
+    // `\\]inject\]` — the literal `\\` collapses to one backslash and
+    // the trailing unescaped `]` closes the link text prematurely.
+    const blocks = [
+      {
+        type: "text" as const,
+        text: "x",
+        citations: [
+          {
+            type: "web_search_result_location",
+            url: "https://example.com/a",
+            title: "evil\\]inject]",
+          },
+        ],
+      },
+    ] as unknown as Parameters<typeof buildCitationsFooter>[0];
+
+    const footer = buildCitationsFooter(blocks);
+    // Every `]` (both pre-existing-after-backslash and trailing) must
+    // be preceded by an *odd* number of backslashes — i.e. fully
+    // escaped. Verifying via shape: the substring `\\\\]` (literal
+    // `\\]` in source = one escaped backslash + escaped bracket) is
+    // present, and no unescaped `]` appears before the link's own
+    // closing `]`.
+    expect(footer).toContain("evil\\\\\\]inject\\]");
   });
 
   it("falls back to URL when title is missing", () => {

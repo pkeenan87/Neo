@@ -921,9 +921,15 @@ function isSafeCitationUrl(url: string): boolean {
 function escapeMarkdownLinkText(text: string): string {
   // Backslash-escape characters that would distort Markdown rendering
   // around the link text: brackets close the link, backticks open code
-  // spans, and angle brackets can be parsed as HTML. Title is fully
-  // attacker-controlled (any web page can set <title>).
-  return text.replace(/[\[\]`<>]/g, "\\$&");
+  // spans, and angle brackets can be parsed as HTML. We escape `\`
+  // FIRST (by including it in the char class) so a pre-existing
+  // backslash in the title can't combine with our added escape to
+  // re-introduce an unescaped meta-char — e.g. title `\]inject]` would
+  // otherwise become `\\]inject\]`, where the literal `\\` collapses
+  // to one backslash and the trailing `]` is unescaped, breaking out
+  // of the link text. Title is fully attacker-controlled (any web
+  // page can set <title>).
+  return text.replace(/[\\[\]`<>]/g, "\\$&");
 }
 
 /**
