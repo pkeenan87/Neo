@@ -25,6 +25,7 @@ vi.mock("../lib/logger", () => ({
 vi.mock("../lib/context-manager", () => ({
   truncateToolResults: (messages: unknown[]) => ({ messages, anyTruncated: false }),
   CHARS_PER_TOKEN: 4,
+  unwrapLegacyWebSearchEnvelopes: (messages: unknown[]) => messages,
 }));
 
 vi.mock("../lib/mock-conversation-store", () => ({

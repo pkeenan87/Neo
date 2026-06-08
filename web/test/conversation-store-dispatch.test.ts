@@ -36,6 +36,7 @@ vi.mock("../lib/context-manager", () => ({
     anyTruncated: false,
   }),
   CHARS_PER_TOKEN: 4,
+  unwrapLegacyWebSearchEnvelopes: (messages: unknown[]) => messages,
 }));
 
 // Stub mock-conversation-store so useMock() path is never hit. The
