@@ -1,11 +1,15 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { env, getSystemPrompt, DEFAULT_MODEL, resolveMaxTokens } from "./config";
-import { DESTRUCTIVE_TOOLS } from "./tools";
+import { DESTRUCTIVE_TOOLS, getEnabledServerTools } from "./tools";
 import { executeTool } from "./executors";
 import { getToolsForRole, type Role } from "./permissions";
 import { logger, hashPii } from "./logger";
 import { getToolIntegration } from "./integration-registry";
-import { wrapAndMaybeOffloadToolResult, wrapMcpToolResultContent } from "./injection-guard";
+import {
+  wrapAndMaybeOffloadToolResult,
+  wrapMcpToolResultContent,
+  wrapWebSearchToolResultContent,
+} from "./injection-guard";
 import {
   prepareMessages,
   sanitizeEmptyUserMessages,
@@ -727,6 +731,24 @@ interface McpToolResultBlock {
 }
 
 /**
+ * `server_tool_use` is Anthropic's analogue of `tool_use` for server-
+ * executed tools (web_search). It carries the name + input the model
+ * decided on; the result lands in a sibling `web_search_tool_result`
+ * block in the same assistant response.
+ */
+interface ServerToolUseBlock {
+  type: "server_tool_use";
+  id: string;
+  name: string;
+  input?: unknown;
+}
+interface WebSearchToolResultBlock {
+  type: "web_search_tool_result";
+  tool_use_id: string;
+  content?: unknown;
+}
+
+/**
  * Wrap every `mcp_tool_result` block's `content` field in a
  * trust-marked envelope before the assistant message is appended to
  * conversation history. This is the seam where MCP results — which
@@ -760,21 +782,172 @@ function sanitizeMcpResultsForHistory(
 
   let mutated = false;
   const out = content.map((block) => {
-    if (!isMcpToolResult(block)) return block;
-    const meta = toolUseById.get(block.tool_use_id);
-    const wrapped = wrapMcpToolResultContent(block.content, {
-      sessionId,
-      serverName: meta?.server ?? "unknown",
-      toolName: meta?.tool ?? "unknown",
-    });
-    mutated = true;
-    return {
-      ...block,
-      content: wrapped,
-    };
+    if (isMcpToolResult(block)) {
+      const meta = toolUseById.get(block.tool_use_id);
+      const wrapped = wrapMcpToolResultContent(block.content, {
+        sessionId,
+        serverName: meta?.server ?? "unknown",
+        toolName: meta?.tool ?? "unknown",
+      });
+      mutated = true;
+      return {
+        ...block,
+        content: wrapped,
+      };
+    }
+    if (isWebSearchToolResult(block)) {
+      // Web search results come from the open internet — apply the
+      // same trust-boundary envelope used for MCP. The wrapped content
+      // is a JSON string, which Anthropic accepts in place of the
+      // original array on subsequent turns (block keeps its
+      // `web_search_tool_result` type and tool_use_id).
+      const wrapped = wrapWebSearchToolResultContent(block.content, { sessionId });
+      mutated = true;
+      return {
+        ...block,
+        content: wrapped,
+      };
+    }
+    return block;
   });
 
   return mutated ? out : content;
+}
+
+interface WebSearchCitation {
+  type: "web_search_result_location";
+  url: string;
+  title?: string;
+  encrypted_index?: string;
+  cited_text?: string;
+}
+
+function isWebSearchCitation(c: unknown): c is WebSearchCitation {
+  if (typeof c !== "object" || c === null) return false;
+  const candidate = c as { type?: unknown; url?: unknown; title?: unknown };
+  if (candidate.type !== "web_search_result_location") return false;
+  if (typeof candidate.url !== "string") return false;
+  // Title is optional but, when present, must be a string. Optional
+  // chaining (`?.trim`) would still crash on a non-string title at the
+  // call site, so enforce the type here.
+  if (candidate.title !== undefined && typeof candidate.title !== "string") {
+    return false;
+  }
+  return true;
+}
+
+/**
+ * Build a Markdown "Sources" footer from any web_search citations
+ * attached to assistant text blocks. Returns "" when the response has
+ * no citations (i.e. the model didn't use web_search this turn).
+ *
+ * URLs are deduped by their normalized form; titles fall back to the
+ * URL when missing. The footer is intentionally a plain Markdown
+ * heading + bullets so the existing renderers (web MarkdownRenderer,
+ * CLI marked-terminal) format it without any new wiring.
+ */
+/**
+ * Pull web_search citations out of a list of assistant text blocks and
+ * merge them into the supplied url→title map. Dedupes by URL; later
+ * sightings of the same URL do not overwrite the first title.
+ *
+ * Exported so tests can exercise it directly without spinning up the
+ * full agent loop.
+ */
+export function collectCitationsInto(
+  textBlocks: Anthropic.Messages.TextBlock[],
+  into: Map<string, string>,
+): void {
+  for (const block of textBlocks) {
+    const citations = (block as unknown as { citations?: unknown[] }).citations;
+    if (!Array.isArray(citations)) continue;
+    for (const c of citations) {
+      if (!isWebSearchCitation(c)) continue;
+      if (into.has(c.url)) continue;
+      const titleStr = typeof c.title === "string" ? c.title.trim() : "";
+      into.set(c.url, titleStr || c.url);
+    }
+  }
+}
+
+/**
+ * Build a Markdown "Sources" footer from a deduped url→title map.
+ * Returns "" when the map is empty. URLs are validated to be http or
+ * https and wrapped in angle brackets so unescaped parentheses (common
+ * in Wikipedia / vendor doc URLs) don't break the Markdown link
+ * syntax. URLs that fail parse or carry a disallowed scheme
+ * (javascript:, data:, file:, etc.) are skipped — they shouldn't
+ * reach the user's chat regardless of upstream behaviour.
+ */
+export function buildCitationsFooter(
+  citations: Map<string, string> | Anthropic.Messages.TextBlock[],
+): string {
+  let seen: Map<string, string>;
+  if (citations instanceof Map) {
+    seen = citations;
+  } else {
+    seen = new Map<string, string>();
+    collectCitationsInto(citations, seen);
+  }
+  if (seen.size === 0) return "";
+  const lines: string[] = ["", "", "**Sources:**"];
+  for (const [url, title] of seen) {
+    if (!isSafeCitationUrl(url)) continue;
+    lines.push(`- [${escapeMarkdownLinkText(title)}](<${url}>)`);
+  }
+  // If every URL failed validation the footer would degenerate to just
+  // the heading; treat that as "no usable citations" and omit entirely.
+  if (lines.length === 3) return "";
+  return lines.join("\n");
+}
+
+const MAX_CITATION_URL_LENGTH = 2000;
+
+function isSafeCitationUrl(url: string): boolean {
+  if (typeof url !== "string") return false;
+  if (url.length === 0 || url.length > MAX_CITATION_URL_LENGTH) return false;
+  // Whitespace, angle brackets, and control chars don't belong in a
+  // URL and would break the angle-bracket-wrapped Markdown link.
+  if (/[\s<>\x00-\x1f]/.test(url)) return false;
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return false;
+  }
+  return parsed.protocol === "https:" || parsed.protocol === "http:";
+}
+
+function escapeMarkdownLinkText(text: string): string {
+  // Backslash-escape characters that would distort Markdown rendering
+  // around the link text: brackets close the link, backticks open code
+  // spans, and angle brackets can be parsed as HTML. We escape `\`
+  // FIRST (by including it in the char class) so a pre-existing
+  // backslash in the title can't combine with our added escape to
+  // re-introduce an unescaped meta-char — e.g. title `\]inject]` would
+  // otherwise become `\\]inject\]`, where the literal `\\` collapses
+  // to one backslash and the trailing `]` is unescaped, breaking out
+  // of the link text. Title is fully attacker-controlled (any web
+  // page can set <title>).
+  return text.replace(/[\\[\]`<>]/g, "\\$&");
+}
+
+/**
+ * Quick scan over assistant response content to decide whether sanitisation
+ * needs to run. Cheap O(n) negative path keeps the no-server-tool turn cost
+ * near-zero.
+ */
+function hasUntrustedServerBlocks(content: unknown[]): boolean {
+  for (const block of content) {
+    const t = (block as { type?: unknown }).type;
+    if (
+      t === "mcp_tool_result" ||
+      t === "web_search_tool_result"
+    ) {
+      return true;
+    }
+  }
+  return false;
 }
 
 /**
@@ -810,6 +983,23 @@ function isMcpToolResult(block: unknown): block is McpToolResultBlock {
     typeof block === "object" &&
     block !== null &&
     (block as { type?: unknown }).type === "mcp_tool_result" &&
+    typeof (block as { tool_use_id?: unknown }).tool_use_id === "string"
+  );
+}
+function isServerToolUse(block: unknown): block is ServerToolUseBlock {
+  return (
+    typeof block === "object" &&
+    block !== null &&
+    (block as { type?: unknown }).type === "server_tool_use" &&
+    typeof (block as { id?: unknown }).id === "string" &&
+    typeof (block as { name?: unknown }).name === "string"
+  );
+}
+function isWebSearchToolResult(block: unknown): block is WebSearchToolResultBlock {
+  return (
+    typeof block === "object" &&
+    block !== null &&
+    (block as { type?: unknown }).type === "web_search_tool_result" &&
     typeof (block as { tool_use_id?: unknown }).tool_use_id === "string"
   );
 }
@@ -883,6 +1073,16 @@ export async function runAgentLoop(
 ): Promise<AgentLoopResult> {
   const localMessages: Message[] = [...messages];
   logger.info("Agent loop started", "agent", { role, model });
+
+  // Citations from web_search results are attached to text blocks in
+  // the iteration that GENERATED them — typically an earlier iteration
+  // where the model researched something before calling a local tool
+  // and continuing. Without this loop-scoped accumulator, citations
+  // would only be picked up from the FINAL response's text blocks and
+  // every intermediate citation would be silently dropped from the
+  // user-visible "Sources" footer. The Map is keyed by URL to dedupe
+  // across iterations.
+  const citationsAcrossLoop = new Map<string, string>();
 
   /**
    * Append a synthetic [interrupted] text block to the last assistant message
@@ -969,6 +1169,23 @@ export async function runAgentLoop(
         }
       : tool
   );
+
+  // Server-side tools (web_search) are executed by Anthropic. They're
+  // appended AFTER the cache_control marker so the custom-tool prefix
+  // cache stays stable — server-tool toggling (e.g. MOCK_MODE on/off)
+  // doesn't invalidate the cached schemas of the local tools. The
+  // resulting array carries both shapes; we cast at the SDK boundary
+  // because the pinned SDK's BetaToolUnion doesn't yet model
+  // web_search_20250305.
+  //
+  // toolAllowlist gates server tools the same way it gates custom
+  // tools above. Without this a scheduled task scoped to e.g.
+  // ['run_sentinel_kql'] would still get web_search exposed, because
+  // server_tool_use blocks bypass the dispatch-time allowlist check
+  // (Anthropic executes them server-side, never entering the local
+  // tool_use loop where the allowlist is enforced).
+  const serverTools = getEnabledServerTools(toolAllowlist);
+  const toolsForApi: unknown[] = [...cachedTools, ...serverTools];
 
   // Load any in-progress plan for this conversation — present when the
   // previous turn was truncated mid-tool-use. On the first iteration of
@@ -1101,7 +1318,7 @@ export async function runAgentLoop(
       model,
       max_tokens: maxTokens,
       system: systemBlocks as Anthropic.Messages.TextBlockParam[],
-      tools: cachedTools as Anthropic.Messages.Tool[],
+      tools: toolsForApi as Anthropic.Messages.Tool[],
       messages: sdkMessages,
     };
     if (options.toolChoice) {
@@ -1129,19 +1346,35 @@ export async function runAgentLoop(
       );
     }
 
-    // Scan + wrap any mcp_tool_result content before the assistant
-    // message hits history. This is the only seam where MCP results
-    // pass through Neo's injection guard — Anthropic executes MCP
-    // tools server-side and returns the result inline, bypassing the
-    // local-tool wrapAndMaybeOffloadToolResult path. No-op when the
-    // response contains no MCP blocks (e.g. stable-API path).
+    // Scan + wrap any inline server-tool result content before the
+    // assistant message hits history. This is the only seam where
+    // results from Anthropic-executed server tools pass through Neo's
+    // injection guard — they bypass the local-tool
+    // wrapAndMaybeOffloadToolResult path entirely. Covers both:
+    //   - mcp_tool_result blocks (MCP-connector beta)
+    //   - web_search_tool_result blocks (web_search server tool)
+    // No-op when the response contains neither (the common case).
+    // CONTRACT: `sanitizedAssistantContent` MUST preserve every block
+    // emitted by Anthropic — including `server_tool_use`,
+    // `mcp_tool_use`, and other future block types — so subsequent
+    // turns can echo them back without API rejection.
+    const responseContent = response.content as unknown[];
     const sanitizedAssistantContent =
-      mcpServers.length > 0
-        ? sanitizeMcpResultsForHistory(
-            response.content as unknown[],
-            sessionId,
-          )
-        : (response.content as unknown[]);
+      mcpServers.length > 0 || hasUntrustedServerBlocks(responseContent)
+        ? sanitizeMcpResultsForHistory(responseContent, sessionId)
+        : responseContent;
+
+    // Harvest citations from this iteration's text blocks BEFORE the
+    // loop terminates. Earlier iterations are where web_search results
+    // get cited — text in the final end_turn iteration is usually a
+    // summary that no longer carries citations attached.
+    collectCitationsInto(
+      responseContent.filter(
+        (b): b is Anthropic.Messages.TextBlock =>
+          (b as { type?: unknown }).type === "text",
+      ),
+      citationsAcrossLoop,
+    );
 
     lastInputTokens = response.usage.input_tokens;
 
@@ -1178,12 +1411,122 @@ export async function runAgentLoop(
       content: sanitizedAssistantContent as Message["content"],
     });
 
+    // Surface server-tool activity. web_search is executed by Anthropic
+    // and returned inline in the same response, so the regular tool_use
+    // dispatch path below never runs for it. We do three things per turn:
+    //   1) Build a tool_use_id → { name, input } map from server_tool_use
+    //      blocks so paired web_search_tool_result blocks carry the
+    //      original input forward into onToolResult and audit events.
+    //   2) Fire onToolCall / onToolResult for the chat UI's tool-trace
+    //      pipeline.
+    //   3) Emit a structured `tool_execution` audit event per pair so
+    //      SOC operators have parity with local-tool and MCP audit
+    //      coverage in Log Analytics / App Insights.
+    const serverToolInputsById = new Map<
+      string,
+      { name: string; input: Record<string, unknown> }
+    >();
+    for (const block of responseContent) {
+      if (isServerToolUse(block)) {
+        serverToolInputsById.set(block.id, {
+          name: block.name,
+          input: (block.input ?? {}) as Record<string, unknown>,
+        });
+        if (callbacks.onToolCall) {
+          callbacks.onToolCall(
+            block.name,
+            (block.input ?? {}) as Record<string, unknown>,
+          );
+        }
+      } else if (isWebSearchToolResult(block)) {
+        // Summarise the raw payload for the trace — full citation
+        // details flow to the model through history, but the UI only
+        // needs result count + top URLs.
+        const items = Array.isArray(block.content) ? block.content : [];
+        const resultCount = items.filter(
+          (i) =>
+            typeof i === "object" &&
+            i !== null &&
+            (i as { type?: unknown }).type === "web_search_result",
+        ).length;
+        const errorEnvelope =
+          !Array.isArray(block.content) &&
+          typeof block.content === "object" &&
+          block.content !== null &&
+          (block.content as { type?: unknown }).type ===
+            "web_search_tool_result_error"
+            ? (block.content as { error_code?: unknown })
+            : null;
+        const isError = errorEnvelope !== null;
+        const paired = serverToolInputsById.get(block.tool_use_id);
+        const toolName = paired?.name ?? "web_search";
+        const toolInput = paired?.input ?? {};
+        if (callbacks.onToolResult) {
+          callbacks.onToolResult({
+            name: toolName,
+            input: toolInput,
+            output: { result_count: resultCount },
+            durationMs: 0,
+            isError,
+          });
+        }
+        // Audit event — mirrors the tool_execution shape used by local
+        // tools (line ~1571) so operators can query a single event type
+        // for "every external tool invocation in this session". Query
+        // text is truncated defensively in case the model emits an
+        // unusually long string. The toolInput field is the same JSON
+        // shape mcp_invocation uses; downstream parsers can read it
+        // uniformly.
+        try {
+          const queryStr =
+            typeof (toolInput as { query?: unknown }).query === "string"
+              ? ((toolInput as { query: string }).query).slice(0, 500)
+              : "";
+          logger.emitEvent(
+            isError ? "tool_execution" : "tool_execution",
+            isError
+              ? `Tool failed: ${toolName}`
+              : `Tool completed: ${toolName}`,
+            "agent",
+            {
+              toolName,
+              toolCategory: "web",
+              isDestructive: false,
+              durationMs: 0,
+              status: isError ? "error" : "success",
+              sessionId,
+              role,
+              ownerIdHash: options.ownerId ? hashPii(options.ownerId) : undefined,
+              toolUseId: block.tool_use_id,
+              toolInput: JSON.stringify(toolInput).slice(0, 2000),
+              query: queryStr,
+              resultCount,
+              ...(errorEnvelope
+                ? { errorCode: String(errorEnvelope.error_code ?? "") }
+                : {}),
+            },
+          );
+        } catch (err) {
+          // Audit-emit failure must never crash the agent loop. Log
+          // and continue — the UI callback already fired.
+          logger.warn("web_search audit emit failed", "agent", {
+            errorMessage: (err as Error).message,
+          });
+        }
+      }
+    }
+
     // Done — Claude has a final response
     if (response.stop_reason === "end_turn") {
-      const text = response.content
-        .filter((b): b is Anthropic.Messages.TextBlock => b.type === "text")
-        .map((b) => b.text)
-        .join("\n");
+      const textBlocks = response.content.filter(
+        (b): b is Anthropic.Messages.TextBlock => b.type === "text",
+      );
+      const baseText = textBlocks.map((b) => b.text).join("\n");
+      // Strip trailing whitespace from the model output before appending
+      // the Sources footer to avoid triple-newline gaps when the last
+      // text block already ends with "\n".
+      const text =
+        baseText.replace(/\s+$/, "") + buildCitationsFooter(citationsAcrossLoop);
       // Clear the in-progress plan — the agent reached end_turn which
       // means either (a) the plan completed, or (b) the model decided
       // to wrap up (user changed direction, etc). Either way the plan
@@ -1228,10 +1571,12 @@ export async function runAgentLoop(
           callbacks.onToolCall(nonExecBlock.name, nonExecBlock.input as Record<string, unknown>);
         }
         logger.info("Non-executable tool called — returning result", "agent", { toolName: nonExecBlock.name });
-        const text = response.content
+        const baseText = response.content
           .filter((b): b is Anthropic.Messages.TextBlock => b.type === "text")
           .map((b) => b.text)
           .join("\n");
+        const text =
+          baseText.replace(/\s+$/, "") + buildCitationsFooter(citationsAcrossLoop);
         return { type: "response", text, messages: localMessages };
       }
 
@@ -1535,10 +1880,12 @@ export async function runAgentLoop(
         throw err;
       }
 
-      const text = response.content
+      const baseText = response.content
         .filter((b): b is Anthropic.Messages.TextBlock => b.type === "text")
         .map((b) => b.text)
         .join("\n");
+      const text =
+        baseText.replace(/\s+$/, "") + buildCitationsFooter(citationsAcrossLoop);
 
       // Mark the assistant message as truncated in-place so the persisted
       // copy survives a reload. Mirrors the `[interrupted]` pattern above.
@@ -1577,10 +1924,12 @@ export async function runAgentLoop(
         "agent",
         { sessionId, model },
       );
-      const text = response.content
+      const baseText = response.content
         .filter((b): b is Anthropic.Messages.TextBlock => (b as { type: string }).type === "text")
         .map((b) => b.text)
         .join("\n");
+      const text =
+        baseText.replace(/\s+$/, "") + buildCitationsFooter(citationsAcrossLoop);
       // Mirror the end_turn path: a compaction-terminated turn is
       // also a terminal state for the in-progress plan (no further
       // tool calls coming in this turn). Without this, the plan
