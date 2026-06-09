@@ -1692,6 +1692,28 @@ export const TOOLS: Tool[] = [
   },
 ];
 
+/**
+ * Canonical "is X a real tool?" set covering BOTH custom tools (TOOLS)
+ * and Anthropic-hosted server tools (SERVER_TOOLS).
+ *
+ * Editors (SkillEditor, ScheduledTaskEditor), validators (inspectSkill,
+ * canUseTool), and runners (scheduled-task-runner.computeAllowedTools)
+ * must import this set rather than rebuilding `new Set(TOOLS.map(...))`
+ * — those local rebuilds silently exclude server tools and were the
+ * root cause of web_search being unreachable from skills and
+ * scheduled tasks despite being registered in the agent loop.
+ *
+ * This set says NOTHING about whether a given tool is currently
+ * advertised to Claude on a particular API call — that decision lives
+ * in `getEnabledServerTools(toolAllowlist)` for server tools (which
+ * also enforces MOCK_MODE) and in `runAgentLoop`'s role/allowlist
+ * filter for custom tools.
+ */
+export const ALL_TOOL_NAMES: ReadonlySet<string> = new Set([
+  ...TOOLS.map((t) => t.name),
+  ...SERVER_TOOLS.map((t) => t.name),
+]);
+
 export const DESTRUCTIVE_TOOLS = new Set([
   "reset_user_password",
   "dismiss_user_risk",

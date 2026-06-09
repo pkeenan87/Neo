@@ -9,14 +9,20 @@
 // (route handlers, migration script, agent loop) keep their imports
 // pointing at the same module they always have.
 
-import { TOOLS, DESTRUCTIVE_TOOLS } from "./tools";
+import { ALL_TOOL_NAMES, DESTRUCTIVE_TOOLS } from "./tools";
 import type { Role } from "./permissions";
 import type { Skill } from "./types";
 
 const VALID_ID = /^[a-z0-9][a-z0-9-]*[a-z0-9]$/;
 export const MAX_SKILL_ID_LENGTH = 60;
 export const MAX_SKILL_CONTENT_BYTES = 32_000;
-export const TOOL_NAMES: ReadonlySet<string> = new Set(TOOLS.map((t) => t.name));
+// Re-exported from ./tools under the legacy name so existing consumers
+// (SkillEditor, ScheduledTaskEditor, inspectSkill) pick up the wider
+// custom + server tool set without import-path churn. See the
+// ALL_TOOL_NAMES doc comment in ./tools.ts for why this must include
+// server tools — a local `new Set(TOOLS.map(...))` silently excluded
+// web_search and broke skill / scheduled-task authoring.
+export const TOOL_NAMES: ReadonlySet<string> = ALL_TOOL_NAMES;
 export { DESTRUCTIVE_TOOLS };
 
 // ── Heading-driven parser ────────────────────────────────────

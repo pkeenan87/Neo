@@ -5,6 +5,7 @@ import {
   TASK_NAME_MAX,
   validateRoutingShape,
   validateTaskName,
+  validateTaskShape,
 } from "../lib/scheduled-task-validators";
 
 describe("validateRoutingShape — tool destination", () => {
@@ -131,5 +132,16 @@ describe("validateRoutingShape — existing destinations unaffected", () => {
     expect(validateRoutingShape({ destination: "lp-print" })).toMatch(
       /must be one of/,
     );
+  });
+});
+
+describe("validateTaskShape — server tool admissibility", () => {
+  it("accepts web_search in allowedTools (server tool, non-destructive)", () => {
+    const err = validateTaskShape({
+      promptTemplate: "Investigate.",
+      allowedTools: ["run_sentinel_kql", "web_search"],
+      maxDurationSeconds: 60,
+    });
+    expect(err).toBeNull();
   });
 });
