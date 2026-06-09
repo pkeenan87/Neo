@@ -16,7 +16,7 @@ import { DEFAULT_MODEL } from "./config";
 import { getSystemPrompt } from "./config";
 import { logger } from "./logger";
 import { computeNextRunTime } from "./cron-helpers";
-import { DESTRUCTIVE_TOOLS, TOOLS } from "./tools";
+import { ALL_TOOL_NAMES, DESTRUCTIVE_TOOLS } from "./tools";
 import { recordRunResult } from "./scheduled-task-store";
 import { dispatchRoutingTool, routeOutput } from "./scheduled-task-routing";
 import { ROUTING_ALLOWED_TOOLS } from "./scheduled-task-validators";
@@ -42,8 +42,15 @@ You are running headlessly on a cron schedule, not in a conversation. Rules:
 - If a tool result is truncated (look for "[Result truncated from N to M characters...]") or returns a blob-offload envelope (truncation_hint / _neo_blob_ref), call get_full_tool_result yourself — there is no human in the loop to follow up. Do NOT guess at the truncated tail.
 `;
 
-function computeAllowedTools(taskAllowedTools: string[]): string[] {
-  const allToolNames = new Set(TOOLS.map((t) => t.name));
+export function computeAllowedTools(taskAllowedTools: string[]): string[] {
+  // ALL_TOOL_NAMES covers both custom tools and Anthropic-hosted
+  // server tools (web_search) — using TOOLS alone here would silently
+  // drop web_search from a task's allowedTools even after a typecheck-
+  // clean save. This is only the persistence-side recognition filter;
+  // whether a server tool is actually advertised to Claude on the API
+  // call still goes through getEnabledServerTools(toolAllowlist) in
+  // the agent loop, which additionally enforces MOCK_MODE.
+  //
   // Strip destructive tools (no human gate available in a scheduled
   // run) and routing-destination tools (the routing layer is the only
   // legitimate dispatch site for those — letting the agent loop also
@@ -51,7 +58,7 @@ function computeAllowedTools(taskAllowedTools: string[]): string[] {
   // audit attribution). See ultra-review F2.
   return taskAllowedTools.filter(
     (name) =>
-      allToolNames.has(name) &&
+      ALL_TOOL_NAMES.has(name) &&
       !DESTRUCTIVE_TOOLS.has(name) &&
       !ROUTING_ALLOWED_TOOLS.has(name),
   );

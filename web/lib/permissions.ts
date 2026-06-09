@@ -1,5 +1,5 @@
 import type Anthropic from "@anthropic-ai/sdk";
-import { TOOLS, DESTRUCTIVE_TOOLS } from "./tools";
+import { TOOLS, DESTRUCTIVE_TOOLS, ALL_TOOL_NAMES } from "./tools";
 
 // ─────────────────────────────────────────────────────────────
 //  Roles
@@ -54,8 +54,6 @@ export class ToolPermissionError extends Error {
   }
 }
 
-const TOOL_NAMES = new Set(TOOLS.map((t) => t.name));
-
 // ─────────────────────────────────────────────────────────────
 //  Rate Limits
 // ─────────────────────────────────────────────────────────────
@@ -75,9 +73,12 @@ export const RATE_LIMITS: Record<Role, RateLimitConfig> = {
 // ─────────────────────────────────────────────────────────────
 
 export function canUseTool(role: Role, toolName: string): boolean {
-  // Reject unknown tool names outright. The TOOLS array is the source
-  // of truth; anything else means a typo or a registry-drift bug.
-  if (!TOOL_NAMES.has(toolName)) return false;
+  // Reject unknown tool names outright. ALL_TOOL_NAMES is the source
+  // of truth (custom tools ∪ Anthropic-hosted server tools); anything
+  // else means a typo or a registry-drift bug. Server tools (currently
+  // just web_search) satisfy this check for every role — they are not
+  // destructive and are not admin-only.
+  if (!ALL_TOOL_NAMES.has(toolName)) return false;
 
   const perms = ROLE_PERMISSIONS[role];
   if (DESTRUCTIVE_TOOLS.has(toolName)) {
@@ -91,6 +92,9 @@ export function canUseTool(role: Role, toolName: string): boolean {
 }
 
 export function getToolsForRole(role: Role): Anthropic.Messages.Tool[] {
+  // Custom tools only. Server tools (web_search) are appended
+  // separately by runAgentLoop via getEnabledServerTools(toolAllowlist);
+  // returning them here would double-register them on the API call.
   const perms = ROLE_PERMISSIONS[role];
   return TOOLS.filter((tool) => {
     if (DESTRUCTIVE_TOOLS.has(tool.name)) return perms.canUseDestructiveTools;

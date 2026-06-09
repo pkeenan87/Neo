@@ -24,6 +24,12 @@ const AZURE_AD_SECRETS = [
   },
 ];
 
+// The web_search server tool is deliberately NOT registered here.
+// INTEGRATIONS enumerates customer-managed credential-bearing
+// integrations (host, secrets, per-tenant config). web_search is an
+// Anthropic-hosted server tool with no credentials, no host, and no
+// per-tenant configuration — gating only by the project's Anthropic
+// API key. Adding it would imply configurability that doesn't exist.
 export const INTEGRATIONS: IntegrationInfo[] = [
   {
     slug: "microsoft-sentinel",

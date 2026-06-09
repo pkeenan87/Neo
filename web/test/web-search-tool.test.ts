@@ -691,3 +691,70 @@ describe("collectCitationsInto — loop-scope accumulator", () => {
     expect(footer).toContain("[Site B](<https://b.test/>)");
   });
 });
+
+// ─── Integration surfaces (skills, scheduled tasks, permissions) ──
+//
+// Regression coverage for the unified ALL_TOOL_NAMES set. Before this,
+// permissions / skill-parser / scheduled-task-runner each rebuilt
+// `new Set(TOOLS.map(...))` and silently excluded SERVER_TOOLS — so
+// web_search was unreachable from skills and scheduled tasks even
+// though the agent loop registered it correctly.
+
+describe("web_search integration surfaces", () => {
+  it("ALL_TOOL_NAMES includes web_search and all custom tools", async () => {
+    const { ALL_TOOL_NAMES, TOOLS } = await import("../lib/tools");
+    expect(ALL_TOOL_NAMES.has("web_search")).toBe(true);
+    for (const tool of TOOLS) {
+      expect(ALL_TOOL_NAMES.has(tool.name)).toBe(true);
+    }
+  });
+
+  it("canUseTool returns true for web_search on every role", async () => {
+    const { canUseTool } = await import("../lib/permissions");
+    expect(canUseTool("reader", "web_search")).toBe(true);
+    expect(canUseTool("admin", "web_search")).toBe(true);
+    expect(canUseTool("triage", "web_search")).toBe(true);
+  });
+
+  it("getToolsForRole does NOT contain web_search (server tools are appended separately)", async () => {
+    const { getToolsForRole } = await import("../lib/permissions");
+    const tools = getToolsForRole("admin");
+    expect(tools.find((t) => t.name === "web_search")).toBeUndefined();
+  });
+
+  it("skill-parser TOOL_NAMES re-exports the wider ALL_TOOL_NAMES set", async () => {
+    const { TOOL_NAMES } = await import("../lib/skill-parser");
+    expect(TOOL_NAMES.has("web_search")).toBe(true);
+    expect(TOOL_NAMES.has("run_sentinel_kql")).toBe(true);
+  });
+
+  it("inspectSkill accepts web_search in requiredTools", async () => {
+    const { inspectSkill } = await import("../lib/skill-parser");
+    const result = inspectSkill({
+      id: "cve-lookup",
+      name: "CVE Lookup",
+      description: "Find CVE context.",
+      instructions: "Look up the CVE.",
+      requiredTools: ["run_sentinel_kql", "web_search"],
+      requiredRole: "reader",
+      parameters: [],
+    });
+    expect(result.ok).toBe(true);
+    expect(result.issues).toEqual([]);
+  });
+
+  it("computeAllowedTools preserves web_search alongside custom tools", async () => {
+    const { computeAllowedTools } = await import("../lib/scheduled-task-runner");
+    expect(computeAllowedTools(["run_sentinel_kql", "web_search"])).toEqual([
+      "run_sentinel_kql",
+      "web_search",
+    ]);
+  });
+
+  it("computeAllowedTools strips destructive tools but keeps web_search", async () => {
+    const { computeAllowedTools } = await import("../lib/scheduled-task-runner");
+    expect(
+      computeAllowedTools(["reset_user_password", "web_search"]),
+    ).toEqual(["web_search"]);
+  });
+});

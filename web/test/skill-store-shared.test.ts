@@ -22,9 +22,15 @@ vi.hoisted(() => {
 });
 
 // Mock TOOLS so validateSkill doesn't reject a synthetic test skill.
+// ALL_TOOL_NAMES must include both the mocked custom-tool names AND any
+// server tools the skill-parser layer expects to recognise — it now
+// uses ALL_TOOL_NAMES instead of rebuilding the set from TOOLS, so
+// stubbing TOOLS alone is no longer sufficient.
 vi.mock("../lib/tools", () => ({
   TOOLS: [{ name: "run_sentinel_kql" }, { name: "get_user_info" }],
+  SERVER_TOOLS: [],
   DESTRUCTIVE_TOOLS: new Set<string>(),
+  ALL_TOOL_NAMES: new Set<string>(["run_sentinel_kql", "get_user_info"]),
 }));
 
 interface Stored {
